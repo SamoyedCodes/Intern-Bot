@@ -7,9 +7,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from gui.main_window import MainWindow
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 def main():
     app = QApplication(sys.argv)
+    
+    # Initialize background task scheduler
+    scheduler = AsyncIOScheduler()
+    scheduler.start()
     
     # Load and apply the Cybersole dark theme QSS
     try:
@@ -18,7 +23,7 @@ def main():
     except FileNotFoundError:
         print("Warning: gui/styles.qss not found. Using default styles.")
     
-    window = MainWindow()
+    window = MainWindow(scheduler)
     window.show()
     
     # Run the QtAsyncio loop to allow safe integration with Playwright background tasks

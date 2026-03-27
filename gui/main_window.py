@@ -4,7 +4,7 @@ from gui.views.tasks_view import TasksView
 from gui.views.profile_view import ProfileView
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, scheduler):
         super().__init__()
         self.setWindowTitle("Intern-Bot")
         self.resize(1050, 650)
@@ -20,7 +20,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         
         # Add Views
-        self.tasks_view = TasksView()
+        self.tasks_view = TasksView(scheduler)
         self.profile_view = ProfileView()
         
         # Inject dummy data to show Cybersole similarity

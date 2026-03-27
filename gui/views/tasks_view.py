@@ -2,8 +2,9 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QTableWidgetIt
 from PySide6.QtCore import Qt
 
 class TasksView(QWidget):
-    def __init__(self):
+    def __init__(self, scheduler):
         super().__init__()
+        self.scheduler = scheduler
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
 
@@ -30,6 +31,7 @@ class TasksView(QWidget):
         
         self.btn_create = QPushButton("+ Create Tasks")
         self.btn_create.setObjectName("primaryBtn")
+        
         self.btn_clear = QPushButton("🗑 Clear Tasks")
         
         self.btn_start = QPushButton("▶ Start Tasks")
@@ -48,9 +50,36 @@ class TasksView(QWidget):
 
     def start_all_tasks(self):
         print("[GUI] 'Start All Tasks' clicked! Initiating automation loop...")
+        for row in range(self.table.rowCount()):
+            self.start_single_task(row)
 
     def start_single_task(self, row_index):
-        print(f"[GUI] 'Play' clicked on task row {row_index}!")
+        print(f"[GUI] 'Play' clicked on task row {row_index}! Queueing job...")
+        
+        url_item = self.table.item(row_index, 1)
+        if not url_item:
+            return
+            
+        target_url = url_item.text()
+        status_item = self.table.item(row_index, 3)
+        
+        from plugins.manager import PluginManager
+        plugin_class = PluginManager.get_plugin_for_url(target_url)
+        
+        if plugin_class:
+            plugin_instance = plugin_class()
+            # Queue the job in the asyncio loop safely
+            self.scheduler.add_job(plugin_instance.apply_to_job, args=[target_url])
+            
+            # Update GUI status to indicate running state
+            if status_item:
+                status_item.setText("▶ Running")
+                status_item.setForeground(Qt.green)
+        else:
+            print(f"[GUI] Failed to find module matching domain: {target_url}")
+            if status_item:
+                status_item.setText("✖ Error: No Plugin")
+                status_item.setForeground(Qt.red)
 
     def add_dummy_task(self):
         row = self.table.rowCount()
