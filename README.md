@@ -84,9 +84,9 @@ playwright install chromium
 ```
 
 **2. Setup API Variables**
-Set the OpenAI token for the Pydantic AI HTML mapper to function properly:
+Set the Gemini token for the Pydantic AI HTML mapper to function properly:
 ```bash
-export OPENAI_API_KEY="sk-proj-xyz..."
+export GEMINI_API_KEY="AIzaSy..."
 ```
 
 **3. Launch the Application**
