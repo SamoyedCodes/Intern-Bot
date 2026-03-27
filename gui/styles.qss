@@ -1,0 +1,95 @@
+/* Core Dark Theme */
+QMainWindow {
+    background-color: #1A1A24;
+}
+QWidget {
+    color: #FFFFFF;
+    font-family: "Inter", "Segoe UI", sans-serif;
+    font-size: 13px;
+}
+
+/* Tabs */
+QTabWidget::pane {
+    border: none;
+    background-color: #1A1A24;
+}
+QTabBar::tab {
+    background-color: #1A1A24;
+    color: #888888;
+    padding: 10px 20px;
+    border-bottom: 2px solid transparent;
+}
+QTabBar::tab:selected {
+    color: #FFFFFF;
+    border-bottom: 2px solid #2ECC71;
+}
+QTabBar::tab:hover {
+    color: #DDDDDD;
+}
+
+/* Table */
+QTableWidget {
+    background-color: #222230;
+    border: none;
+    gridline-color: transparent;
+}
+QTableWidget::item {
+    border-bottom: 1px solid #2A2A3A;
+    padding: 10px;
+}
+QHeaderView::section {
+    background-color: #1A1A24;
+    color: #AAAAAA;
+    padding: 5px;
+    border: none;
+    font-weight: bold;
+}
+
+/* Buttons */
+QPushButton {
+    background-color: #2A2A3A;
+    border: 1px solid #3A3A4A;
+    border-radius: 4px;
+    padding: 8px 16px;
+    color: #FFFFFF;
+}
+QPushButton:hover {
+    background-color: #3A3A4A;
+}
+QPushButton#actionPlay {
+    color: #2ECC71;
+    background-color: #2A2A3A;
+    border: 1px solid #3A3A4A;
+    font-weight: bold;
+}
+QPushButton#actionPlay:hover {
+    background-color: #3A3A4A;
+}
+QPushButton#actionStop {
+    color: #E74C3C;
+    background-color: #2A2A3A;
+    border: 1px solid #3A3A4A;
+    font-weight: bold;
+}
+QPushButton#actionStop:hover {
+    background-color: #3A3A4A;
+}
+QPushButton#primaryBtn {
+    color: #2ECC71;
+    border: 1px solid #2ECC71;
+}
+QPushButton#primaryBtn:hover {
+    background-color: rgba(46, 204, 113, 0.1);
+}
+
+/* Inputs */
+QLineEdit, QTextEdit {
+    background-color: #2A2A3A;
+    border: 1px solid #3A3A4A;
+    border-radius: 4px;
+    padding: 8px;
+    color: #FFF;
+}
+QLineEdit:focus, QTextEdit:focus {
+    border: 1px solid #2ECC71;
+}
