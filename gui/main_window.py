@@ -6,7 +6,7 @@ from gui.views.profile_view import ProfileView
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Intern-Bot (Cybersole Theme)")
+        self.setWindowTitle("Intern-Bot")
         self.resize(1050, 650)
         
         # Central Widget

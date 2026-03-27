@@ -1,0 +1,20 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+env/
+
+# Secrets and Configurations
+.env
+salt.bin
+
+# Local Encrypted Databases
+*.db
+*.sqlite3
+
+# Playwright Profiles and Caches
+playwright_profile/
+nodriver_profile/

@@ -1,6 +1,11 @@
 import sys
 import PySide6.QtAsyncio as QtAsyncio
 from PySide6.QtWidgets import QApplication
+from dotenv import load_dotenv
+
+# Load secrets from a local .env file into os.environ seamlessly
+load_dotenv()
+
 from gui.main_window import MainWindow
 
 def main():

@@ -12,7 +12,7 @@ class ApplicationFormMapping(BaseModel):
 
 def _get_agent() -> Agent:
     return Agent(
-        model='openai:gpt-4o-mini',
+        model='gemini-1.5-flash',
         result_type=ApplicationFormMapping,
         system_prompt=(
             "You are an expert ATS automation bot parser. "
@@ -27,10 +27,10 @@ def _get_agent() -> Agent:
 
 async def extract_fields(html_blob: str, user_profile: Dict[str, Any]) -> ApplicationFormMapping:
     """
-    Uses the GPT-4o-mini Agent to map profile data against dynamic HTML locators.
+    Uses the Gemini Agent to map profile data against dynamic HTML locators.
     """
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise ValueError("OPENAI_API_KEY environment variable is missing. The Pydantic LLM mapper cannot run.")
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise ValueError("GEMINI_API_KEY environment variable is missing. The Pydantic LLM mapper cannot run.")
         
     profile_json = json.dumps(user_profile, indent=2)
     prompt = f"USER PROFILE:\n{profile_json}\n\nHTML BLOB:\n{html_blob}"

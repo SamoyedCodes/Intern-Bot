@@ -3,5 +3,7 @@ playwright>=1.42.0
 nodriver>=0.3.2
 playwright-stealth
 pydantic-ai
+google-genai
 PySide6>=6.6.0
 APScheduler>=3.10.4
+python-dotenv
