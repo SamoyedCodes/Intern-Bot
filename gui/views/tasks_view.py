@@ -251,7 +251,7 @@ class TasksView(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(46)
+        self.table.verticalHeader().setDefaultSectionSize(64)
         self.table.setShowGrid(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -412,7 +412,7 @@ class TasksView(QWidget):
         visible_tasks = self._filtered_tasks()
         self.table.setRowCount(len(visible_tasks))
         for row, task in enumerate(visible_tasks):
-            self.table.setRowHeight(row, 46)
+            self.table.setRowHeight(row, 64)
             values = [
                 task.company,
                 task.role,
@@ -423,14 +423,20 @@ class TasksView(QWidget):
                 task.job_url,
             ]
             for col, value in enumerate(values):
-                if col in {3, 4, 5}:
+                if col in {3, 4}:
                     color = self._status_color_name(task.status) if col == 4 else None
                     self.table.setCellWidget(row, col, FitTextLabel(value, color=color))
                     continue
+                if col == 5:
+                    note_label = QLabel(value)
+                    note_label.setObjectName("fitTaskCell")
+                    note_label.setWordWrap(True)
+                    note_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                    note_label.setContentsMargins(4, 4, 4, 4)
+                    self.table.setCellWidget(row, col, note_label)
+                    continue
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                if col == 4:
-                    item.setForeground(self._status_color(task.status))
                 self.table.setItem(row, col, item)
             action = QPushButton(self._action_label(task))
             action.setObjectName(self._action_object_name(task))
