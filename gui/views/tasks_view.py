@@ -5,8 +5,8 @@ from inspect import signature
 from typing import Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtCore import Qt, Signal
+
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -134,46 +134,6 @@ class StatCard(QFrame):
     def set_value(self, value: int):
         self.value_label.setText(str(value))
 
-
-class FitTextLabel(QLabel):
-    """Single-line table label that shrinks text instead of eliding it."""
-
-    def __init__(self, text: str, color=None):
-        super().__init__(text)
-        self._base_font = self.font()
-        self._color = color
-        self.setObjectName("fitTaskCell")
-        self.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        self.setToolTip(text)
-        self.setMinimumWidth(1)
-        if color:
-            self.setStyleSheet(f"color: {color};")
-        self._fit_text()
-
-    def sizeHint(self):
-        fm = QFontMetrics(self._base_font)
-        width = fm.horizontalAdvance(self.text()) + 12
-        return QSize(min(width, 250), super().sizeHint().height())
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._fit_text()
-
-    def _fit_text(self):
-        width = max(1, self.width() - 12)
-        font = self._base_font
-        base_size = font.pointSize() if font.pointSize() > 0 else 10
-
-        for size in range(base_size, 0, -1):
-            candidate = self._base_font
-            candidate.setPointSize(size)
-            if QFontMetrics(candidate).horizontalAdvance(self.text()) <= width:
-                self.setFont(candidate)
-                return
-
-        smallest = self._base_font
-        smallest.setPointSize(1)
-        self.setFont(smallest)
 
 
 class TasksView(QWidget):
@@ -434,15 +394,12 @@ class TasksView(QWidget):
                 task.job_url,
             ]
             for col, value in enumerate(values):
-                if col in {3, 4, 5}:
-                    color = self._status_color_name(task.status) if col == 4 else None
-                    self.table.setCellWidget(row, col, FitTextLabel(value, color=color))
-                    continue
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 if col == 4:
                     item.setForeground(self._status_color(task.status))
                 self.table.setItem(row, col, item)
+            self.table.horizontalHeader().resizeSections(QHeaderView.ResizeToContents)
             action = QPushButton(self._action_label(task))
             action.setObjectName(self._action_object_name(task))
             action.setMinimumHeight(30)
@@ -508,16 +465,7 @@ class TasksView(QWidget):
             return Qt.red
         return Qt.green
 
-    def _status_color_name(self, status: str):
-        colors = {
-            "Running": "#37f2ff",
-            "Needs Review": "#ffcc66",
-            "Manual Required": "#ffcc66",
-            "Manual Questions": "#ffcc66",
-            "Paused": "#b9c0cc",
-            "Failed": "#ff6b85",
-        }
-        return colors.get(status, "#19d68b")
+
 
     @staticmethod
     def _company_name_from_workday_url(job_url):
