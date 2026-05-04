@@ -15,16 +15,16 @@ class ATSPluginInterface(ABC):
         pass
 
     @abstractmethod
-    async def detect_account_existence(self, profile: Dict[str, Any], context: Any) -> bool:
+    async def detect_account_existence(self, page: Any, profile: Dict[str, Any]) -> bool:
         """Probes the portal to check if the user already has an account"""
         pass
 
     @abstractmethod
-    async def create_account(self, profile: Dict[str, Any], context: Any) -> bool:
+    async def create_account(self, page: Any, profile: Dict[str, Any]) -> bool:
         """Executes the registration flow and stores credentials"""
         pass
 
     @abstractmethod
-    async def apply_to_job(self, job_url: str, profile: Dict[str, Any], context: Any) -> bool:
+    async def apply_to_job(self, job_url: str, profile: Dict[str, Any], context: Any) -> Any:
         """Navigates the application form and injects profile data"""
         pass

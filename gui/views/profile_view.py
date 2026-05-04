@@ -24,6 +24,29 @@ from PySide6.QtWidgets import (
 from core.storage import JsonStore
 
 
+EXPERIENCE_KEYS = ["employer", "job_title", "location", "start_date", "end_date", "description"]
+
+
+def normalize_experience_entry(entry):
+    if not isinstance(entry, dict):
+        return {key: "" for key in EXPERIENCE_KEYS}
+    return {
+        key: str(entry.get(key, "") or "").strip()
+        for key in EXPERIENCE_KEYS
+    }
+
+
+def normalize_experience_entries(entries):
+    normalized = [
+        normalize_experience_entry(entry)
+        for entry in entries or []
+    ]
+    return [
+        entry for entry in normalized
+        if any(entry.values())
+    ]
+
+
 class ProfileView(QWidget):
     """Applicant profile editor used by automation plugins."""
 
@@ -48,6 +71,7 @@ class ProfileView(QWidget):
         self.tabs = QTabWidget()
         self.tabs.setObjectName("profileTabs")
         self.tabs.addTab(self._build_applicant_tab(), "Applicant")
+        self.tabs.addTab(self._build_experience_tab(), "Experience")
         self.tabs.addTab(self._build_credentials_tab(), "Workday Credentials")
         layout.addWidget(self.tabs)
         layout.addStretch()
@@ -125,31 +149,76 @@ class ProfileView(QWidget):
         layout.addWidget(hint)
         return tab
 
-    def _build_identity_group(self):
-        box = QGroupBox("Identity")
+    def _build_experience_tab(self):
+        tab = QWidget()
+        tab.setObjectName("profileTabPage")
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 18, 0, 0)
+        layout.setSpacing(14)
+
+        controls = QHBoxLayout()
+        self.add_experience_btn = QPushButton("Add Experience")
+        self.add_experience_btn.clicked.connect(lambda: self._upsert_experience_row({}, save=True))
+
+        self.delete_experience_btn = QPushButton("Delete Selected")
+        self.delete_experience_btn.setObjectName("dangerButton")
+        self.delete_experience_btn.clicked.connect(self.delete_selected_experience)
+
+        controls.addStretch()
+        controls.addWidget(self.add_experience_btn)
+        controls.addWidget(self.delete_experience_btn)
+        layout.addLayout(controls)
+
+        self.experience_table = QTableWidget(0, 7)
+        self.experience_table.setHorizontalHeaderLabels([
+            "",
+            "Employer",
+            "Job Title",
+            "Location",
+            "Start Date",
+            "End Date / Current",
+            "Responsibilities",
+        ])
+        self.experience_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.experience_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.experience_table.verticalHeader().setVisible(False)
+        self.experience_table.verticalHeader().setDefaultSectionSize(54)
+        self.experience_table.setShowGrid(False)
+        self.experience_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
+        self.experience_table.horizontalHeader().resizeSection(0, 44)
+        self.experience_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.experience_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.experience_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.experience_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.experience_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.experience_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
+        self.experience_table.setWordWrap(True)
+        layout.addWidget(self.experience_table)
+
+        hint = QLabel("Use structured entries so Workday My Experience can fill gaps left by resume parsing.")
+        hint.setObjectName("pageSubtitle")
+        layout.addWidget(hint)
+        return tab
+
+    def _build_group_from_fields(self, title: str, fields: list):
+        box = QGroupBox(title)
         grid = self._new_form_grid(box)
-
-        self.first_name = QLineEdit()
-        self.last_name = QLineEdit()
-        self.email = QLineEdit()
-        self.phone = QLineEdit()
-        self.address = QLineEdit()
-        self.resume_path = QLineEdit()
-
-        self.first_name.setPlaceholderText("Jane")
-        self.last_name.setPlaceholderText("Applicant")
-        self.email.setPlaceholderText("jane@example.com")
-        self.phone.setPlaceholderText("+65 9000 0000")
-        self.address.setPlaceholderText("City, Country")
-        self.resume_path.setPlaceholderText("C:\\Users\\Albino\\Documents\\resume.pdf")
-
-        self._add_form_row(grid, 0, "First name", self.first_name)
-        self._add_form_row(grid, 1, "Last name", self.last_name)
-        self._add_form_row(grid, 2, "Email", self.email)
-        self._add_form_row(grid, 3, "Phone", self.phone)
-        self._add_form_row(grid, 4, "Location", self.address)
-        self._add_form_row(grid, 5, "Resume", self.resume_path)
+        for row, (attr_name, label_text, placeholder) in enumerate(fields):
+            widget = QLineEdit()
+            widget.setPlaceholderText(placeholder)
+            setattr(self, attr_name, widget)
+            self._add_form_row(grid, row, label_text, widget)
         return box
+
+    def _build_identity_group(self):
+        return self._build_group_from_fields("Identity", [
+            ("first_name", "First name", "Jane"),
+            ("last_name", "Last name", "Applicant"),
+            ("email", "Email", "jane@example.com"),
+            ("phone", "Phone", "+65 9000 0000"),
+            ("address", "Location", "City, Country"),
+            ("resume_path", "Resume", "C:\\Users\\Albino\\Documents\\resume.pdf"),
+        ])
 
     def _profile_fields(self):
         return {
@@ -174,48 +243,32 @@ class ProfileView(QWidget):
             widget.editingFinished.connect(self.save_state)
         self.default_answers.textChanged.connect(self.save_state)
         self.credentials_table.itemChanged.connect(self._on_credential_item_changed)
+        self.experience_table.itemChanged.connect(self._on_experience_item_changed)
 
     def _on_credential_item_changed(self, item):
         if item.column() == 0:
             return
         self.save_state()
 
+    def _on_experience_item_changed(self, item):
+        if item.column() == 0:
+            return
+        self.save_state()
+
     def _build_links_group(self):
-        box = QGroupBox("Links")
-        grid = self._new_form_grid(box)
-
-        self.linkedin_url = QLineEdit()
-        self.github_url = QLineEdit()
-        self.portfolio_url = QLineEdit()
-
-        self.linkedin_url.setPlaceholderText("https://linkedin.com/in/...")
-        self.github_url.setPlaceholderText("https://github.com/...")
-        self.portfolio_url.setPlaceholderText("https://...")
-
-        self._add_form_row(grid, 0, "LinkedIn", self.linkedin_url)
-        self._add_form_row(grid, 1, "GitHub", self.github_url)
-        self._add_form_row(grid, 2, "Portfolio", self.portfolio_url)
-        return box
+        return self._build_group_from_fields("Links", [
+            ("linkedin_url", "LinkedIn", "https://linkedin.com/in/..."),
+            ("github_url", "GitHub", "https://github.com/..."),
+            ("portfolio_url", "Portfolio", "https://..."),
+        ])
 
     def _build_education_group(self):
-        box = QGroupBox("Education")
-        grid = self._new_form_grid(box)
-
-        self.school = QLineEdit()
-        self.degree = QLineEdit()
-        self.major = QLineEdit()
-        self.graduation = QLineEdit()
-
-        self.school.setPlaceholderText("University")
-        self.degree.setPlaceholderText("Bachelor")
-        self.major.setPlaceholderText("Computer Science")
-        self.graduation.setPlaceholderText("May 2027")
-
-        self._add_form_row(grid, 0, "School", self.school)
-        self._add_form_row(grid, 1, "Degree", self.degree)
-        self._add_form_row(grid, 2, "Major", self.major)
-        self._add_form_row(grid, 3, "Graduation", self.graduation)
-        return box
+        return self._build_group_from_fields("Education", [
+            ("school", "School", "University"),
+            ("degree", "Degree", "Bachelor"),
+            ("major", "Major", "Computer Science"),
+            ("graduation", "Graduation", "May 2027"),
+        ])
 
     def _build_answers_group(self):
         box = QGroupBox("Default Answers")
@@ -278,6 +331,7 @@ class ProfileView(QWidget):
             "degree": self.degree.text().strip(),
             "major": self.major.text().strip(),
             "graduation": self.graduation.text().strip(),
+            "experience": self.get_experience_entries(),
             "default_answers": self.default_answers.toPlainText().strip(),
             "workday_credentials": self.get_workday_credentials(),
             "workday_credential": workday_credential or {},
@@ -313,22 +367,54 @@ class ProfileView(QWidget):
                 }
         return credentials
 
+    def get_experience_entries(self):
+        entries = []
+        for row in range(self.experience_table.rowCount()):
+            entry = {
+                key: self._item_text_from_table(self.experience_table, row, col)
+                for col, key in enumerate(EXPERIENCE_KEYS, start=1)
+            }
+            entries.append(entry)
+        return normalize_experience_entries(entries)
+
+    def _insert_table_row_with_checkbox(self, table, row_height, values):
+        row = table.rowCount()
+        table.insertRow(row)
+        table.setRowHeight(row, row_height)
+
+        checkbox_item = QTableWidgetItem()
+        checkbox_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+        checkbox_item.setCheckState(Qt.Unchecked)
+        table.setItem(row, 0, checkbox_item)
+
+        for col, value in enumerate(values, start=1):
+            table.setItem(row, col, QTableWidgetItem(value))
+        return row
+
+    def _upsert_experience_row(self, entry, save=False):
+        entry = normalize_experience_entry(entry)
+        values = [
+            entry.get("employer", ""),
+            entry.get("job_title", ""),
+            entry.get("location", ""),
+            entry.get("start_date", ""),
+            entry.get("end_date", ""),
+            entry.get("description", ""),
+        ]
+        self._insert_table_row_with_checkbox(self.experience_table, 54, values)
+
+        if save:
+            self.save_state()
+
     def _upsert_credential_row(self, site, username, password, save=False):
         site = self._workday_site_key(site)
         row = self._find_credential_row(site) if site else -1
+        values = [site, username, password]
         if row < 0:
-            row = self.credentials_table.rowCount()
-            self.credentials_table.insertRow(row)
-        self.credentials_table.setRowHeight(row, 44)
-
-        if not self.credentials_table.item(row, 0):
-            checkbox_item = QTableWidgetItem()
-            checkbox_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            checkbox_item.setCheckState(Qt.Unchecked)
-            self.credentials_table.setItem(row, 0, checkbox_item)
-
-        for col, value in enumerate([site, username, password], start=1):
-            self.credentials_table.setItem(row, col, QTableWidgetItem(value))
+            self._insert_table_row_with_checkbox(self.credentials_table, 44, values)
+        else:
+            for col, value in enumerate(values, start=1):
+                self.credentials_table.setItem(row, col, QTableWidgetItem(value))
 
         if save:
             self.save_state()
@@ -341,21 +427,30 @@ class ProfileView(QWidget):
         return -1
 
     def _item_text(self, row, col):
-        item = self.credentials_table.item(row, col)
+        return self._item_text_from_table(self.credentials_table, row, col)
+
+    def _item_text_from_table(self, table, row, col):
+        item = table.item(row, col)
         return item.text().strip() if item else ""
 
-    def delete_selected_credentials(self):
+    def _delete_selected_rows(self, table):
         rows_to_delete = []
-        for row in range(self.credentials_table.rowCount()):
-            checkbox = self.credentials_table.item(row, 0)
+        for row in range(table.rowCount()):
+            checkbox = table.item(row, 0)
             if checkbox and checkbox.checkState() == Qt.Checked:
                 rows_to_delete.append(row)
 
         for row in reversed(rows_to_delete):
-            self.credentials_table.removeRow(row)
+            table.removeRow(row)
 
         if rows_to_delete:
             self.save_state()
+
+    def delete_selected_credentials(self):
+        self._delete_selected_rows(self.credentials_table)
+
+    def delete_selected_experience(self):
+        self._delete_selected_rows(self.experience_table)
 
     def _build_catchall_username(self, company_slug):
         domain = self.catchall_domain.text().strip().lstrip("@")
@@ -411,6 +506,10 @@ class ProfileView(QWidget):
 
         self.default_answers.setPlainText(profile.get("default_answers", ""))
 
+        self.experience_table.setRowCount(0)
+        for entry in normalize_experience_entries(profile.get("experience", [])):
+            self._upsert_experience_row(entry, save=False)
+
         credentials = data.get("workday_credentials", {})
         self.credentials_table.setRowCount(0)
         for site, credential in credentials.items():
@@ -431,6 +530,7 @@ class ProfileView(QWidget):
             for key, widget in self._profile_fields().items()
         }
         profile["default_answers"] = self.default_answers.toPlainText().strip()
+        profile["experience"] = self.get_experience_entries()
 
         data = self.store.load()
         data["profile"] = profile

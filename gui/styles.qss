@@ -245,6 +245,11 @@ QTableWidget QLineEdit {
     padding: 4px 8px;
 }
 
+QLabel#fitTaskCell {
+    background: transparent;
+    padding: 0 6px;
+}
+
 QHeaderView::section {
     background: #0c1220;
     color: #8792aa;
