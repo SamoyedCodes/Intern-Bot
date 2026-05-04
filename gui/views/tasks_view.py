@@ -1,12 +1,11 @@
 import asyncio
 import threading
 from dataclasses import dataclass
-from inspect import signature
 from typing import Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
-from PySide6.QtCore import Qt, Signal
-
+from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -135,6 +134,46 @@ class StatCard(QFrame):
         self.value_label.setText(str(value))
 
 
+class FitTextLabel(QLabel):
+    """Single-line table label that shrinks text instead of eliding it."""
+
+    def __init__(self, text: str, color=None):
+        super().__init__(text)
+        self._base_font = self.font()
+        self._color = color
+        self.setObjectName("fitTaskCell")
+        self.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.setToolTip(text)
+        self.setMinimumWidth(1)
+        if color:
+            self.setStyleSheet(f"color: {color};")
+        self._fit_text()
+
+    def sizeHint(self):
+        fm = QFontMetrics(self._base_font)
+        width = fm.horizontalAdvance(self.text()) + 12
+        return QSize(min(width, 250), super().sizeHint().height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_text()
+
+    def _fit_text(self):
+        width = max(1, self.width() - 12)
+        font = self._base_font
+        base_size = font.pointSize() if font.pointSize() > 0 else 10
+
+        for size in range(base_size, 0, -1):
+            candidate = self._base_font
+            candidate.setPointSize(size)
+            if QFontMetrics(candidate).horizontalAdvance(self.text()) <= width:
+                self.setFont(candidate)
+                return
+
+        smallest = self._base_font
+        smallest.setPointSize(1)
+        self.setFont(smallest)
+
 
 class TasksView(QWidget):
     status_message = Signal(str)
@@ -213,7 +252,7 @@ class TasksView(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(46)
+        self.table.verticalHeader().setDefaultSectionSize(64)
         self.table.setShowGrid(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -316,12 +355,9 @@ class TasksView(QWidget):
             return {}
 
         try:
-            if len(signature(self.profile_provider).parameters) > 0:
-                return self.profile_provider(task.job_url)
-        except (TypeError, ValueError):
-            pass
-
-        return self.profile_provider()
+            return self.profile_provider(task.job_url)
+        except TypeError:
+            return self.profile_provider()
 
     def _run_plugin_task_in_thread(self, task: ApplicationTask, plugin, profile: Dict):
         try:
@@ -359,14 +395,8 @@ class TasksView(QWidget):
     def _task_for_visible_row(self, row: int) -> Optional[ApplicationTask]:
         if row < 0:
             return None
-        url_item = self.table.item(row, 6)
-        if not url_item:
-            return None
-        url = url_item.text()
-        for task in self._filtered_tasks():
-            if task.job_url == url:
-                return task
-        return None
+        tasks = self._filtered_tasks()
+        return tasks[row] if row < len(tasks) else None
 
     def _filtered_tasks(self) -> List[ApplicationTask]:
         query = self.search.text().strip().lower()
@@ -383,7 +413,7 @@ class TasksView(QWidget):
         visible_tasks = self._filtered_tasks()
         self.table.setRowCount(len(visible_tasks))
         for row, task in enumerate(visible_tasks):
-            self.table.setRowHeight(row, 46)
+            self.table.setRowHeight(row, 64)
             values = [
                 task.company,
                 task.role,
@@ -394,10 +424,12 @@ class TasksView(QWidget):
                 task.job_url,
             ]
             for col, value in enumerate(values):
+                if col in {3, 4, 5}:
+                    color = self._status_color_name(task.status) if col == 4 else None
+                    self.table.setCellWidget(row, col, FitTextLabel(value, color=color))
+                    continue
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                if col == 4:
-                    item.setForeground(self._status_color(task.status))
                 self.table.setItem(row, col, item)
             self.table.horizontalHeader().resizeSections(QHeaderView.ResizeToContents)
             action = QPushButton(self._action_label(task))
