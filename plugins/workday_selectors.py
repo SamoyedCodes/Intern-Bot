@@ -16,6 +16,24 @@ SIGN_IN_NAVIGATION = [
     '[data-automation-id*="signIn" i]',
 ]
 
+# Selectors for the "Create Account" heading – used to detect we're on that page
+CREATE_ACCOUNT_PAGE = [
+    'h2:has-text("Create Account")',
+    'h1:has-text("Create Account")',
+    '[data-automation-id="createAccountPanel"]',
+    'text="Create Account"',
+]
+
+# Links/buttons that switch from the Create Account view to the Sign In view
+SIGN_IN_LINK = [
+    'a:has-text("Sign In")',
+    'button:has-text("Sign In")',
+    '[data-automation-id="signIn"]',
+    '[data-automation-id*="haveAccount" i]',
+    'a:has-text("Already have an account")',
+    'a:has-text("Have an account")',
+]
+
 SIGN_IN_SUBMIT = [
     'button:has-text("Sign In")',
     '[role="button"]:has-text("Sign In")',

@@ -10,7 +10,8 @@ from .workday_selectors import (
     CREATE_ACCOUNT, SIGN_IN_NAVIGATION, SIGN_IN_SUBMIT,
     APPLY_NOW, AUTOFILL_RESUME, CONTINUE, EMAIL_INPUT, PASSWORD_INPUT,
     APP_QUESTIONS_PAGE, SIGN_IN_PAGE, CONSENT_CHECKBOX,
-    PROFILE_FIELDS, EXPERIENCE_FIELDS
+    PROFILE_FIELDS, EXPERIENCE_FIELDS,
+    CREATE_ACCOUNT_PAGE, SIGN_IN_LINK,
 )
 
 
@@ -81,9 +82,29 @@ class WorkdayPlugin(ATSPluginInterface):
                 await browser_mgr.stop()
 
     async def _phase_1_sign_in(self, page, profile: Dict[str, Any]):
-        clicked = await self._click_first_visible(page, SIGN_IN_NAVIGATION)
-        if clicked:
-            await page.wait_for_timeout(1000)
+        # If we landed on the combined Create Account/Sign In page,
+        # explicitly navigate to the Sign In section before filling credentials.
+        if await self._is_create_account_page(page):
+            clicked = await self._click_first_visible(page, SIGN_IN_LINK)
+            if clicked:
+                # Wait for the Create Account form to leave the DOM / become hidden
+                try:
+                    await page.wait_for_function(
+                        "!document.querySelector('h2, h1') || "
+                        "![...document.querySelectorAll('h2, h1')]"
+                        ".some(el => el.textContent.includes('Create Account') && el.offsetParent !== null)",
+                        timeout=5000,
+                    )
+                except Exception:
+                    await page.wait_for_timeout(1500)
+            else:
+                # No dedicated sign-in link found; fall through and fill whatever is visible
+                await page.wait_for_timeout(500)
+        else:
+            # Not a create-account page; try clicking a general Sign In nav item
+            clicked = await self._click_first_visible(page, SIGN_IN_NAVIGATION)
+            if clicked:
+                await page.wait_for_timeout(1000)
 
         await self._fill_account_credentials(page, profile)
         await page.wait_for_timeout(500)
@@ -99,6 +120,18 @@ class WorkdayPlugin(ATSPluginInterface):
 
         await self._wait_after_sign_in(page)
         return await self._run_phase_2_until_questions(page, profile, "phase_2_autofill_resume")
+
+    async def _is_create_account_page(self, page) -> bool:
+        for selector in CREATE_ACCOUNT_PAGE:
+            try:
+                locator = page.locator(selector)
+                count = await locator.count()
+                for index in range(count):
+                    if await locator.nth(index).is_visible():
+                        return True
+            except Exception:
+                continue
+        return False
 
     async def _submit_sign_in(self, page) -> bool:
         try:
