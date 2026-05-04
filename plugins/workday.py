@@ -99,7 +99,7 @@ class WorkdayPlugin(ATSPluginInterface):
             )
 
         await self._wait_after_sign_in(page)
-        return await self._run_phase_2_until_questions(page, profile, "phase_2_autofill_resume")
+        return await self._run_phase_2_until_questions(page, profile, "phase_2_autofill_resume", already_signed_in=True)
 
     async def _submit_sign_in(self, page) -> bool:
         try:
@@ -160,17 +160,18 @@ class WorkdayPlugin(ATSPluginInterface):
             "Account created. Confirm the email activation link, then press Resume.",
         )
 
-    async def _run_phase_2_until_questions(self, page, profile: Dict[str, Any], phase: str):
-        sign_in_was_required = await self._is_sign_in_page(page)
-        if not await self._ensure_signed_in_for_phase_2(page, profile):
-            return self._result(
-                False,
-                "Failed",
-                "phase_1_login",
-                "Workday showed a sign-in page, but Intern-Bot could not sign in with the saved Workday credential.",
-            )
-        if sign_in_was_required:
-            phase = "phase_2_autofill_resume"
+    async def _run_phase_2_until_questions(self, page, profile: Dict[str, Any], phase: str, already_signed_in: bool = False):
+        if not already_signed_in:
+            sign_in_was_required = await self._is_sign_in_page(page)
+            if not await self._ensure_signed_in_for_phase_2(page, profile):
+                return self._result(
+                    False,
+                    "Failed",
+                    "phase_1_login",
+                    "Workday showed a sign-in page, but Intern-Bot could not sign in with the saved Workday credential.",
+                )
+            if sign_in_was_required:
+                phase = "phase_2_autofill_resume"
 
         if await self._is_application_questions_page(page):
             return self._manual_questions_result()
@@ -448,11 +449,41 @@ class WorkdayPlugin(ATSPluginInterface):
         return False
 
     async def _is_sign_in_page(self, page) -> bool:
-        for selector in SIGN_IN_PAGE:
+        # Require both a visible password field AND a visible sign-in trigger.
+        # A nav-bar "Sign In" button that persists after login must not match alone.
+        password_selectors = [
+            'input[type="password"]',
+            'input[data-automation-id*="password" i]',
+        ]
+        trigger_selectors = [
+            'button:has-text("Sign In")',
+            '[role="button"]:has-text("Sign In")',
+            'button:has-text("Log In")',
+            '[data-automation-id*="signIn" i]',
+            'input[type="email"]',
+            'input[autocomplete="username"]',
+        ]
+
+        has_password = False
+        for selector in password_selectors:
             try:
                 locator = page.locator(selector)
-                count = await locator.count()
-                for index in range(count):
+                for index in range(await locator.count()):
+                    if await locator.nth(index).is_visible():
+                        has_password = True
+                        break
+            except Exception:
+                continue
+            if has_password:
+                break
+
+        if not has_password:
+            return False
+
+        for selector in trigger_selectors:
+            try:
+                locator = page.locator(selector)
+                for index in range(await locator.count()):
                     if await locator.nth(index).is_visible():
                         return True
             except Exception:
