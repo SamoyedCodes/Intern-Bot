@@ -45,6 +45,7 @@ class WorkdayPlugin(ATSPluginInterface):
     async def apply_to_job(self, job_url: str, profile: Optional[Dict[str, Any]] = None, context: Any = None):
         profile = self._normalize_profile(profile)
         profile["workday_credential"] = self._credential_for_job(job_url, profile)
+        profile["workday_credential_existed"] = bool(profile["workday_credential"])
         phase = (context or {}).get("phase") or "phase_1_login"
         keep_browser_open = False
 
@@ -59,7 +60,13 @@ class WorkdayPlugin(ATSPluginInterface):
 
             if phase in self.PHASE_1:
                 if profile.get("workday_credential_existed"):
-                    result = await self._phase_1_sign_in(page, profile)
+                    if not await self._is_sign_in_page(page):
+                        # Session still active — already past sign-in, go straight to phase 2.
+                        result = await self._run_phase_2_until_questions(
+                            page, profile, "phase_2_autofill_resume", already_signed_in=True
+                        )
+                    else:
+                        result = await self._phase_1_sign_in(page, profile)
                     keep_browser_open = self._should_keep_browser_open(result)
                     return result
 
@@ -119,7 +126,7 @@ class WorkdayPlugin(ATSPluginInterface):
             )
 
         await self._wait_after_sign_in(page)
-        return await self._run_phase_2_until_questions(page, profile, "phase_2_autofill_resume")
+        return await self._run_phase_2_until_questions(page, profile, "phase_2_autofill_resume", already_signed_in=True)
 
     async def _is_create_account_page(self, page) -> bool:
         for selector in CREATE_ACCOUNT_PAGE:
@@ -192,23 +199,31 @@ class WorkdayPlugin(ATSPluginInterface):
             "Account created. Confirm the email activation link, then press Resume.",
         )
 
-    async def _run_phase_2_until_questions(self, page, profile: Dict[str, Any], phase: str):
-        sign_in_was_required = await self._is_sign_in_page(page)
-        if not await self._ensure_signed_in_for_phase_2(page, profile):
-            return self._result(
-                False,
-                "Failed",
-                "phase_1_login",
-                "Workday showed a sign-in page, but Intern-Bot could not sign in with the saved Workday credential.",
-            )
-        if sign_in_was_required:
-            phase = "phase_2_autofill_resume"
+    async def _run_phase_2_until_questions(self, page, profile: Dict[str, Any], phase: str, already_signed_in: bool = False):
+        if not already_signed_in:
+            sign_in_was_required = await self._is_sign_in_page(page)
+            if not await self._ensure_signed_in_for_phase_2(page, profile):
+                return self._result(
+                    False,
+                    "Failed",
+                    "phase_1_login",
+                    "Workday showed a sign-in page, but Intern-Bot could not sign in with the saved Workday credential.",
+                )
+            if sign_in_was_required:
+                phase = "phase_2_autofill_resume"
 
         if await self._is_application_questions_page(page):
             return self._manual_questions_result()
 
-        if phase in {"phase_2_autofill_resume", self.MANUAL_QUESTIONS_PHASE}:
-            await self._upload_resume_if_available(page, profile)
+        if phase == "phase_2_autofill_resume":
+            resume_error = await self._upload_resume_if_available(page, profile)
+            if resume_error:
+                return self._result(
+                    False,
+                    "Manual Required",
+                    "phase_2_autofill_resume",
+                    resume_error,
+                )
             if not await self._click_continue(page):
                 return self._result(
                     True,
@@ -237,14 +252,12 @@ class WorkdayPlugin(ATSPluginInterface):
                     "Workday is still on the sign-in page, so profile fields were not filled.",
                 )
             await self._fill_profile_gaps(page, profile)
-            await self._apply_llm_field_mapping(page, profile)
+            llm_error = await self._apply_llm_field_mapping(page, profile)
             if not await self._click_continue(page):
-                return self._result(
-                    True,
-                    "Manual Required",
-                    "phase_2_my_information",
-                    "My Information is open, but Intern-Bot could not find Continue. Review the browser manually.",
-                )
+                note = "My Information is open, but Intern-Bot could not find Continue. Review the browser manually."
+                if llm_error:
+                    note += f" (LLM mapping skipped: {llm_error})"
+                return self._result(True, "Manual Required", "phase_2_my_information", note)
             await self._wait_for_page_settle(page)
             if await self._is_application_questions_page(page):
                 return self._manual_questions_result()
@@ -259,14 +272,12 @@ class WorkdayPlugin(ATSPluginInterface):
                     "Workday is still on the sign-in page, so experience fields were not filled.",
                 )
             await self._fill_experience_gaps(page, profile)
-            await self._apply_llm_field_mapping(page, profile)
+            llm_error = await self._apply_llm_field_mapping(page, profile)
             if not await self._click_continue(page):
-                return self._result(
-                    True,
-                    "Manual Required",
-                    "phase_2_my_experience",
-                    "My Experience is open, but Intern-Bot could not find Continue. Review the browser manually.",
-                )
+                note = "My Experience is open, but Intern-Bot could not find Continue. Review the browser manually."
+                if llm_error:
+                    note += f" (LLM mapping skipped: {llm_error})"
+                return self._result(True, "Manual Required", "phase_2_my_experience", note)
             await self._wait_for_page_settle(page)
             if await self._is_application_questions_page(page):
                 return self._manual_questions_result()
@@ -296,7 +307,10 @@ class WorkdayPlugin(ATSPluginInterface):
 
     async def _choose_autofill_with_resume(self, page):
         await self._click_first_visible(page, AUTOFILL_RESUME)
-        await page.wait_for_load_state("networkidle")
+        try:
+            await page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            await page.wait_for_timeout(1000)
 
     async def _click_continue(self, page) -> bool:
         return await self._click_first_visible(page, CONTINUE)
@@ -453,21 +467,20 @@ class WorkdayPlugin(ATSPluginInterface):
                 filled = True
         return filled
 
-    async def _apply_llm_field_mapping(self, page, profile: Dict[str, Any]) -> bool:
+    async def _apply_llm_field_mapping(self, page, profile: Dict[str, Any]) -> Optional[str]:
+        """Returns None on success, or an error string if LLM mapping was skipped."""
         try:
             html = await self._get_clean_html(page)
             mapping = await self._extract_fields(html, profile)
-        except Exception:
-            return False
+        except Exception as exc:
+            return str(exc)
 
-        filled = False
         for selector, value in getattr(mapping, "mappings", {}).items():
             try:
-                if await self._fill_empty_first_matching(page, [selector], value):
-                    filled = True
+                await self._fill_empty_first_matching(page, [selector], value)
             except Exception:
                 continue
-        return filled
+        return None
 
     async def _is_application_questions_page(self, page) -> bool:
         for selector in APP_QUESTIONS_PAGE:
@@ -482,11 +495,41 @@ class WorkdayPlugin(ATSPluginInterface):
         return False
 
     async def _is_sign_in_page(self, page) -> bool:
-        for selector in SIGN_IN_PAGE:
+        # Require both a visible password field AND a visible sign-in trigger.
+        # A nav-bar "Sign In" button that persists after login must not match alone.
+        password_selectors = [
+            'input[type="password"]',
+            'input[data-automation-id*="password" i]',
+        ]
+        trigger_selectors = [
+            'button:has-text("Sign In")',
+            '[role="button"]:has-text("Sign In")',
+            'button:has-text("Log In")',
+            '[data-automation-id*="signIn" i]',
+            'input[type="email"]',
+            'input[autocomplete="username"]',
+        ]
+
+        has_password = False
+        for selector in password_selectors:
             try:
                 locator = page.locator(selector)
-                count = await locator.count()
-                for index in range(count):
+                for index in range(await locator.count()):
+                    if await locator.nth(index).is_visible():
+                        has_password = True
+                        break
+            except Exception:
+                continue
+            if has_password:
+                break
+
+        if not has_password:
+            return False
+
+        for selector in trigger_selectors:
+            try:
+                locator = page.locator(selector)
+                for index in range(await locator.count()):
                     if await locator.nth(index).is_visible():
                         return True
             except Exception:
@@ -535,31 +578,36 @@ class WorkdayPlugin(ATSPluginInterface):
 
         return await extract_fields(html, profile)
 
-    async def _upload_resume_if_available(self, page, profile: Dict[str, Any]) -> bool:
+    async def _upload_resume_if_available(self, page, profile: Dict[str, Any]) -> Optional[str]:
+        """Returns None on success or when no resume path is configured.
+        Returns an error string if a path was set but the file cannot be found."""
         resume_path = profile.get("resume_path")
         if not resume_path:
-            return False
+            return None
 
         path = Path(resume_path)
         if not path.exists():
-            return False
+            return (
+                f"Resume file not found: '{resume_path}'. "
+                "Update the path in Profile > Applicant > Resume, then resume this task."
+            )
 
         file_inputs = page.locator("input[type='file']")
         count = await file_inputs.count()
         if count == 0:
-            return False
+            return None
 
         for index in range(count):
             candidate = file_inputs.nth(index)
             try:
                 if await candidate.is_visible():
                     await candidate.set_input_files(str(path))
-                    return True
+                    return None
             except Exception:
                 continue
 
         await file_inputs.first.set_input_files(str(path))
-        return True
+        return None
 
     def _normalize_profile(self, profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         defaults = {
