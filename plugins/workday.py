@@ -59,7 +59,13 @@ class WorkdayPlugin(ATSPluginInterface):
 
             if phase in self.PHASE_1:
                 if profile.get("workday_credential_existed"):
-                    result = await self._phase_1_sign_in(page, profile)
+                    if not await self._is_sign_in_page(page):
+                        # Session still active — already past sign-in, go straight to phase 2.
+                        result = await self._run_phase_2_until_questions(
+                            page, profile, "phase_2_autofill_resume", already_signed_in=True
+                        )
+                    else:
+                        result = await self._phase_1_sign_in(page, profile)
                     keep_browser_open = self._should_keep_browser_open(result)
                     return result
 
@@ -177,7 +183,14 @@ class WorkdayPlugin(ATSPluginInterface):
             return self._manual_questions_result()
 
         if phase == "phase_2_autofill_resume":
-            await self._upload_resume_if_available(page, profile)
+            resume_error = await self._upload_resume_if_available(page, profile)
+            if resume_error:
+                return self._result(
+                    False,
+                    "Manual Required",
+                    "phase_2_autofill_resume",
+                    resume_error,
+                )
             if not await self._click_continue(page):
                 return self._result(
                     True,
@@ -532,31 +545,36 @@ class WorkdayPlugin(ATSPluginInterface):
 
         return await extract_fields(html, profile)
 
-    async def _upload_resume_if_available(self, page, profile: Dict[str, Any]) -> bool:
+    async def _upload_resume_if_available(self, page, profile: Dict[str, Any]) -> Optional[str]:
+        """Returns None on success or when no resume path is configured.
+        Returns an error string if a path was set but the file cannot be found."""
         resume_path = profile.get("resume_path")
         if not resume_path:
-            return False
+            return None
 
         path = Path(resume_path)
         if not path.exists():
-            return False
+            return (
+                f"Resume file not found: '{resume_path}'. "
+                "Update the path in Profile > Applicant > Resume, then resume this task."
+            )
 
         file_inputs = page.locator("input[type='file']")
         count = await file_inputs.count()
         if count == 0:
-            return False
+            return None
 
         for index in range(count):
             candidate = file_inputs.nth(index)
             try:
                 if await candidate.is_visible():
                     await candidate.set_input_files(str(path))
-                    return True
+                    return None
             except Exception:
                 continue
 
         await file_inputs.first.set_input_files(str(path))
-        return True
+        return None
 
     def _normalize_profile(self, profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         defaults = {
