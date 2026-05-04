@@ -1,12 +1,11 @@
 import asyncio
 import threading
 from dataclasses import dataclass
-from inspect import signature
 from typing import Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -161,17 +160,16 @@ class FitTextLabel(QLabel):
 
     def _fit_text(self):
         width = max(1, self.width() - 12)
-        font = self._base_font
-        base_size = font.pointSize() if font.pointSize() > 0 else 10
+        base_size = self._base_font.pointSize() if self._base_font.pointSize() > 0 else 10
 
         for size in range(base_size, 0, -1):
-            candidate = self._base_font
+            candidate = QFont(self._base_font)
             candidate.setPointSize(size)
             if QFontMetrics(candidate).horizontalAdvance(self.text()) <= width:
                 self.setFont(candidate)
                 return
 
-        smallest = self._base_font
+        smallest = QFont(self._base_font)
         smallest.setPointSize(1)
         self.setFont(smallest)
 
@@ -356,12 +354,9 @@ class TasksView(QWidget):
             return {}
 
         try:
-            if len(signature(self.profile_provider).parameters) > 0:
-                return self.profile_provider(task.job_url)
-        except (TypeError, ValueError):
-            pass
-
-        return self.profile_provider()
+            return self.profile_provider(task.job_url)
+        except TypeError:
+            return self.profile_provider()
 
     def _run_plugin_task_in_thread(self, task: ApplicationTask, plugin, profile: Dict):
         try:
@@ -399,14 +394,8 @@ class TasksView(QWidget):
     def _task_for_visible_row(self, row: int) -> Optional[ApplicationTask]:
         if row < 0:
             return None
-        url_item = self.table.item(row, 6)
-        if not url_item:
-            return None
-        url = url_item.text()
-        for task in self._filtered_tasks():
-            if task.job_url == url:
-                return task
-        return None
+        tasks = self._filtered_tasks()
+        return tasks[row] if row < len(tasks) else None
 
     def _filtered_tasks(self) -> List[ApplicationTask]:
         query = self.search.text().strip().lower()

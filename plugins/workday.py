@@ -44,6 +44,7 @@ class WorkdayPlugin(ATSPluginInterface):
     async def apply_to_job(self, job_url: str, profile: Optional[Dict[str, Any]] = None, context: Any = None):
         profile = self._normalize_profile(profile)
         profile["workday_credential"] = self._credential_for_job(job_url, profile)
+        profile["workday_credential_existed"] = bool(profile["workday_credential"])
         phase = (context or {}).get("phase") or "phase_1_login"
         keep_browser_open = False
 
@@ -174,7 +175,7 @@ class WorkdayPlugin(ATSPluginInterface):
         if await self._is_application_questions_page(page):
             return self._manual_questions_result()
 
-        if phase in {"phase_2_autofill_resume", self.MANUAL_QUESTIONS_PHASE}:
+        if phase == "phase_2_autofill_resume":
             await self._upload_resume_if_available(page, profile)
             if not await self._click_continue(page):
                 return self._result(
@@ -204,14 +205,12 @@ class WorkdayPlugin(ATSPluginInterface):
                     "Workday is still on the sign-in page, so profile fields were not filled.",
                 )
             await self._fill_profile_gaps(page, profile)
-            await self._apply_llm_field_mapping(page, profile)
+            llm_error = await self._apply_llm_field_mapping(page, profile)
             if not await self._click_continue(page):
-                return self._result(
-                    True,
-                    "Manual Required",
-                    "phase_2_my_information",
-                    "My Information is open, but Intern-Bot could not find Continue. Review the browser manually.",
-                )
+                note = "My Information is open, but Intern-Bot could not find Continue. Review the browser manually."
+                if llm_error:
+                    note += f" (LLM mapping skipped: {llm_error})"
+                return self._result(True, "Manual Required", "phase_2_my_information", note)
             await self._wait_for_page_settle(page)
             if await self._is_application_questions_page(page):
                 return self._manual_questions_result()
@@ -226,14 +225,12 @@ class WorkdayPlugin(ATSPluginInterface):
                     "Workday is still on the sign-in page, so experience fields were not filled.",
                 )
             await self._fill_experience_gaps(page, profile)
-            await self._apply_llm_field_mapping(page, profile)
+            llm_error = await self._apply_llm_field_mapping(page, profile)
             if not await self._click_continue(page):
-                return self._result(
-                    True,
-                    "Manual Required",
-                    "phase_2_my_experience",
-                    "My Experience is open, but Intern-Bot could not find Continue. Review the browser manually.",
-                )
+                note = "My Experience is open, but Intern-Bot could not find Continue. Review the browser manually."
+                if llm_error:
+                    note += f" (LLM mapping skipped: {llm_error})"
+                return self._result(True, "Manual Required", "phase_2_my_experience", note)
             await self._wait_for_page_settle(page)
             if await self._is_application_questions_page(page):
                 return self._manual_questions_result()
@@ -263,7 +260,10 @@ class WorkdayPlugin(ATSPluginInterface):
 
     async def _choose_autofill_with_resume(self, page):
         await self._click_first_visible(page, AUTOFILL_RESUME)
-        await page.wait_for_load_state("networkidle")
+        try:
+            await page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            await page.wait_for_timeout(1000)
 
     async def _click_continue(self, page) -> bool:
         return await self._click_first_visible(page, CONTINUE)
@@ -420,21 +420,20 @@ class WorkdayPlugin(ATSPluginInterface):
                 filled = True
         return filled
 
-    async def _apply_llm_field_mapping(self, page, profile: Dict[str, Any]) -> bool:
+    async def _apply_llm_field_mapping(self, page, profile: Dict[str, Any]) -> Optional[str]:
+        """Returns None on success, or an error string if LLM mapping was skipped."""
         try:
             html = await self._get_clean_html(page)
             mapping = await self._extract_fields(html, profile)
-        except Exception:
-            return False
+        except Exception as exc:
+            return str(exc)
 
-        filled = False
         for selector, value in getattr(mapping, "mappings", {}).items():
             try:
-                if await self._fill_empty_first_matching(page, [selector], value):
-                    filled = True
+                await self._fill_empty_first_matching(page, [selector], value)
             except Exception:
                 continue
-        return filled
+        return None
 
     async def _is_application_questions_page(self, page) -> bool:
         for selector in APP_QUESTIONS_PAGE:
