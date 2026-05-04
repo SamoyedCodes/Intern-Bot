@@ -12,6 +12,7 @@ def test_application_task_round_trips_dict():
         company="Example",
         role="Software Engineering Intern",
         job_url="https://example.wd3.myworkdayjobs.com/job/123",
+        phase="phase_1_awaiting_activation",
         status="Needs Review",
         note="Review browser",
     )
@@ -19,3 +20,27 @@ def test_application_task_round_trips_dict():
     restored = ApplicationTask.from_dict(task.to_dict())
 
     assert restored == task
+
+
+def test_application_task_migrates_old_non_account_needs_review_status():
+    task = ApplicationTask.from_dict({
+        "company": "Example",
+        "role": "Internship",
+        "job_url": "https://example.wd3.myworkdayjobs.com/job/123",
+        "phase": "phase_2_my_experience",
+        "status": "Needs Review",
+    })
+
+    assert task.status == "Manual Required"
+
+
+def test_application_task_keeps_new_account_needs_review_status():
+    task = ApplicationTask.from_dict({
+        "company": "Example",
+        "role": "Internship",
+        "job_url": "https://example.wd3.myworkdayjobs.com/job/123",
+        "phase": "phase_1_awaiting_activation",
+        "status": "Awaiting Activation",
+    })
+
+    assert task.status == "Needs Review"

@@ -5,7 +5,8 @@ from inspect import signature
 from typing import Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -50,15 +51,27 @@ class ApplicationTask:
 
     @classmethod
     def from_dict(cls, data):
+        phase = data.get("phase", "phase_1_login")
+        status = cls._normalize_status(data.get("status", "Queued"), phase)
         return cls(
             company=data.get("company", "Unknown Company"),
             role=data.get("role", "Internship"),
             job_url=data.get("job_url", ""),
             platform=data.get("platform", "Workday"),
-            phase=data.get("phase", "phase_1_login"),
-            status=data.get("status", "Queued"),
+            phase=phase,
+            status=status,
             note=data.get("note", "Ready"),
         )
+
+    @staticmethod
+    def _normalize_status(status: str, phase: str):
+        if status == "Awaiting Activation":
+            return "Needs Review"
+        if status == "Needs Review" and phase != "phase_1_awaiting_activation":
+            if phase == "phase_3_application_questions_manual":
+                return "Manual Questions"
+            return "Manual Required"
+        return status
 
 
 class TaskDialog(QDialog):
@@ -120,6 +133,47 @@ class StatCard(QFrame):
 
     def set_value(self, value: int):
         self.value_label.setText(str(value))
+
+
+class FitTextLabel(QLabel):
+    """Single-line table label that shrinks text instead of eliding it."""
+
+    def __init__(self, text: str, color=None):
+        super().__init__(text)
+        self._base_font = self.font()
+        self._color = color
+        self.setObjectName("fitTaskCell")
+        self.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.setToolTip(text)
+        self.setMinimumWidth(1)
+        if color:
+            self.setStyleSheet(f"color: {color};")
+        self._fit_text()
+
+    def sizeHint(self):
+        fm = QFontMetrics(self._base_font)
+        width = fm.horizontalAdvance(self.text()) + 12
+        return QSize(min(width, 250), super().sizeHint().height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_text()
+
+    def _fit_text(self):
+        width = max(1, self.width() - 12)
+        font = self._base_font
+        base_size = font.pointSize() if font.pointSize() > 0 else 10
+
+        for size in range(base_size, 0, -1):
+            candidate = self._base_font
+            candidate.setPointSize(size)
+            if QFontMetrics(candidate).horizontalAdvance(self.text()) <= width:
+                self.setFont(candidate)
+                return
+
+        smallest = self._base_font
+        smallest.setPointSize(1)
+        self.setFont(smallest)
 
 
 class TasksView(QWidget):
@@ -203,9 +257,13 @@ class TasksView(QWidget):
         self.table.setShowGrid(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Fixed)
         self.table.horizontalHeader().resizeSection(7, 120)
+        self.table.setTextElideMode(Qt.ElideNone)
         root.addWidget(self.table)
 
         self.load_state()
@@ -241,7 +299,7 @@ class TasksView(QWidget):
             self.status_message.emit("No tasks to start.")
             return
         for task in list(self.tasks):
-            if task.status in {"Queued", "Failed", "Paused", "Awaiting Activation"}:
+            if task.status in {"Queued", "Failed", "Paused", "Needs Review", "Manual Required", "Manual Questions"}:
                 self._start_task(task)
 
     def delete_selected_task(self):
@@ -287,7 +345,7 @@ class TasksView(QWidget):
             self.status_message.emit(f"{task.company} is already running.")
             return
 
-        if task.status in {"Paused", "Awaiting Activation", "Failed", "Queued", "Needs Review"}:
+        if task.status in {"Paused", "Failed", "Queued", "Needs Review", "Manual Required", "Manual Questions"}:
             self._start_task(task)
             return
 
@@ -317,20 +375,20 @@ class TasksView(QWidget):
         if isinstance(result, dict):
             return {
                 "success": bool(result.get("success")),
-                "status": result.get("status") or ("Needs Review" if result.get("success") else "Failed"),
+                "status": result.get("status") or ("Manual Required" if result.get("success") else "Failed"),
                 "phase": result.get("phase"),
                 "note": result.get("note", ""),
             }
 
         return {
             "success": bool(result),
-            "status": "Needs Review" if result else "Failed",
+            "status": "Manual Required" if result else "Failed",
             "phase": None,
             "note": "Review browser before final submit" if result else "Automation returned false",
         }
 
     def _on_task_finished(self, task: ApplicationTask, success: bool, result: dict):
-        task.status = result.get("status") or ("Needs Review" if success else "Failed")
+        task.status = result.get("status") or ("Manual Required" if success else "Failed")
         task.note = result.get("note", "")
         if result.get("phase"):
             task.phase = result["phase"]
@@ -366,8 +424,20 @@ class TasksView(QWidget):
         self.table.setRowCount(len(visible_tasks))
         for row, task in enumerate(visible_tasks):
             self.table.setRowHeight(row, 46)
-            values = [task.company, task.role, task.platform, task.phase, task.status, task.note, task.job_url]
+            values = [
+                task.company,
+                task.role,
+                task.platform,
+                self._phase_label(task.phase),
+                task.status,
+                task.note,
+                task.job_url,
+            ]
             for col, value in enumerate(values):
+                if col in {3, 4, 5}:
+                    color = self._status_color_name(task.status) if col == 4 else None
+                    self.table.setCellWidget(row, col, FitTextLabel(value, color=color))
+                    continue
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 if col == 4:
@@ -387,8 +457,10 @@ class TasksView(QWidget):
             return "Start"
         if task.status == "Running":
             return "Running"
-        if task.status == "Awaiting Activation":
+        if task.status == "Needs Review":
             return "Resume"
+        if task.status == "Manual Questions":
+            return "Manual"
         return "Resume"
 
     def _action_object_name(self, task: ApplicationTask):
@@ -398,12 +470,23 @@ class TasksView(QWidget):
             return "taskRunningButton"
         return "taskResumeButton"
 
+    def _phase_label(self, phase: str):
+        labels = {
+            "phase_1_login": "Sign In / Account",
+            "phase_1_awaiting_activation": "Email Activation",
+            "phase_2_autofill_resume": "Autofill with Resume",
+            "phase_2_my_information": "My Information",
+            "phase_2_my_experience": "My Experience",
+            "phase_3_application_questions_manual": "Application Questions - Manual",
+        }
+        return labels.get(phase, phase)
+
     def _refresh_stats(self):
         counts = {
             "total": len(self.tasks),
             "queued": sum(1 for task in self.tasks if task.status == "Queued"),
             "running": sum(1 for task in self.tasks if task.status == "Running"),
-            "needs": sum(1 for task in self.tasks if task.status in {"Needs Review", "Awaiting Activation"}),
+            "needs": sum(1 for task in self.tasks if task.status == "Needs Review"),
         }
         self.total_card.set_value(counts["total"])
         self.ready_card.set_value(counts["queued"])
@@ -415,13 +498,26 @@ class TasksView(QWidget):
             return Qt.cyan
         if status == "Needs Review":
             return Qt.yellow
-        if status == "Awaiting Activation":
+        if status == "Manual Required":
+            return Qt.yellow
+        if status == "Manual Questions":
             return Qt.yellow
         if status == "Paused":
             return Qt.lightGray
         if status == "Failed":
             return Qt.red
         return Qt.green
+
+    def _status_color_name(self, status: str):
+        colors = {
+            "Running": "#37f2ff",
+            "Needs Review": "#ffcc66",
+            "Manual Required": "#ffcc66",
+            "Manual Questions": "#ffcc66",
+            "Paused": "#b9c0cc",
+            "Failed": "#ff6b85",
+        }
+        return colors.get(status, "#19d68b")
 
     @staticmethod
     def _company_name_from_workday_url(job_url):

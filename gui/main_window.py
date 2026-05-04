@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from dotenv import set_key
 
 from PySide6.QtWidgets import (
     QFormLayout,
@@ -85,24 +86,9 @@ class SettingsView(QWidget):
 
     def _write_env_value(self, key, value):
         env_path = Path(".env")
-        lines = []
-        found = False
-
-        if env_path.exists():
-            lines = env_path.read_text(encoding="utf-8").splitlines()
-
-        updated = []
-        for line in lines:
-            if line.startswith(f"{key}="):
-                updated.append(f"{key}={value}")
-                found = True
-            else:
-                updated.append(line)
-
-        if not found:
-            updated.append(f"{key}={value}")
-
-        env_path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+        if not env_path.exists():
+            env_path.touch()
+        set_key(str(env_path), key, value)
 
 
 class MainWindow(QMainWindow):
