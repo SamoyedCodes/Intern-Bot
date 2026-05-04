@@ -10,6 +10,7 @@ env/
 # Secrets and Configurations
 .env
 salt.bin
+data/
 
 # Local Encrypted Databases
 *.db

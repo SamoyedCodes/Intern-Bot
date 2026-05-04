@@ -23,8 +23,6 @@ class AsyncPlaywrightManager:
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         
-        # Note: Further evasion patches via playwright-stealth can be injected per-page inside the plugins context
-        
         return self.context
 
     async def stop(self):

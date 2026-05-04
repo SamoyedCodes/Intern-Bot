@@ -1,5 +1,7 @@
 import sys
-import PySide6.QtAsyncio as QtAsyncio
+import os
+from pathlib import Path
+from PySide6.QtCore import QLibraryInfo
 from PySide6.QtWidgets import QApplication
 from dotenv import load_dotenv
 
@@ -7,14 +9,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from gui.main_window import MainWindow
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+
+def configure_qt_plugin_path():
+    """Help Qt find PySide6's platform plugins when launched from IDEs."""
+    plugins_path = Path(QLibraryInfo.path(QLibraryInfo.PluginsPath))
+    platforms_path = plugins_path / "platforms"
+
+    if platforms_path.exists():
+        os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(platforms_path)
+
 
 def main():
+    configure_qt_plugin_path()
     app = QApplication(sys.argv)
-    
-    # Initialize background task scheduler
-    scheduler = AsyncIOScheduler()
-    scheduler.start()
     
     # Load and apply the Cybersole dark theme QSS
     try:
@@ -23,11 +31,9 @@ def main():
     except FileNotFoundError:
         print("Warning: gui/styles.qss not found. Using default styles.")
     
-    window = MainWindow(scheduler)
+    window = MainWindow()
     window.show()
-    
-    # Run the QtAsyncio loop to allow safe integration with Playwright background tasks
-    QtAsyncio.run()
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     main()
