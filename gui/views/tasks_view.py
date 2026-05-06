@@ -160,17 +160,16 @@ class FitTextLabel(QLabel):
 
     def _fit_text(self):
         width = max(1, self.width() - 12)
-        font = self._base_font
-        base_size = font.pointSize() if font.pointSize() > 0 else 10
+        base_size = self._base_font.pointSize() if self._base_font.pointSize() > 0 else 10
 
         for size in range(base_size, 0, -1):
-            candidate = self._base_font
+            candidate = QFont(self._base_font)
             candidate.setPointSize(size)
             if QFontMetrics(candidate).horizontalAdvance(self.text()) <= width:
                 self.setFont(candidate)
                 return
 
-        smallest = self._base_font
+        smallest = QFont(self._base_font)
         smallest.setPointSize(1)
         self.setFont(smallest)
 
@@ -424,14 +423,21 @@ class TasksView(QWidget):
                 task.job_url,
             ]
             for col, value in enumerate(values):
-                if col in {3, 4, 5}:
+                if col in {3, 4}:
                     color = self._status_color_name(task.status) if col == 4 else None
                     self.table.setCellWidget(row, col, FitTextLabel(value, color=color))
+                    continue
+                if col == 5:
+                    note_label = QLabel(value)
+                    note_label.setObjectName("fitTaskCell")
+                    note_label.setWordWrap(True)
+                    note_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                    note_label.setContentsMargins(4, 4, 4, 4)
+                    self.table.setCellWidget(row, col, note_label)
                     continue
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 self.table.setItem(row, col, item)
-            self.table.horizontalHeader().resizeSections(QHeaderView.ResizeToContents)
             action = QPushButton(self._action_label(task))
             action.setObjectName(self._action_object_name(task))
             action.setMinimumHeight(30)
@@ -497,7 +503,16 @@ class TasksView(QWidget):
             return Qt.red
         return Qt.green
 
-
+    def _status_color_name(self, status: str):
+        colors = {
+            "Running": "#37f2ff",
+            "Needs Review": "#ffcc66",
+            "Manual Required": "#ffcc66",
+            "Manual Questions": "#ffcc66",
+            "Paused": "#b9c0cc",
+            "Failed": "#ff6b85",
+        }
+        return colors.get(status, "#19d68b")
 
     @staticmethod
     def _company_name_from_workday_url(job_url):
