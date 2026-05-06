@@ -5,7 +5,7 @@ from typing import Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
