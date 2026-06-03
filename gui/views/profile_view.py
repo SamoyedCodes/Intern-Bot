@@ -1,5 +1,7 @@
+import json
 import secrets
 import string
+from pathlib import Path
 from urllib.parse import urlparse
 
 from PySide6.QtCore import Qt
@@ -11,6 +13,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
@@ -21,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.profile_export import build_extension_profile_payload
 from core.storage import JsonStore
 
 
@@ -67,6 +71,13 @@ class ProfileView(QWidget):
         subtitle = QLabel("This profile is converted into the payload used by Workday form automation.")
         subtitle.setObjectName("pageSubtitle")
         layout.addWidget(subtitle)
+
+        export_row = QHBoxLayout()
+        self.export_extension_btn = QPushButton("Export Extension JSON")
+        self.export_extension_btn.clicked.connect(self.export_extension_profile)
+        export_row.addStretch()
+        export_row.addWidget(self.export_extension_btn)
+        layout.addLayout(export_row)
 
         self.tabs = QTabWidget()
         self.tabs.setObjectName("profileTabs")
@@ -536,3 +547,18 @@ class ProfileView(QWidget):
         data["profile"] = profile
         data["workday_credentials"] = self.get_workday_credentials()
         self.store.save(data)
+
+    def export_extension_profile(self):
+        self.save_state()
+        profile = self.to_profile_dict()
+        payload = build_extension_profile_payload(profile, self.get_workday_credentials())
+
+        export_path = Path("data/extension_profile.json")
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        export_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+        QMessageBox.information(
+            self,
+            "Extension Profile Exported",
+            f"Saved extension profile to:\n{export_path.resolve()}",
+        )

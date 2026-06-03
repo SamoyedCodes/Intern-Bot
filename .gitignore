@@ -19,3 +19,8 @@ data/
 # Playwright Profiles and Caches
 playwright_profile/
 nodriver_profile/
+
+# Chrome extension build output
+extension/node_modules/
+extension/.output/
+extension/.wxt/

@@ -26,10 +26,20 @@ CREATE_ACCOUNT_PAGE = [
 
 # Links/buttons that switch from the Create Account view to the Sign In view
 SIGN_IN_LINK = [
-    'a:has-text("Sign In")',
-    'button:has-text("Sign In")',
-    '[data-automation-id="signIn"]',
-    '[data-automation-id*="haveAccount" i]',
+    '#mainContent a:has-text("Sign In")',
+    '#mainContent button:has-text("Sign In")',
+    'main a:has-text("Sign In")',
+    'main button:has-text("Sign In")',
+    '[data-automation-id="createAccountPanel"] a:has-text("Sign In")',
+    '[data-automation-id="createAccountPanel"] button:has-text("Sign In")',
+    '[data-automation-id*="createAccount" i] a:has-text("Sign In")',
+    '[data-automation-id*="createAccount" i] button:has-text("Sign In")',
+    '#mainContent [data-automation-id="signIn"]',
+    '#mainContent [data-automation-id*="haveAccount" i]',
+    'main [data-automation-id="signIn"]',
+    'main [data-automation-id*="haveAccount" i]',
+    '[data-automation-id="createAccountPanel"] [data-automation-id="signIn"]',
+    '[data-automation-id="createAccountPanel"] [data-automation-id*="haveAccount" i]',
     'a:has-text("Already have an account")',
     'a:has-text("Have an account")',
 ]
@@ -67,8 +77,14 @@ CONTINUE = [
     'button:has-text("Save & Continue")',
     'button:has-text("Continue")',
     'button:has-text("Next")',
+    '[role="button"]:has-text("Save and Continue")',
+    '[role="button"]:has-text("Save & Continue")',
+    '[role="button"]:has-text("Continue")',
+    '[role="button"]:has-text("Next")',
     'a:has-text("Continue")',
     'a:has-text("Next")',
+    'div:has-text("Save and Continue")',
+    'div:has-text("Save & Continue")',
 ]
 
 # Sign In Inputs
@@ -197,6 +213,17 @@ PROFILE_FIELDS = [
         'input[id*="gradDate" i]',
         'input[data-automation-id*="graduation" i]',
     ]),
+]
+
+REVIEW_SUBMIT_PAGE = [
+    '[aria-current="step"]:has-text("Review")',
+    '[aria-current="step"]:has-text("Disclose")',
+    '[aria-current="step"]:has-text("Self Identify")',
+    '[aria-current="step"]:has-text("Voluntary")',
+    '[data-automation-id*="reviewPage" i]',
+    '[data-automation-id*="reviewSection" i]',
+    'button:has-text("Submit Application")',
+    '[data-automation-id="submitButton"]',
 ]
 
 EXPERIENCE_FIELDS = [
