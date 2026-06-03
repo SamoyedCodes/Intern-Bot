@@ -1,0 +1,16 @@
+{
+  "name": "intern-bot-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "wxt": "^0.19.13"
+  }
+}

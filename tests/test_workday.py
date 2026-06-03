@@ -136,10 +136,10 @@ def test_existing_account_sign_in_continues_to_phase_2_status(monkeypatch):
     plugin = WorkdayPlugin()
     page = FakePage({})
 
-    async def signed_in(_page):
+    async def signed_in(_page, **_kwargs):
         return True
 
-    async def phase_2_result(_page, _profile, _phase):
+    async def phase_2_result(_page, _profile, _phase, **_kwargs):
         return plugin._manual_questions_result()
 
     monkeypatch.setattr(plugin, "_submit_sign_in", signed_in)
@@ -154,28 +154,140 @@ def test_existing_account_sign_in_continues_to_phase_2_status(monkeypatch):
     assert result["phase"] == "phase_3_application_questions_manual"
 
 
+def test_create_account_sign_in_prefers_in_form_link(monkeypatch):
+    plugin = WorkdayPlugin()
+    header_sign_in = FakeElement(visible=True)
+    in_form_sign_in = FakeElement(visible=True)
+    page = FakePage({
+        'h2:has-text("Create Account")': [FakeElement(visible=True)],
+        'a:has-text("Sign In")': [header_sign_in],
+        '#mainContent a:has-text("Sign In")': [in_form_sign_in],
+    })
+
+    async def signed_in(_page, **_kwargs):
+        return True
+
+    async def phase_2_result(_page, _profile, _phase, **_kwargs):
+        return plugin._manual_questions_result()
+
+    monkeypatch.setattr(plugin, "_submit_sign_in", signed_in)
+    monkeypatch.setattr(plugin, "_run_phase_2_until_questions", phase_2_result)
+
+    result = asyncio.run(plugin._phase_1_sign_in(
+        page,
+        {"workday_credential": {"username": "existing@example.com", "password": "Secure123!"}},
+    ))
+
+    assert result["status"] == "Manual Questions"
+    assert in_form_sign_in.clicked is True
+    assert header_sign_in.clicked is False
+
+
+def test_create_account_sign_in_does_not_click_header_sign_in_automation_id(monkeypatch):
+    plugin = WorkdayPlugin()
+    header_sign_in = FakeElement(visible=True)
+    in_form_sign_in = FakeElement(visible=True)
+    page = FakePage({
+        'h2:has-text("Create Account")': [FakeElement(visible=True)],
+        '[data-automation-id="signIn"]': [header_sign_in],
+        '#mainContent [data-automation-id="signIn"]': [in_form_sign_in],
+    })
+
+    async def signed_in(_page, **_kwargs):
+        return True
+
+    async def phase_2_result(_page, _profile, _phase, **_kwargs):
+        return plugin._manual_questions_result()
+
+    monkeypatch.setattr(plugin, "_submit_sign_in", signed_in)
+    monkeypatch.setattr(plugin, "_run_phase_2_until_questions", phase_2_result)
+
+    result = asyncio.run(plugin._phase_1_sign_in(
+        page,
+        {"workday_credential": {"username": "existing@example.com", "password": "Secure123!"}},
+    ))
+
+    assert result["status"] == "Manual Questions"
+    assert in_form_sign_in.clicked is True
+    assert header_sign_in.clicked is False
+
+
+def test_create_account_sign_in_uses_main_content_role_button(monkeypatch):
+    plugin = WorkdayPlugin()
+    header_sign_in = FakeElement(visible=True)
+    in_form_sign_in = FakeElement(visible=True)
+    main_content = FakeElement(visible=True)
+    main_content.role_elements = {("button", "Sign In"): [in_form_sign_in]}
+    page = FakePage({
+        'h2:has-text("Create Account")': [FakeElement(visible=True)],
+        "#mainContent": [main_content],
+        'button:has-text("Sign In")': [header_sign_in],
+    })
+
+    async def signed_in(_page, **_kwargs):
+        return True
+
+    async def phase_2_result(_page, _profile, _phase, **_kwargs):
+        return plugin._manual_questions_result()
+
+    monkeypatch.setattr(plugin, "_submit_sign_in", signed_in)
+    monkeypatch.setattr(plugin, "_run_phase_2_until_questions", phase_2_result)
+
+    result = asyncio.run(plugin._phase_1_sign_in(
+        page,
+        {"workday_credential": {"username": "existing@example.com", "password": "Secure123!"}},
+    ))
+
+    assert result["status"] == "Manual Questions"
+    assert in_form_sign_in.clicked is True
+    assert header_sign_in.clicked is False
+
+
 def test_upload_resume_returns_false_without_resume_path():
     plugin = WorkdayPlugin()
     page = FakePage({"input[type='file']": []})
 
     uploaded = asyncio.run(plugin._upload_resume_if_available(page, {"resume_path": ""}))
 
-    assert uploaded is False
+    assert uploaded is None
 
 
-def test_upload_resume_chooses_first_visible_file_input(tmp_path):
+def test_upload_resume_requires_configured_path_on_upload_page(monkeypatch):
+    plugin = WorkdayPlugin()
+    # Simulate being on the upload page (e.g. "Select file" text is visible)
+    page = FakePage({'text="Select file"': [FakeElement(visible=True)]})
+
+    uploaded = asyncio.run(plugin._upload_resume_if_available(page, {"resume_path": ""}))
+
+    assert "Resume upload is required" in uploaded
+    assert "Profile > Applicant > Resume" in uploaded
+
+
+def test_autofill_resume_text_alone_is_not_upload_page():
+    plugin = WorkdayPlugin()
+    page = FakePage({'text="Autofill with Resume"': [FakeElement(visible=True)]})
+
+    detected = asyncio.run(plugin._is_resume_upload_page(page))
+
+    assert detected is False
+
+
+def test_upload_resume_uses_select_file_button(tmp_path):
     plugin = WorkdayPlugin()
     resume = tmp_path / "resume.pdf"
     resume.write_text("resume", encoding="utf-8")
-    hidden = FakeElement(visible=False)
-    visible = FakeElement(visible=True)
-    page = FakePage({"input[type='file']": [hidden, visible]})
+    select_btn = FakeElement(visible=True)
+    # Simulate the "Select file" button being present and the upload page being detected
+    page = FakePage({
+        'text="Select file"': [FakeElement(visible=True)],
+    })
+    # Add get_by_role support: the "Select file" button
+    page.role_elements = {("button", "Select file"): [select_btn]}
 
     uploaded = asyncio.run(plugin._upload_resume_if_available(page, {"resume_path": str(resume)}))
 
-    assert uploaded is True
-    assert hidden.uploaded_path is None
-    assert visible.uploaded_path == str(resume)
+    assert uploaded is None
+    assert select_btn.uploaded_path == str(resume)
 
 
 def test_click_continue_uses_visible_next_button():
@@ -253,7 +365,7 @@ def test_phase_2_restarts_autofill_after_reauthentication(monkeypatch):
         return False
 
     async def uploaded(_page, _profile):
-        return True
+        return None
 
     async def no_continue(_page):
         return False
@@ -316,6 +428,7 @@ class FakeElement:
         self.text = text
         self.clicked = False
         self.uploaded_path = None
+        self.role_elements = {}
 
     async def is_visible(self):
         return self.visible
@@ -344,6 +457,12 @@ class FakeElement:
     async def check(self):
         self.checked = True
 
+    def get_by_role(self, role, name=None):
+        return FakeLocator(self.role_elements.get((role, name), []))
+
+    def get_by_label(self, label):
+        return FakeLocator(self.role_elements.get(("label", label), []))
+
 
 class FakeLocator:
     def __init__(self, elements):
@@ -360,12 +479,169 @@ class FakeLocator:
 class FakePage:
     def __init__(self, selectors):
         self.selectors = selectors
+        self.role_elements = {}  # {(role, name): [FakeElement, ...]}
 
     def locator(self, selector):
         return FakeLocator(self.selectors.get(selector, []))
+
+    def get_by_role(self, role, name=None):
+        key = (role, name)
+        elements = self.role_elements.get(key, [])
+        return FakeLocator(elements)
+
+    def get_by_label(self, label):
+        return FakeLocator(self.role_elements.get(("label", label), []))
+
+    async def evaluate(self, *args, **kwargs):
+        return 0
 
     async def wait_for_load_state(self, *args, **kwargs):
         return None
 
     async def wait_for_timeout(self, *args, **kwargs):
         return None
+
+
+def test_review_submit_result_payload():
+    plugin = WorkdayPlugin()
+
+    result = plugin._review_submit_result()
+
+    assert result["success"] is True
+    assert result["status"] == "Manual Review"
+    assert result["phase"] == "phase_3_review_submit_manual"
+    assert "Review/Submit" in result["note"]
+
+
+def test_review_submit_page_detected():
+    plugin = WorkdayPlugin()
+    page = FakePage({
+        '[aria-current="step"]:has-text("Review")': [FakeElement(visible=True)],
+    })
+
+    detected = asyncio.run(plugin._is_review_or_submit_page(page))
+
+    assert detected is True
+
+
+def test_review_submit_page_not_detected_on_normal_page():
+    plugin = WorkdayPlugin()
+    page = FakePage({})
+
+    detected = asyncio.run(plugin._is_review_or_submit_page(page))
+
+    assert detected is False
+
+
+def test_submit_button_triggers_review_detection():
+    plugin = WorkdayPlugin()
+    page = FakePage({
+        'button:has-text("Submit Application")': [FakeElement(visible=True)],
+    })
+
+    detected = asyncio.run(plugin._is_review_or_submit_page(page))
+
+    assert detected is True
+
+
+def test_phase_2_stops_at_review_page(monkeypatch):
+    plugin = WorkdayPlugin()
+    page = FakePage({})
+
+    async def no_questions(_page):
+        return False
+
+    async def review_visible(_page):
+        return True
+
+    monkeypatch.setattr(plugin, "_is_application_questions_page", no_questions)
+    monkeypatch.setattr(plugin, "_is_review_or_submit_page", review_visible)
+
+    result = asyncio.run(plugin._run_phase_2_until_questions(page, {}, "phase_2_autofill_resume"))
+
+    assert result["phase"] == "phase_3_review_submit_manual"
+    assert result["status"] == "Manual Review"
+
+
+def test_phase_2_prefers_questions_over_review(monkeypatch):
+    plugin = WorkdayPlugin()
+    page = FakePage({})
+
+    async def questions_visible(_page):
+        return True
+
+    async def review_visible(_page):
+        return True
+
+    monkeypatch.setattr(plugin, "_is_application_questions_page", questions_visible)
+    monkeypatch.setattr(plugin, "_is_review_or_submit_page", review_visible)
+
+    result = asyncio.run(plugin._run_phase_2_until_questions(page, {}, "phase_2_autofill_resume"))
+
+    assert result["phase"] == "phase_3_application_questions_manual"
+    assert result["status"] == "Manual Questions"
+
+
+def test_resume_upload_prefers_select_file_button_over_input(tmp_path):
+    plugin = WorkdayPlugin()
+    resume = tmp_path / "resume.pdf"
+    resume.write_text("resume", encoding="utf-8")
+
+    file_input = FakeElement(visible=True)
+    select_btn = FakeElement(visible=True)
+
+    page = FakePage({
+        'text="Select file"': [FakeElement(visible=True)],
+        "input[type='file']": [file_input],
+    })
+    page.role_elements = {("button", "Select file"): [select_btn]}
+
+    uploaded = asyncio.run(plugin._upload_resume_if_available(page, {"resume_path": str(resume)}))
+
+    assert uploaded is None
+    assert select_btn.uploaded_path == str(resume)
+    assert file_input.uploaded_path is None
+
+
+def test_submit_sign_in_uses_scope_when_provided():
+    plugin = WorkdayPlugin()
+    panel_sign_in = FakeElement(visible=True)
+    page_sign_in = FakeElement(visible=True)
+
+    scope = FakeElement(visible=True)
+    scope.role_elements = {("label", "Sign In"): [panel_sign_in]}
+
+    page = FakePage({})
+    page.role_elements = {("label", "Sign In"): [page_sign_in]}
+
+    result = asyncio.run(plugin._submit_sign_in(page, scope=scope))
+
+    assert result is True
+    assert panel_sign_in.clicked is True
+    assert page_sign_in.clicked is False
+
+
+def test_manual_review_keeps_browser_open():
+    plugin = WorkdayPlugin()
+
+    result = plugin._result(True, "Manual Review", "phase_3_review_submit_manual", "Review and submit")
+
+    assert plugin._should_keep_browser_open(result) is True
+
+
+def test_check_stop_page_returns_none_on_normal_page(monkeypatch):
+    plugin = WorkdayPlugin()
+    page = FakePage({})
+
+    async def no_questions(_page):
+        return False
+
+    async def no_review(_page):
+        return False
+
+    monkeypatch.setattr(plugin, "_is_application_questions_page", no_questions)
+    monkeypatch.setattr(plugin, "_is_review_or_submit_page", no_review)
+
+    result = asyncio.run(plugin._check_stop_page(page))
+
+    assert result is None

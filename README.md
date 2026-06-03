@@ -14,6 +14,7 @@ The bot intentionally pauses before final submission so the user can review the 
 - Gemini API key entry in Settings
 - Playwright browser automation
 - Workday plugin routing by URL
+- Experimental Chrome extension autofill engine in `extension/`
 
 ## Local Data
 
@@ -64,6 +65,18 @@ python main.py
 7. Open `Tasks`.
 8. Add a Workday job URL.
 9. Start the task.
+
+## Chrome Extension Pivot
+
+The desktop app can now export the profile used by the experimental Chrome extension:
+
+1. Open `Profile`.
+2. Click `Export Extension JSON`.
+3. Import `data/extension_profile.json` from the extension popup.
+4. Open a Workday application page.
+5. Click `Fill visible fields`.
+
+The extension fills only fields it can match confidently, highlights fields it touched, and leaves final review/submission manual.
 
 For a URL like:
 

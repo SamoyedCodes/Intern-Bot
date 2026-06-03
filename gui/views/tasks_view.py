@@ -69,6 +69,8 @@ class ApplicationTask:
         if status == "Needs Review" and phase != "phase_1_awaiting_activation":
             if phase == "phase_3_application_questions_manual":
                 return "Manual Questions"
+            if phase == "phase_3_review_submit_manual":
+                return "Manual Review"
             return "Manual Required"
         return status
 
@@ -297,7 +299,7 @@ class TasksView(QWidget):
             self.status_message.emit("No tasks to start.")
             return
         for task in list(self.tasks):
-            if task.status in {"Queued", "Failed", "Paused", "Needs Review", "Manual Required", "Manual Questions"}:
+            if task.status in {"Queued", "Failed", "Paused", "Needs Review", "Manual Required", "Manual Questions", "Manual Review"}:
                 self._start_task(task)
 
     def delete_selected_task(self):
@@ -343,7 +345,7 @@ class TasksView(QWidget):
             self.status_message.emit(f"{task.company} is already running.")
             return
 
-        if task.status in {"Paused", "Failed", "Queued", "Needs Review", "Manual Required", "Manual Questions"}:
+        if task.status in {"Paused", "Failed", "Queued", "Needs Review", "Manual Required", "Manual Questions", "Manual Review"}:
             self._start_task(task)
             return
 
@@ -456,6 +458,8 @@ class TasksView(QWidget):
             return "Resume"
         if task.status == "Manual Questions":
             return "Manual"
+        if task.status == "Manual Review":
+            return "Review"
         return "Resume"
 
     def _action_object_name(self, task: ApplicationTask):
@@ -473,6 +477,7 @@ class TasksView(QWidget):
             "phase_2_my_information": "My Information",
             "phase_2_my_experience": "My Experience",
             "phase_3_application_questions_manual": "Application Questions - Manual",
+            "phase_3_review_submit_manual": "Review / Submit - Manual",
         }
         return labels.get(phase, phase)
 
@@ -497,6 +502,8 @@ class TasksView(QWidget):
             return Qt.yellow
         if status == "Manual Questions":
             return Qt.yellow
+        if status == "Manual Review":
+            return Qt.yellow
         if status == "Paused":
             return Qt.lightGray
         if status == "Failed":
@@ -509,6 +516,7 @@ class TasksView(QWidget):
             "Needs Review": "#ffcc66",
             "Manual Required": "#ffcc66",
             "Manual Questions": "#ffcc66",
+            "Manual Review": "#ffcc66",
             "Paused": "#b9c0cc",
             "Failed": "#ff6b85",
         }
