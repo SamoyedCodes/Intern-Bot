@@ -24,3 +24,4 @@ nodriver_profile/
 extension/node_modules/
 extension/.output/
 extension/.wxt/
+.DS_Store
