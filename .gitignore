@@ -25,3 +25,11 @@ extension/node_modules/
 extension/.output/
 extension/.wxt/
 .DS_Store
+.DS_Store
+core/.DS_Store
+extension/.DS_Store
+gui/.DS_Store
+.DS_Store
+core/.DS_Store
+extension/.DS_Store
+gui/.DS_Store
