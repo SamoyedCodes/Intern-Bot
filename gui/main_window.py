@@ -1,221 +1,246 @@
 from core.automation.assistant import DEFAULT_MODEL
+from core.automation.models import site_key
 from core.storage.local_store import LocalStore
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
-    QFormLayout,
     QCheckBox,
-    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from gui.theme import form_layout, MessageBar, button, card, dot_icon, label, shortcut
+from gui.views.application_dialogs import AnswersView
 from gui.views.profile_view import ProfileView
-from gui.views.tasks_view import TasksView
+from gui.views.tasks_view import TasksView, status_meta
+
+SAFETY_FACTS = [
+    "Browser: bundled Chromium with local adapters, always visible.",
+    "Final submission is yours by default. Automatic submission needs your authorization for each application and stops if anything can't be verified.",
+    "Applications run in a separate, visible Chromium window. Employers may ask you to sign in again.",
+    "Profiles, answers and history stay in a local database on this Mac. Employer logins and API keys are kept only in the system keychain.",
+    "Browser observations are never sent to AI.",
+    "Preview: adapters are tested against fictional forms. Live employer acceptance testing is still pending.",
+]
 
 
 class SettingsView(QWidget):
     def __init__(self, store=None):
         super().__init__()
         self.store = store or LocalStore()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 24)
-        layout.setSpacing(14)
+        self._key_checked = False
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        outer.addWidget(scroll)
+        page = QWidget()
+        page.setObjectName("scrollContent")
+        scroll.setWidget(page)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(24, 20, 24, 24)
+        layout.setSpacing(16)
+        layout.addWidget(label("Settings", "pageTitle"))
+        layout.addWidget(label("Changes save automatically and apply to new applications. Existing applications keep the settings they started with.", "muted"))
+        self.notice = MessageBar()
+        layout.addWidget(self.notice)
 
-        title = QLabel("Automation Settings")
-        title.setObjectName("pageTitle")
-        subtitle = QLabel("Defaults for new applications. Existing applications keep their saved settings.")
-        subtitle.setObjectName("pageSubtitle")
-
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-
-        panel = QFrame()
-        panel.setObjectName("settingsPanel")
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(18, 18, 18, 18)
-        panel_layout.setSpacing(12)
         options = self.store.get("automation_options", {})
-        self.browser = QComboBox()
-        for label, value in [("Chromium (bundled, local adapters)", "chromium")]:
-            self.browser.addItem(label, value)
-        self.browser.setCurrentIndex(max(0, self.browser.findData(options.get("browser", "chromium"))))
-        panel_layout.addWidget(QLabel("Browser"))
-        panel_layout.addWidget(self.browser)
-        self.auto_advance = QCheckBox("Automatically continue after verifying each section")
+        frame, box = card()
+        box.addWidget(label("Automation", "section"))
+        self.auto_advance = QCheckBox("Continue automatically after each section is verified")
         self.auto_advance.setChecked(options.get("auto_advance", True))
-        self.reuse_answers = QCheckBox("Reuse explicitly approved answers")
+        box.addWidget(self.auto_advance)
+        box.addWidget(label("When off, Intern-Bot pauses after every section so you can check it.", "caption"))
+        self.reuse_answers = QCheckBox("Reuse answers you've approved")
         self.reuse_answers.setChecked(options.get("reuse_answers", True))
-        panel_layout.addWidget(self.auto_advance)
-        panel_layout.addWidget(self.reuse_answers)
-        save_options = QPushButton("Save automation defaults")
-        save_options.clicked.connect(self.save_options)
-        panel_layout.addWidget(save_options)
+        box.addWidget(self.reuse_answers)
+        box.addWidget(label("Only exact question matches within an answer's scope, profile and country are reused.", "caption"))
+        for checkbox in (self.auto_advance, self.reuse_answers):
+            checkbox.toggled.connect(self.save_options)
+        layout.addWidget(frame)
 
-        api_form = QFormLayout()
+        frame, box = card()
+        box.addWidget(label("AI assistance (optional)", "section"))
+        box.addWidget(label("Gemini drafts answers and compares profiles only when you ask. Every request shows its full context and needs your consent.", "muted"))
+        form = form_layout(10)
         self.gemini_model = QLineEdit(self.store.get("gemini_model", DEFAULT_MODEL))
-        api_form.addRow("Gemini model", self.gemini_model)
+        self.gemini_model.editingFinished.connect(self.save_model)
+        form.addRow("Model", self.gemini_model)
         self.gemini_key = QLineEdit()
         self.gemini_key.setEchoMode(QLineEdit.Password)
-        self.gemini_key.setPlaceholderText("GEMINI_API_KEY")
+        self.gemini_key.setPlaceholderText("Paste a Gemini API key")
+        self.save_api_key_btn = button("Save key", self.save_api_key, "primary")
+        key_row = QHBoxLayout()
+        key_row.addWidget(self.gemini_key, 1)
+        key_row.addWidget(self.save_api_key_btn)
+        form.addRow("API key", key_row)
+        self.key_status = label(role="caption")
+        form.addRow("", self.key_status)
+        box.addLayout(form)
+        layout.addWidget(frame)
 
-
-        self.save_api_key_btn = QPushButton("Save API Key")
-        self.save_api_key_btn.setObjectName("primaryButton")
-        self.save_api_key_btn.clicked.connect(self.save_api_key)
-
-        api_row = QHBoxLayout()
-        api_row.addWidget(self.gemini_key)
-        api_row.addWidget(self.save_api_key_btn)
-        api_form.addRow("Gemini API Key", api_row)
-        panel_layout.addLayout(api_form)
-
-        items = [
-            "Browser mode: visible",
-            "Final submit: manual by default; opt in separately for each new application",
-            "Session storage: Playwright persistent profile",
-            "Gemini drafts / profile comparison: explicit context preview and consent per request",
-            "AI browser recovery: disabled; no browser observations are sent",
-        ]
-        for text in items:
-            label = QLabel(text)
-            label.setObjectName("settingLine")
-            panel_layout.addWidget(label)
-
-        layout.addWidget(panel)
+        frame, box = card(6)
+        box.addWidget(label("Safety and privacy", "section"))
+        for fact in SAFETY_FACTS:
+            box.addWidget(label("✓  " + fact, "fact"))
+        layout.addWidget(frame)
         layout.addStretch()
 
-        self.status = QLabel("")
-        self.status.setObjectName("settingStatus")
-        layout.addWidget(self.status)
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._key_checked:
+            self._key_checked = True
+            try:
+                saved = bool(self.store._vault().get("gemini-api-key"))
+                self.key_status.setText("A key is stored in the system keychain." if saved else "No key saved yet.")
+            except Exception:
+                self.key_status.setText("Couldn't read the system keychain.")
 
     def save_options(self):
-        self.store.put("automation_options", {"browser": self.browser.currentData(),
+        self.store.put("automation_options", {"browser": "chromium",
                        "auto_advance": self.auto_advance.isChecked(), "reuse_answers": self.reuse_answers.isChecked()})
-        self.store.put("gemini_model", self.gemini_model.text().strip())
-        self.status.setText("Defaults saved. Existing applications resume in bundled Chromium; employer sign-in may be required again.")
+        self.notice.notify("Saved. New applications use these defaults.", "success")
+
+    def save_model(self):
+        model = self.gemini_model.text().strip()
+        if model and model != self.store.get("gemini_model", DEFAULT_MODEL):
+            self.store.put("gemini_model", model)
+            self.notice.notify("Model saved.", "success")
 
     def save_api_key(self):
         api_key = self.gemini_key.text().strip()
         if not api_key:
-            self.status.setText("Enter a Gemini API key before saving.")
+            self.notice.notify("Paste a Gemini API key before saving.", "warning")
             return
-
         try:
             self.store._vault().set("gemini-api-key", api_key)
-            self.store.put("gemini_model", self.gemini_model.text().strip())
+            self.save_model()
         except Exception:
-            self.status.setText("Could not save the key to the operating-system keychain. Nothing was written to disk.")
+            self.notice.notify("Couldn't save the key to the system keychain. Nothing was written to disk.", "danger")
             return
         self.gemini_key.clear()
-        self.status.setText("API key saved to the OS keychain. Drafts and comparisons require a separate request and context review.")
-
+        self.key_status.setText("A key is stored in the system keychain.")
+        self.notice.notify("Key saved to the system keychain.", "success")
 
 
 class MainWindow(QMainWindow):
+    PAGES = ("Applications", "Profile", "Answers", "Settings")
+
     def __init__(self, store=None):
         super().__init__()
         self.setWindowTitle("Intern-Bot")
-        self.resize(1280, 760)
-        self.setMinimumSize(1080, 680)
-
+        self.resize(1280, 780)
+        self.setMinimumSize(1040, 660)
+        self.store = store or LocalStore()
         self.nav_buttons = []
 
         shell = QWidget()
         shell.setObjectName("appShell")
         self.setCentralWidget(shell)
-
         root = QHBoxLayout(shell)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        root.addWidget(self._build_sidebar())
-
-        content = QWidget()
-        content.setObjectName("contentArea")
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
-
-        content_layout.addWidget(self._build_topbar())
-
-        self.stack = QStackedWidget()
-        self.store = store or LocalStore()
-        self.profile_view = ProfileView(self.store)
         self.tasks_view = TasksView(self.store)
+        self.profile_view = ProfileView(self.store)
+        self.answers_view = AnswersView(self.store)
         self.settings_view = SettingsView(self.store)
+        root.addWidget(self._build_sidebar())
+        self.stack = QStackedWidget()
+        for view in (self.tasks_view, self.profile_view, self.answers_view, self.settings_view):
+            self.stack.addWidget(view)
+        root.addWidget(self.stack, 1)
 
-
-        self.stack.addWidget(self.tasks_view)
-        self.stack.addWidget(self.profile_view)
-        self.stack.addWidget(self.settings_view)
-        content_layout.addWidget(self.stack)
-
-        root.addWidget(content)
+        self.tasks_view.changed.connect(self.update_status)
+        self.tasks_view.open_profile.connect(self.open_profile_section)
+        QGuiApplication.styleHints().colorSchemeChanged.connect(lambda *_: self.tasks_view.render())
+        for index in range(len(self.PAGES)):
+            shortcut(f"Ctrl+{index + 1}", self, lambda i=index: self._select_nav(i))
+        shortcut(QKeySequence.New, self, lambda: (self._select_nav(0), self.tasks_view.add_dialog()))
+        shortcut(QKeySequence.Find, self, lambda: (self._select_nav(0), self.tasks_view.search.setFocus()))
+        shortcut("Ctrl+R", self, lambda: (self._select_nav(0), self.tasks_view.primary_action()))
         self._select_nav(0)
+        self.update_status()
+        self.tasks_view.table.setFocus()
 
     def _build_sidebar(self):
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(210)
-
+        sidebar.setFixedWidth(208)
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(14, 18, 14, 18)
-        layout.setSpacing(10)
-
+        layout.setContentsMargins(12, 18, 12, 14)
+        layout.setSpacing(2)
         brand = QLabel("Intern-Bot")
         brand.setObjectName("brand")
-        tagline = QLabel("Local application desk")
-        tagline.setObjectName("brandTagline")
         layout.addWidget(brand)
-        layout.addWidget(tagline)
-        layout.addSpacing(20)
-
-        for index, text in enumerate(["Tasks", "Profile", "Settings"]):
-            button = QPushButton(text)
-            button.setObjectName("navButton")
-            button.setCheckable(True)
-            button.clicked.connect(lambda checked=False, i=index: self._select_nav(i))
-            layout.addWidget(button)
-            self.nav_buttons.append(button)
-
+        layout.addWidget(label("Local application desk", "caption"))
+        layout.addSpacing(18)
+        for index, text in enumerate(self.PAGES):
+            nav = QPushButton(text)
+            nav.setObjectName("navButton")
+            nav.setCheckable(True)
+            nav.setCursor(Qt.PointingHandCursor)
+            nav.setToolTip(f"{text} (⌘{index + 1})")
+            nav.clicked.connect(lambda checked=False, i=index: self._select_nav(i))
+            if index == 0:
+                row = QHBoxLayout(nav)
+                row.setContentsMargins(0, 0, 8, 0)
+                row.addStretch()
+                self.badge = QLabel()
+                self.badge.setObjectName("navBadge")
+                self.badge.setAlignment(Qt.AlignCenter)
+                self.badge.setAttribute(Qt.WA_TransparentForMouseEvents)
+                row.addWidget(self.badge)
+            layout.addWidget(nav)
+            self.nav_buttons.append(nav)
         layout.addStretch()
-
-        footer = QLabel("Review before submit")
-        footer.setObjectName("sidebarFooter")
-        layout.addWidget(footer)
+        status = QFrame()
+        status.setObjectName("engineStatus")
+        row = QHBoxLayout(status)
+        row.setContentsMargins(10, 8, 10, 8)
+        row.setSpacing(6)
+        self.status_dot = QLabel()
+        self.status_text = label()
+        row.addWidget(self.status_dot, 0, Qt.AlignTop)
+        row.addWidget(self.status_text, 1)
+        layout.addWidget(status)
         return sidebar
 
-    def _build_topbar(self):
-        topbar = QFrame()
-        topbar.setObjectName("topbar")
-        topbar.setFixedHeight(72)
-
-        layout = QHBoxLayout(topbar)
-        layout.setContentsMargins(24, 0, 24, 0)
-
-        self.section_title = QLabel("Tasks")
-        self.section_title.setObjectName("sectionTitle")
-        layout.addWidget(self.section_title)
-        layout.addStretch()
-
-        status = QLabel("Local automation")
-        status.setObjectName("topStatus")
-        layout.addWidget(status)
-        return topbar
+    def update_status(self):
+        view = self.tasks_view
+        needs = sum(status_meta(run)[2] == "Needs you" for run in view.tasks)
+        self.badge.setText(str(needs))
+        self.badge.setVisible(bool(needs))
+        self.nav_buttons[0].setAccessibleName(f"Applications, {needs} need you" if needs else "Applications")
+        active = next((run for run in view.tasks if run.id == view._active_id), None)
+        if active:
+            tone = "info"
+            text = f"Running · {active.company or site_key(active.job_url)}" + (f"\n{len(view._queue)} more queued" if view._queue else "")
+        elif needs:
+            tone, text = "warning", f"{needs} {'needs' if needs == 1 else 'need'} you"
+        else:
+            tone, text = "neutral", "Idle"
+        self.status_dot.setPixmap(dot_icon(tone).pixmap(16, 16))
+        self.status_text.setText(text)
 
     def _select_nav(self, index: int):
         self.stack.setCurrentIndex(index)
-        names = ["Tasks", "Profile", "Settings"]
-        self.section_title.setText(names[index])
-        for button_index, button in enumerate(self.nav_buttons):
-            button.setChecked(button_index == index)
+        for button_index, nav in enumerate(self.nav_buttons):
+            nav.setChecked(button_index == index)
+
+    def open_profile_section(self, section):
+        self._select_nav(1)
+        self.profile_view.editor.show_section(section)
 
     def closeEvent(self, event):
         self.tasks_view.shutdown()

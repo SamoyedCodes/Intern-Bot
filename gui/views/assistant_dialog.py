@@ -1,9 +1,10 @@
 import json
 
 from PySide6.QtCore import QThread, Signal
-from PySide6.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout, QPlainTextEdit, QVBoxLayout
 
 from core.automation.assistant import DEFAULT_MODEL, career_facts, generate_text
+from gui.theme import button, label, restyle
 
 
 class AssistWorker(QThread):
@@ -31,27 +32,34 @@ class AssistantDialog(QDialog):
         self.setWindowTitle("Draft answer" if mode == "draft" else "Compare profiles")
         self.resize(760, 700)
         layout = QVBoxLayout(self)
-        hint = QLabel("Review and edit the exact context below before sending it to Google's Gemini API. Contact details, file contents and credentials are excluded automatically; free-text career facts may still contain personal information.")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(10)
+        layout.addWidget(label("Draft an answer with Gemini" if mode == "draft" else "Compare profiles with Gemini", "section"))
+        layout.addWidget(label("Review and edit exactly what will be sent to Google's Gemini API. Contact details, file contents and credentials are left out automatically, but free-text career facts may still contain personal information.", "muted"))
         profiles = store.profiles() if mode == "compare" else {run.profile_name: run.profile_snapshot or store.profiles()[store.get("active_profile", "Default")]}
         context = {"question": question, "company": run.company, "role": run.role,
                    "job_description": run.job_description, "profiles": {name: career_facts(p) for name, p in profiles.items()}}
+        layout.addWidget(label("Context to send", "overline"))
         self.context = QPlainTextEdit(json.dumps(context, indent=2, ensure_ascii=False))
-        layout.addWidget(self.context)
+        layout.addWidget(self.context, 1)
+        send = QHBoxLayout()
         self.consent = QCheckBox("Send this context to Gemini for this request")
-        layout.addWidget(self.consent)
-        self.generate = QPushButton("Generate draft" if mode == "draft" else "Compare profiles")
-        self.generate.clicked.connect(self.start)
-        layout.addWidget(self.generate)
+        self.generate = button("Generate draft" if mode == "draft" else "Compare profiles", self.start, "primary")
+        self.generate.setEnabled(False)
+        self.consent.toggled.connect(self.generate.setEnabled)
+        send.addWidget(self.consent, 1)
+        send.addWidget(self.generate)
+        layout.addLayout(send)
+        layout.addWidget(label("Gemini output", "overline"))
         self.output = QPlainTextEdit()
-        layout.addWidget(self.output)
-        self.notice = QLabel("AI output needs your review. Nothing is filled or approved automatically.")
-        self.notice.setWordWrap(True)
+        self.output.setPlaceholderText("The response appears here for you to review and edit.")
+        layout.addWidget(self.output, 1)
+        self.notice = label("AI output needs your review. Nothing is filled in or approved automatically.", "caption")
         layout.addWidget(self.notice)
         self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.buttons.button(QDialogButtonBox.Ok).setText("Use draft" if mode == "draft" else "Close")
         self.buttons.button(QDialogButtonBox.Ok).setEnabled(mode == "compare")
+        restyle(self.buttons.button(QDialogButtonBox.Ok), variant="primary")
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
@@ -69,6 +77,7 @@ class AssistantDialog(QDialog):
             self.notice.setText("Save a Gemini API key in Settings first.")
             return
         self.generate.setEnabled(False)
+        self.consent.setEnabled(False)
         self.buttons.setEnabled(False)
         self.output.clear()
         self.worker = AssistWorker(key, self.store.get("gemini_model", DEFAULT_MODEL), self.mode, self.context.toPlainText(), self)
@@ -85,8 +94,8 @@ class AssistantDialog(QDialog):
         self.notice.setText("Review the output. Using a draft does not approve it; save the answer separately.")
 
     def finished_request(self):
-        self.generate.setEnabled(True)
         self.buttons.setEnabled(True)
+        self.consent.setEnabled(True)
         self.buttons.button(QDialogButtonBox.Ok).setEnabled(self.mode == "compare" or bool(self.output.toPlainText().strip()))
         self.consent.setChecked(False)
 
