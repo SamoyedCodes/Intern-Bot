@@ -3,7 +3,7 @@ import json
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout, QPlainTextEdit, QVBoxLayout
 
-from core.automation.assistant import DEFAULT_MODEL, career_facts, generate_text
+from core.automation.assistant import PROVIDERS, career_facts, generate_text
 from gui.theme import button, label, restyle
 
 
@@ -11,9 +11,9 @@ class AssistWorker(QThread):
     completed = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, key, model, mode, context, parent):
+    def __init__(self, key, model, mode, context, provider, parent):
         super().__init__(parent)
-        self.args = key, model, mode, context
+        self.args = key, model, mode, context, provider
 
     def run(self):
         try:
@@ -29,13 +29,15 @@ class AssistantDialog(QDialog):
         super().__init__(parent)
         self.store, self.application, self.mode = store, run, mode
         self.worker = None
+        self.provider = store.get("ai_provider", "gemini")
+        name = PROVIDERS[self.provider]["name"]
         self.setWindowTitle("Draft answer" if mode == "draft" else "Compare profiles")
         self.resize(760, 700)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(10)
-        layout.addWidget(label("Draft an answer with Gemini" if mode == "draft" else "Compare profiles with Gemini", "section"))
-        layout.addWidget(label("Review and edit exactly what will be sent to Google's Gemini API. Contact details, file contents and credentials are left out automatically, but free-text career facts may still contain personal information.", "muted"))
+        layout.addWidget(label(f"Draft an answer with {name}" if mode == "draft" else f"Compare profiles with {name}", "section"))
+        layout.addWidget(label(f"Review and edit exactly what will be sent to the {name} API. Contact details, file contents and credentials are left out automatically, but free-text career facts may still contain personal information.", "muted"))
         profiles = store.profiles() if mode == "compare" else {run.profile_name: run.profile_snapshot or store.profiles()[store.get("active_profile", "Default")]}
         context = {"question": question, "company": run.company, "role": run.role,
                    "job_description": run.job_description, "profiles": {name: career_facts(p) for name, p in profiles.items()}}
@@ -43,14 +45,14 @@ class AssistantDialog(QDialog):
         self.context = QPlainTextEdit(json.dumps(context, indent=2, ensure_ascii=False))
         layout.addWidget(self.context, 1)
         send = QHBoxLayout()
-        self.consent = QCheckBox("Send this context to Gemini for this request")
+        self.consent = QCheckBox(f"Send this context to {name} for this request")
         self.generate = button("Generate draft" if mode == "draft" else "Compare profiles", self.start, "primary")
         self.generate.setEnabled(False)
         self.consent.toggled.connect(self.generate.setEnabled)
         send.addWidget(self.consent, 1)
         send.addWidget(self.generate)
         layout.addLayout(send)
-        layout.addWidget(label("Gemini output", "overline"))
+        layout.addWidget(label(f"{name} output", "overline"))
         self.output = QPlainTextEdit()
         self.output.setPlaceholderText("The response appears here for you to review and edit.")
         layout.addWidget(self.output, 1)
@@ -68,25 +70,27 @@ class AssistantDialog(QDialog):
         if not self.consent.isChecked():
             self.notice.setText("Review the context and select the consent checkbox first.")
             return
+        spec = PROVIDERS[self.provider]
         try:
-            key = self.store._vault().get("gemini-api-key")
+            key = self.store._vault().get(f"{self.provider}-api-key")
         except Exception:
-            self.notice.setText("Could not read the Gemini key from the operating-system keychain.")
+            self.notice.setText(f"Could not read the {spec['name']} key from the operating-system keychain.")
             return
         if not key:
-            self.notice.setText("Save a Gemini API key in Settings first.")
+            self.notice.setText(f"Save a {spec['name']} API key in Settings first.")
             return
         self.generate.setEnabled(False)
         self.consent.setEnabled(False)
         self.buttons.setEnabled(False)
         self.output.clear()
-        self.worker = AssistWorker(key, self.store.get("gemini_model", DEFAULT_MODEL), self.mode, self.context.toPlainText(), self)
+        self.worker = AssistWorker(key, self.store.get(f"{self.provider}_model", spec["model"]), self.mode,
+                                   self.context.toPlainText(), self.provider, self)
         self.worker.completed.connect(self.complete)
         self.worker.failed.connect(self.notice.setText)
         self.worker.finished.connect(self.finished_request)
         self.application.ai_requests += 1
         self.store.save_run(self.application)
-        self.notice.setText("Waiting for Gemini…")
+        self.notice.setText(f"Waiting for {spec['name']}…")
         self.worker.start()
 
     def complete(self, text):

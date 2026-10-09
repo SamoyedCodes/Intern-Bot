@@ -287,7 +287,7 @@ class RunDetailsDialog(QDialog):
         self.answer_box = QVBoxLayout()
         self.answer_box.setSpacing(4)
         self.answer_box.addWidget(self.answer)
-        self.answer_box.addWidget(button("Draft with Gemini…", self.draft_answer, "ghost"), 0, Qt.AlignLeft)
+        self.answer_box.addWidget(button("Draft with AI…", self.draft_answer, "ghost"), 0, Qt.AlignLeft)
         self.form.addRow("Answer", self.answer_box)
         self.scope = QComboBox()
         self.scope.addItems(["Only this application", f"All applications to {name}", "Any application asking exactly this question"])
