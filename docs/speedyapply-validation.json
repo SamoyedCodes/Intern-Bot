@@ -1,0 +1,29 @@
+{
+  "date": "2026-10-10",
+  "platform": "macOS arm64",
+  "python": "3.13.13",
+  "playwright": "1.59.0",
+  "chromium": "147.0.7727.15",
+  "full_suite": {
+    "passed": 128,
+    "skipped": 1,
+    "seconds": 341.31,
+    "skip_reason": "Opt-in supplied-profile test has no profile by default"
+  },
+  "final_regressions": {
+    "passed": 45,
+    "seconds": 108.19,
+    "includes": "Document-byte checkpoint invalidation and opt-in fictional-profile upload; overlaps full suite"
+  },
+  "unique_python_tests_exercised": 130,
+  "build_tests_passed": 3,
+  "adapter_count": 28,
+  "per_adapter_scenarios": 3,
+  "vendor_network_requests": 0,
+  "worker_network_requests": 0,
+  "network_capture": "speedyapply-network-capture.json",
+  "source_package_sha256": "f7202224224735d17c8bf9ed8d091034848c8614a6d99cf84c02021bb0692571",
+  "generated_adapter_sha256": "a905c10523117a0dcd9e6c2865962f1bfdecb1f88f01e0e3f3e9b0e13594a503",
+  "live_employer_testing": false,
+  "live_submissions": false
+}

@@ -1,3 +1,5 @@
+> Historical record for the superseded engine. Current implementation and evidence: [local adapter acceptance](speedyapply-acceptance.md).
+
 # SpeedyApply-style capabilities in Intern-Bot
 
 Implemented on 2026-10-08 using the existing desktop app, local store and Playwright engine. No SpeedyApply code, branding, extension package, account or service is used.

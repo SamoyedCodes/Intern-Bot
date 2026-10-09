@@ -1,0 +1,136 @@
+{
+  "engine": "extension",
+  "iterations": 5,
+  "fixture_fields": 3,
+  "playwright": "1.59.0",
+  "python": "3.13.13",
+  "browser_executable": "Google Chrome for Testing",
+  "fixture_sha256": {
+    "workday": "7e8b7e5e2fb8ecf95cfefd6fd9930567f475321fdb12006dbe7e799abf3d8973",
+    "greenhouse": "9a7da51fc284bb7100e3d61d283f05c035621cf733e53197e7f3d5220e43f98f",
+    "lever": "9fc82b2b510a8b493485883a9a39e52f4adbec863f94ce0ad5231a719c565bc5",
+    "ashby": "5615bd2c2625d78ebaaa006393b934f152e446c65ebbb8df60204a8ba898541a"
+  },
+  "results": {
+    "workday": {
+      "median_seconds": 1.084918167005526,
+      "samples": [
+        {
+          "seconds": 1.0715830419794656,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 1.1458175420120824,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 1.0946822499972768,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 1.084918167005526,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 1.0768024580029305,
+          "correct_fields": 3,
+          "interventions": 0
+        }
+      ]
+    },
+    "greenhouse": {
+      "median_seconds": 0.9759130419988651,
+      "samples": [
+        {
+          "seconds": 0.9975931250082795,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 0.9807405829778872,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 0.9759130419988651,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 0.9690022080030758,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 0.969647249992704,
+          "correct_fields": 3,
+          "interventions": 0
+        }
+      ]
+    },
+    "lever": {
+      "median_seconds": 0.8522250830137637,
+      "samples": [
+        {
+          "seconds": 0.8576741660072003,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 0.8522250830137637,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 0.849696125020273,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 0.8487227500008885,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 0.8615081250027288,
+          "correct_fields": 3,
+          "interventions": 0
+        }
+      ]
+    },
+    "ashby": {
+      "median_seconds": 2.657314583018888,
+      "samples": [
+        {
+          "seconds": 2.6351507919898722,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 2.6501196249737404,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 2.682760249997955,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 2.723247291985899,
+          "correct_fields": 3,
+          "interventions": 0
+        },
+        {
+          "seconds": 2.657314583018888,
+          "correct_fields": 3,
+          "interventions": 0
+        }
+      ]
+    }
+  }
+}

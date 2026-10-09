@@ -1,3 +1,5 @@
+> Historical record for the superseded engine. Current implementation and evidence: [local adapter acceptance](speedyapply-acceptance.md).
+
 # Workday implementation and acceptance record
 
 There is one application engine and one structured profile editor with named profiles. The app remains a preview: fictional fixtures do not establish reliability on live employers. The [SpeedyApply capability comparison](speedyapply-parity.md) describes the desktop additions and their boundaries.
