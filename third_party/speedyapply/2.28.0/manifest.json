@@ -1,0 +1,88 @@
+{
+  "manifest_version": 3,
+  "name": "SpeedyApply: Job Application Autofill Tool",
+  "description": "Applying to jobs just got easier. Automate job applications with a single click and track your progress over time.",
+  "version": "2.28.0",
+  "short_name": "SpeedyApply",
+  "icons": {
+    "16": "icon/16.png",
+    "32": "icon/32.png",
+    "48": "icon/48.png",
+    "96": "icon/96.png",
+    "128": "icon/128.png"
+  },
+  "author": "kirk@speedyapply.com",
+  "homepage_url": "https://speedyapply.com",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "tabs",
+    "contextMenus",
+    "cookies"
+  ],
+  "host_permissions": [
+    "*://*/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "images/icon-pattern.svg"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    },
+    {
+      "resources": [
+        "options.html"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    },
+    {
+      "resources": [
+        "content-scripts/content.css"
+      ],
+      "use_dynamic_url": true,
+      "matches": [
+        "*://*/*"
+      ]
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "kirk@speedyapply.com"
+    }
+  },
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "action": {
+    "default_title": "SpeedyApply: Job Application Autofill Tool",
+    "default_popup": "popup.html"
+  },
+  "options_ui": {
+    "open_in_tab": true,
+    "page": "options.html"
+  },
+  "sidebar_action": {
+    "default_panel": "sidepanel.html",
+    "default_title": "SpeedyApply: Job Application Autofill Tool",
+    "open_at_install": false
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*/*"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle",
+      "js": [
+        "content-scripts/content.js"
+      ]
+    }
+  ]
+}

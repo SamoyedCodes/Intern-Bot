@@ -1,0 +1,13 @@
+{
+  "name": "SpeedyApply",
+  "version": "2.28.0",
+  "use": "Private personal integration; no redistribution licence granted",
+  "publisher": "kirk@speedyapply.com",
+  "source": "User-supplied Firefox XPI",
+  "terms": "https://www.speedyapply.com/terms-of-service",
+  "sha256": {
+    "original.xpi": "f7202224224735d17c8bf9ed8d091034848c8614a6d99cf84c02021bb0692571",
+    "content.js": "13699cc1248dbc11188eca258151524adda104fd9d04c7ea24c3fb7b7fb2eff4",
+    "manifest.json": "a7bb4c3431b72b1f6fc9e4d65199a0ebef50ecb5366d48878c12285bbd590ccf"
+  }
+}
