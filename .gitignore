@@ -1,35 +1,21 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual Environments
+# Python environments and generated caches
+.venv/
 venv/
 env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
 
-# Secrets and Configurations
+# Personal state and credentials
 .env
-salt.bin
 data/
-
-# Local Encrypted Databases
 *.db
 *.sqlite3
+salt.bin
 
-# Playwright Profiles and Caches
+# Retained local browser data is never committed
 playwright_profile/
 nodriver_profile/
 
-# Chrome extension build output
-extension/node_modules/
-extension/.output/
-extension/.wxt/
+# macOS metadata
 .DS_Store
-.DS_Store
-core/.DS_Store
-extension/.DS_Store
-gui/.DS_Store
-.DS_Store
-core/.DS_Store
-extension/.DS_Store
-gui/.DS_Store
