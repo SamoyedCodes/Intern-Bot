@@ -1,4 +1,4 @@
-from core.automation.assistant import DEFAULT_MODEL
+from core.automation.assistant import PROVIDERS
 from core.automation.models import site_key
 from core.storage.local_store import LocalStore
 
@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -71,23 +72,29 @@ class SettingsView(QWidget):
 
         frame, box = card()
         box.addWidget(label("AI assistance (optional)", "section"))
-        box.addWidget(label("Gemini drafts answers and compares profiles only when you ask. Every request shows its full context and needs your consent.", "muted"))
+        box.addWidget(label("AI drafts answers and compares profiles only when you ask. Every request shows its full context and needs your consent.", "muted"))
         form = form_layout(10)
-        self.gemini_model = QLineEdit(self.store.get("gemini_model", DEFAULT_MODEL))
-        self.gemini_model.editingFinished.connect(self.save_model)
-        form.addRow("Model", self.gemini_model)
-        self.gemini_key = QLineEdit()
-        self.gemini_key.setEchoMode(QLineEdit.Password)
-        self.gemini_key.setPlaceholderText("Paste a Gemini API key")
+        self.provider = QComboBox()
+        for key, spec in PROVIDERS.items():
+            self.provider.addItem(spec["name"], key)
+        self.provider.setCurrentIndex(max(0, self.provider.findData(self.store.get("ai_provider", "gemini"))))
+        form.addRow("Provider", self.provider)
+        self.ai_model = QLineEdit()
+        self.ai_model.editingFinished.connect(self.save_model)
+        form.addRow("Model", self.ai_model)
+        self.ai_key = QLineEdit()
+        self.ai_key.setEchoMode(QLineEdit.Password)
         self.save_api_key_btn = button("Save key", self.save_api_key, "primary")
         key_row = QHBoxLayout()
-        key_row.addWidget(self.gemini_key, 1)
+        key_row.addWidget(self.ai_key, 1)
         key_row.addWidget(self.save_api_key_btn)
         form.addRow("API key", key_row)
         self.key_status = label(role="caption")
         form.addRow("", self.key_status)
         box.addLayout(form)
         layout.addWidget(frame)
+        self.show_provider()
+        self.provider.currentIndexChanged.connect(self.change_provider)
 
         frame, box = card(6)
         box.addWidget(label("Safety and privacy", "section"))
@@ -100,11 +107,26 @@ class SettingsView(QWidget):
         super().showEvent(event)
         if not self._key_checked:
             self._key_checked = True
-            try:
-                saved = bool(self.store._vault().get("gemini-api-key"))
-                self.key_status.setText("A key is stored in the system keychain." if saved else "No key saved yet.")
-            except Exception:
-                self.key_status.setText("Couldn't read the system keychain.")
+            self.check_key()
+
+    def check_key(self):
+        try:
+            saved = bool(self.store._vault().get(f"{self.provider.currentData()}-api-key"))
+            self.key_status.setText("A key is stored in the system keychain." if saved else "No key saved yet.")
+        except Exception:
+            self.key_status.setText("Couldn't read the system keychain.")
+
+    def show_provider(self):
+        provider = self.provider.currentData()
+        self.ai_model.setText(self.store.get(f"{provider}_model", PROVIDERS[provider]["model"]))
+        self.ai_key.clear()
+        self.ai_key.setPlaceholderText(f"Paste a {PROVIDERS[provider]['name']} API key")
+
+    def change_provider(self):
+        self.store.put("ai_provider", self.provider.currentData())
+        self.show_provider()
+        self.check_key()
+        self.notice.notify(f"AI requests now use {self.provider.currentText()}.", "success")
 
     def save_options(self):
         self.store.put("automation_options", {"browser": "chromium",
@@ -112,23 +134,24 @@ class SettingsView(QWidget):
         self.notice.notify("Saved. New applications use these defaults.", "success")
 
     def save_model(self):
-        model = self.gemini_model.text().strip()
-        if model and model != self.store.get("gemini_model", DEFAULT_MODEL):
-            self.store.put("gemini_model", model)
+        provider = self.provider.currentData()
+        model = self.ai_model.text().strip()
+        if model and model != self.store.get(f"{provider}_model", PROVIDERS[provider]["model"]):
+            self.store.put(f"{provider}_model", model)
             self.notice.notify("Model saved.", "success")
 
     def save_api_key(self):
-        api_key = self.gemini_key.text().strip()
+        api_key = self.ai_key.text().strip()
         if not api_key:
-            self.notice.notify("Paste a Gemini API key before saving.", "warning")
+            self.notice.notify(f"Paste a {self.provider.currentText()} API key before saving.", "warning")
             return
         try:
-            self.store._vault().set("gemini-api-key", api_key)
+            self.store._vault().set(f"{self.provider.currentData()}-api-key", api_key)
             self.save_model()
         except Exception:
             self.notice.notify("Couldn't save the key to the system keychain. Nothing was written to disk.", "danger")
             return
-        self.gemini_key.clear()
+        self.ai_key.clear()
         self.key_status.setText("A key is stored in the system keychain.")
         self.notice.notify("Key saved to the system keychain.", "success")
 

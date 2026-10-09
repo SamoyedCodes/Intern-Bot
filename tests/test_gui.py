@@ -211,6 +211,16 @@ def test_cloud_assistant_requires_consent(window):
     assert dialog.worker is None and 'consent' in dialog.notice.text()
 
 
+def test_each_ai_provider_keeps_its_own_model_and_key(window):
+    settings, vault = window.settings_view, window.store._vault()
+    settings.provider.setCurrentIndex(settings.provider.findData('openai'))
+    assert window.store.get('ai_provider') == 'openai' and settings.ai_model.text() == 'gpt-6-luna'
+    settings.ai_key.setText('sk-test')
+    settings.save_api_key()
+    assert vault.get('openai-api-key') == 'sk-test' and not vault.get('gemini-api-key')
+    assert 'OpenAI' in AssistantDialog(window.store, ApplicationRun(job_url='https://jobs.lever.co/example/1')).consent.text()
+
+
 @pytest.mark.browser
 def test_desktop_workflow_pauses_asks_and_reaches_review_without_submitting(window, tmp_path, monkeypatch):
     from playwright.async_api import Page

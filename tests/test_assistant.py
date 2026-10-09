@@ -26,6 +26,11 @@ def reply(finish='STOP', text='Draft based on Python.'):
     return {'candidates': [{'finishReason': finish, 'content': {'parts': [{'text': text}]}}]}
 
 
+def openai_reply(status='completed', text='Luna draft.'):
+    return {'status': status, 'output': [{'type': 'reasoning', 'summary': []},
+                                         {'type': 'message', 'content': [{'type': 'output_text', 'text': text}]}]}
+
+
 @pytest.fixture
 def network(monkeypatch):
     """Captures what generate_text would send; `payload` is what the provider answers."""
@@ -59,21 +64,38 @@ def test_key_travels_only_in_a_header_and_redirects_are_refused(network):
     assert redirects and redirects[0].redirect_request(request, None, 302, 'Found', {}, 'https://evil.test/') is None
 
 
-@pytest.mark.parametrize('finish, text', [('MAX_TOKENS', 'Partial'), ('STOP', '  ')])
-def test_incomplete_or_empty_responses_are_rejected(network, finish, text):
-    network['payload'] = reply(finish, text)
-    with pytest.raises(ValueError, match='could not return a complete response'):
-        generate_text('key', 'gemini-2.5-flash', 'draft', 'context')
+def test_openai_uses_the_responses_api_without_storage(network):
+    network['payload'] = openai_reply()
+    assert generate_text('sk-test', 'gpt-6-luna', 'draft', 'facts', 'openai') == 'Luna draft.'
+    request = network['requests'][0]
+    body = json.loads(request.data)
+    assert request.full_url == 'https://api.openai.com/v1/responses'
+    assert request.get_header('Authorization') == 'Bearer sk-test'
+    assert body['model'] == 'gpt-6-luna' and body['input'] == 'facts' and body['store'] is False and 'tools' not in body
 
 
-@pytest.mark.parametrize('key, model, mode, context', [
-    ('key', '../../evil', 'draft', 'context'),
-    ('key', 'gemini-2.5-flash', 'other', 'context'),
-    ('', 'gemini-2.5-flash', 'draft', 'context'),
-    ('key', 'gemini-2.5-flash', 'draft', ' '),
-    ('key', 'gemini-2.5-flash', 'draft', 'a' * 60001),
+@pytest.mark.parametrize('provider, model, payload, name', [
+    ('gemini', 'gemini-2.5-flash', reply('MAX_TOKENS', 'Partial'), 'Gemini'),
+    ('gemini', 'gemini-2.5-flash', reply('STOP', '  '), 'Gemini'),
+    ('openai', 'gpt-6-luna', openai_reply('incomplete'), 'OpenAI'),
+    ('openai', 'gpt-6-luna', openai_reply(text=' '), 'OpenAI'),
 ])
-def test_invalid_requests_never_reach_the_network(network, key, model, mode, context):
+def test_incomplete_or_empty_responses_are_rejected(network, provider, model, payload, name):
+    network['payload'] = payload
+    with pytest.raises(ValueError, match=f'{name} could not return a complete response'):
+        generate_text('key', model, 'draft', 'context', provider)
+
+
+@pytest.mark.parametrize('key, model, mode, context, provider', [
+    ('key', '../../evil', 'draft', 'context', 'gemini'),
+    ('key', '../../evil', 'draft', 'context', 'openai'),
+    ('key', 'gpt-6-luna', 'draft', 'context', 'nope'),
+    ('key', 'gemini-2.5-flash', 'other', 'context', 'gemini'),
+    ('', 'gemini-2.5-flash', 'draft', 'context', 'gemini'),
+    ('key', 'gemini-2.5-flash', 'draft', ' ', 'gemini'),
+    ('key', 'gemini-2.5-flash', 'draft', 'a' * 60001, 'gemini'),
+])
+def test_invalid_requests_never_reach_the_network(network, key, model, mode, context, provider):
     with pytest.raises(ValueError):
-        generate_text(key, model, mode, context)
+        generate_text(key, model, mode, context, provider)
     assert network['requests'] == []
