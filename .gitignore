@@ -19,3 +19,6 @@ nodriver_profile/
 
 # macOS metadata
 .DS_Store
+
+# Extension build dependencies
+node_modules/

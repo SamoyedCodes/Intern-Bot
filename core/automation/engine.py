@@ -1,289 +1,305 @@
-from __future__ import annotations
-
+"""Section verification around the local extension's site-specific filling work."""
 import asyncio
 import hashlib
+import json
 import time
-from pathlib import Path
 
 from core.automation.answers import resolve
-from core.automation.models import FieldAssessment, InterventionRequest, normalized, now
-from core.automation.privacy import BoundedRecovery, configure_privacy
-from core.automation.workday import WorkdayPageError
+from core.automation.models import FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url
+from pathlib import Path
+from core.automation.speedy_profile import translate
+from core.automation.privacy import configure_privacy
+from core.automation.fields import FormField
+
+ENGINE_VERSION = 'speedyapply-local-2.28.0-v1'
 
 
 class ApplicationEngine:
     def __init__(self, store, emit=None):
         configure_privacy()
-        self.store = store
-        self.emit = emit or (lambda run: None)
-        self.recovery = BoundedRecovery()
-        self._pause = False
-        self._cancel = False
+        self.store, self.emit = store, emit or (lambda run: None)
+        self._pause = self._cancel = False
+        self.bridge = None
 
     def pause(self):
         self._pause = True
+        if self.bridge:
+            asyncio.create_task(self.bridge.stop())
 
     def cancel(self):
         self._cancel = True
+        if self.bridge:
+            asyncio.create_task(self.bridge.stop())
 
     def checkpoint(self, run):
         self.store.save_run(run)
         self.emit(run.model_copy(deep=True))
 
-    def intervene(self, run, message, kind="browser", field=None):
-        run.status = "needs_input"
+    def intervene(self, run, message, kind='browser', field=None):
+        run.status = 'needs_input'
         run.intervention_count += 1
         request = InterventionRequest(kind=kind, message=message)
         if field:
-            request.field_key = field.key
-            request.question = field.label
-            request.required = field.required
-            request.options = field.options
+            request.field_key, request.question = field.key, field.label
+            request.required, request.options = field.required, field.options
         run.interventions.append(request)
         self.store.record_event(run.id, kind, run.stage, message)
         self.checkpoint(run)
 
-    async def start(self, run, profile, adapter, credential=None):
-        return await self.resume(run, profile, adapter, credential)
-
-    async def resume(self, run, profile, adapter, credential=None):
+    async def start(self, run, profile, bridge, credential=None):
+        self.bridge = bridge
+        self._pause = self._cancel = False
         if run.is_submitted:
             return run
-        self._pause = self._cancel = False
         started = time.monotonic()
         run.interventions = []
-        run.status = "running"
-        # A changed profile invalidates earlier evidence, but does not erase browser values.
-        digest = ""
-        if profile.resume_path:
-            path = Path(profile.resume_path).expanduser()
-            if path.is_file():
-                digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if run.profile_revision != profile.revision or run.resume_digest != digest:
-            run.fields = {}
-            run.completed_sections = []
-        run.profile_revision = profile.revision
-        run.profile_snapshot = profile.model_copy(deep=True)
-        run.resume_digest = digest
-        self.checkpoint(run)
+        run.status = 'running'
         try:
+            config = translate(profile, run, self.store.answers())
+            digest = config['files'].get(profile.resume_path, {}).get('digest', '')
+            documents_digest = hashlib.sha256(json.dumps({path: file['digest'] for path, file in config['files'].items()}, sort_keys=True).encode()).hexdigest()
+            if run.engine_version != ENGINE_VERSION or run.profile_revision != profile.revision or run.documents_digest != documents_digest:
+                run.fields, run.completed_sections = {}, []
+                self.store.record_event(run.id, 'checkpoints_invalidated', run.stage, 'Local adapters require fresh verification of the current draft.')
+            run.engine_version = ENGINE_VERSION
+            run.documents_digest = documents_digest
+            run.profile_snapshot, run.profile_revision, run.resume_digest = profile.model_copy(deep=True), profile.revision, digest
+            self.checkpoint(run)
             if run.submission_attempted:
-                await self.confirm_submission(run, adapter)
+                await self.confirm_submission(run)
                 return run
+            last_advanced_stage = None
             for _ in range(60):
-                if self._cancel:
-                    run.status = "cancelled"
+                if self._pause or self._cancel:
+                    break
+                canonical_url(bridge.page.url)
+                if employer_key(bridge.page.url) != employer_key(run.job_url):
+                    self.intervene(run, 'The tab left the selected employer. Open the selected application before resuming.')
                     return run
-                if self._pause:
-                    self.intervene(run, "Paused by you. Resume when ready.")
+                found = await bridge.discover()
+                if self._pause or self._cancel:
                     return run
-                stage = await adapter.stage()
-                run.stage = stage
-                if stage in {"resume", "information", "experience", "questions", "disclosures", "review"} and run.authentication_attempted:
-                    # A successful login ends the attempt guard; a later expired session can sign in once again.
-                    run.authentication_attempted = False
-                    adapter.auth_attempted = False
-                if stage == "verification":
-                    self.intervene(run, "Complete email verification, account activation or CAPTCHA in the browser, then resume.", "verification")
+                matches = found.get('matches', [])
+                if len(matches) != 1:
+                    self.intervene(run, 'More than one adapter or application frame matched. Choose the application manually.' if matches else 'No supported application form was detected. Open the application form or continue manually.')
                     return run
-                if stage == "authentication":
-                    self.intervene(run, "Complete sign-in or account creation in the browser, then resume. This authentication layout is not recognized; credentials must not be added to the answer bank.", "verification")
+                match = matches[0]
+                canonical_url(match['url'])
+                if bridge.binding and employer_key(match['url']) != employer_key(bridge.binding['url']):
+                    self.intervene(run, 'The application frame left the selected employer. Inspect the redirect before resuming.')
                     return run
-                if stage == "start":
-                    if await adapter.scan():
-                        # scan() waits for pending requests; navigation may have finished since stage().
-                        if await adapter.stage() != stage:
+                config['adapter'] = match['adapter']['id']
+                result = await bridge.command('prepare', config, binding=match)
+                if self._pause or self._cancel:
+                    return run
+                fields = [FormField(**f) for f in result['fields']]
+                section = match['url'] + '|' + (result.get('section') or '|'.join(f.key for f in fields))
+                run.stage = match['adapter']['name'] + ':' + hashlib.sha256(section.encode()).hexdigest()[:10]
+                if run.stage == last_advanced_stage:
+                    self.intervene(run, 'The previous continuation did not reach a distinguishable section. Inspect the draft before continuing again.')
+                    return run
+                await self.authorize(run, profile, fields)
+                if any(f.kind == 'password' for f in fields):
+                    if match['adapter']['id'] == 'workday' and credential and not run.authentication_attempted:
+                        if (await bridge.command('open_sign_in')).get('opened'):
+                            await asyncio.sleep(.3)
                             continue
-                        self.intervene(run, "This form layout is not recognized. No fields were skipped; inspect the browser.")
-                        return run
-                    if not await adapter.exact_action(("Autofill with Resume", "Apply Manually", "Apply", "Apply Now")):
-                        self.intervene(run, "Open the application form in the browser, then resume.")
-                        return run
-                    await asyncio.sleep(.3)
-                    continue
-                if stage in {"sign_in", "create_account"}:
-                    if stage == "create_account" and credential and await adapter.open_sign_in():
+                        run.authentication_attempted = True
+                        self.checkpoint(run)
+                        if self._pause or self._cancel:
+                            return run
+                        await bridge.command('authenticate', {'credential': credential})
+                        await asyncio.sleep(.5)
                         continue
-                    # Consent and other noncredential questions still require explicit answers.
-                    if not await self.complete_section(run, profile, adapter, authentication=True):
-                        return run
-                    if run.authentication_attempted:
-                        self.intervene(run, "Authentication was already attempted for this application. Complete sign-in or activation manually, then resume.", "verification")
-                        return run
-                    if not credential or not credential.get("username") or not credential.get("password"):
-                        self.intervene(run, "Add employer credentials in Profile or sign in manually, then resume.", "verification")
-                        return run
-                    run.authentication_attempted = True
-                    self.checkpoint(run)
-                    problem = await adapter.authenticate(credential or {}, stage)
-                    if problem:
-                        self.intervene(run, problem, "verification")
-                        return run
-                    continue
-                if stage == "experience":
-                    problem = await adapter.ensure_rows(profile)
-                    if problem:
-                        self.intervene(run, problem, "profile")
-                        return run
-                if not await self.complete_section(run, profile, adapter):
+                    self.intervene(run, 'Complete employer sign-in or activation in Chromium, then resume. Saved credentials remain in the operating-system keychain; an existing authentication attempt will not be repeated.', 'verification')
                     return run
-                inline_review = adapter.inline_review and await adapter.at_submit()
-                if stage == "review" or inline_review:
-                    if not run.completed_sections and not inline_review:
-                        self.intervene(run, "This application opened at review without verified checkpoints. Return to the first application section and resume.")
+                run.authentication_attempted = False
+                await bridge.command('start')
+                settled = await self.wait_for_section(run, profile)
+                if not settled or self._pause or self._cancel:
+                    return run
+                fields = [FormField(**f) for f in (await bridge.command('scan'))['fields']]
+                await asyncio.sleep(.35)
+                check = await bridge.command('snapshot')
+                confirmed = [FormField(**f) for f in (await bridge.command('scan'))['fields']]
+                if fields != confirmed or not check['settled'] or bridge.pending:
+                    self.intervene(run, 'The form changed during section verification. Inspect it and resume.', 'validation')
+                    return run
+                settled = check
+                if not self.verify(run, profile, fields, config):
+                    return run
+                problems = settled['problems']
+                if problems:
+                    for problem in problems:
+                        field = next((f for f in fields if f.key == problem.get('field')), None)
+                        self.intervene(run, problem['message'], problem['kind'], field)
+                    return run
+                if settled.get('errors'):
+                    self.intervene(run, 'The application reports validation errors. Correct them before continuing.', 'validation')
+                    return run
+                if not fields and not settled.get("summary"):
+                    self.intervene(run, 'No verifiable fields were found in this section. Review the application manually before continuing.')
+                    return run
+                self.checkpoint(run)
+                if self._pause or self._cancel:
+                    return run
+                actions = settled['actions']
+                if len(actions) > 1:
+                    self.intervene(run, 'Several continuation or submission controls are available. Continue manually.')
+                    return run
+                if run.stage not in run.completed_sections:
+                    run.completed_sections.append(run.stage)
+                if actions and actions[0]['kind'] == 'submit':
+                    if not self.verify_review(run, profile, settled.get('summary', [])):
                         return run
-                    problem = await adapter.audit_review(run, profile, self.store.answers())
-                    if problem:
-                        self.intervene(run, problem, "validation")
-                        return run
-                    run.status = "ready_for_review"
+                    run.status = 'ready_for_review'
                     self.checkpoint(run)
                     if run.auto_submit and not self._pause and not self._cancel:
-                        # Persist before clicking: a crash or ambiguous response must never cause a second submission.
                         run.submission_attempted = True
                         self.checkpoint(run)
                         if self._pause or self._cancel:
                             return run
-                        await adapter.submit()
-                        await self.confirm_submission(run, adapter)
+                        await bridge.command('action', {'id': actions[0]['id'], 'fields': [f.__dict__ for f in confirmed], 'summary': settled.get('summary', [])})
+                        await self.confirm_submission(run)
                     return run
                 if not run.auto_advance:
-                    if stage not in run.completed_sections:
-                        run.completed_sections.append(stage)
-                    self.intervene(run, "Section verified. Continue in the browser, then resume to fill the next section.")
+                    self.intervene(run, 'Section verified. Continue in the browser, then resume to fill the next section.')
                     return run
-                if not await adapter.advance():
-                    self.intervene(run, "The section did not advance or shows validation errors. Correct the browser fields or profile and resume.", "validation")
+                if not actions:
+                    self.intervene(run, 'Section verified. The adapter did not identify a continuation control; continue in the browser and resume.')
                     return run
-                if stage not in run.completed_sections:
-                    run.completed_sections.append(stage)
-                    self.store.record_event(run.id, "section_verified", stage)
-                self.checkpoint(run)
-            self.intervene(run, "The workflow exceeded its bounded step budget. Inspect the current page before resuming.")
+                last_advanced_stage = run.stage
+                await bridge.command('action', {'id': actions[0]['id'], 'fields': [f.__dict__ for f in confirmed], 'summary': settled.get('summary', [])})
+                await asyncio.sleep(.5)
+            if not self._pause and not self._cancel:
+                self.intervene(run, 'The workflow reached its bounded section limit. Inspect the draft before resuming.')
         except asyncio.CancelledError:
-            run.status = "needs_input" if self._pause else "cancelled"
-            if self._pause:
-                run.interventions = [InterventionRequest(kind="browser", message="Application interrupted. Reopen the saved draft and resume.")]
+            run.status = 'cancelled' if self._cancel else 'needs_input'
             raise
-        except WorkdayPageError as exc:
-            message = str(exc)
-            if run.submission_attempted:
-                message = "The site reported a page error after a submission attempt. Check the employer receipt before refreshing or taking further action; automatic resubmission is disabled."
-            self.intervene(run, message)
+        except (OSError, ValueError) as exc:
+            self.intervene(run, f'Check the selected profile and document files ({type(exc).__name__}).', 'profile')
         except Exception as exc:
-            # Exception text can contain request data, HTML or credentials.
-            run.status = "failed"
-            suffix = "Check the employer receipt before any further action; submission was attempted." if run.submission_attempted else "Reopen or resume the application; no submission was attempted."
-            run.interventions = [InterventionRequest(kind="browser", message=f"Browser operation failed ({type(exc).__name__}). {suffix}")]
+            message = 'Check the employer receipt; automatic resubmission is disabled.' if run.submission_attempted else 'The document or extension connection changed. Inspect the draft and resume.'
+            self.intervene(run, f'{message} ({type(exc).__name__})')
         finally:
+            await bridge.stop()
             if self._cancel:
-                run.status = "cancelled"
-            elif self._pause and run.status == "running":
-                run.status = "needs_input"
-                run.interventions = [InterventionRequest(kind="browser", message="Paused by you. Resume when ready.")]
+                run.status = 'cancelled'
+            elif self._pause:
+                run.status = 'needs_input'
+                run.interventions = [InterventionRequest(kind='browser', message='Paused by you. Resume when ready.')]
             run.elapsed_seconds += time.monotonic() - started
             self.store.record_event(run.id, run.status, run.stage)
             self.checkpoint(run)
         return run
 
-    async def confirm_submission(self, run, adapter):
+    resume = start
+
+    async def authorize(self, run, profile, fields):
+        answers = self.store.answers()
+        policies = {}
+        for field in fields:
+            resolution = resolve(field, profile, run, answers)
+            policies[field.selector] = dict(key=field.key, label=field.label, value=resolution.value, omit=resolution.omit, ref=resolution.ref,
+                                           replace=resolution.ref.startswith('answer:'))
+        await self.bridge.command('authorize', {'policies': policies})
+
+    async def wait_for_section(self, run, profile):
+        for _ in range(210):
+            if self._pause or self._cancel:
+                return None
+            snapshot = await self.bridge.command('snapshot')
+            if snapshot['proposals']:
+                fields = [FormField(**f) for f in (await self.bridge.command('scan'))['fields']]
+                await self.authorize(run, profile, fields)
+            if snapshot['settled'] and not self.bridge.pending and (snapshot['status'] in {'autofill-complete','page-complete','complete-required','complete-manually','action-pending'} or not snapshot['live']):
+                return snapshot
+            await asyncio.sleep(.1)
+        self.intervene(run, 'The adapter did not finish within its bounded wait. Inspect the form and resume.')
+        return None
+
+    def verify(self, run, profile, fields, config):
+        answers = self.store.answers()
+        ok = True
+        # Replace this section's evidence as a unit; removed conditional controls are no longer applicable.
+        run.fields = {k: v for k, v in run.fields.items() if v.section != run.stage}
+        for field in fields:
+            resolution = resolve(field, profile, run, answers)
+            reason = ''
+            omitted = resolution.omit and not field.required and field.value in ('', False)
+            if omitted:
+                matched = True
+            elif resolution.value is None:
+                matched = False
+                reason = resolution.reason
+            elif field.kind == 'file':
+                descriptor = config['files'].get(str(resolution.value), {})
+                matched = bool(descriptor) and field.file_digest == descriptor['digest'] and not field.invalid
+                reason = 'The exact uploaded file and its accepted state could not be verified.'
+            elif field.kind == 'radio':
+                offered = any(f.kind == 'radio' and f.label == field.label and f.group == field.group and f.row == field.row and normalized(f.option) == normalized(str(resolution.value)) for f in fields)
+                matched = offered and field.value == (normalized(field.option) == normalized(str(resolution.value))) and not field.invalid
+            else:
+                matched = (field.value == resolution.value if isinstance(resolution.value, bool) else normalized(str(field.value)) == normalized(str(resolution.value))) and not field.invalid
+            if not matched:
+                ok = False
+                reason = reason or ('Existing browser value conflicts with the profile. Resolve it before resuming.' if field.value not in ('', False) else 'The adapter did not fill this field with the approved value. Complete it manually or correct the profile.')
+            key = run.stage + ':' + field.key
+            run.fields[key] = FieldAssessment(key=key, label=field.label, section=run.stage, required=field.required, group=field.group, row=field.row, kind=field.kind,
+                answer_ref=resolution.ref, disposition='intentionally_omitted' if omitted else 'verified' if matched else 'needs_input',
+                evidence='Exact file digest and DOM validity' if matched and field.kind == 'file' else 'Section DOM read-back' if matched else '',reason='' if matched else reason)
+            if not matched:
+                self.intervene(run, reason, 'conflict' if 'conflict' in reason else 'answer', field)
+        return ok
+
+    def verify_review(self, run, profile, summary):
+        previous = [a for a in run.fields.values() if a.section != run.stage and a.disposition == "verified"]
+        if not previous and not summary:
+            if any(a.section == run.stage and a.disposition == "verified" for a in run.fields.values()):
+                return True
+            self.intervene(run, "No verified application fields are available for final review.", "validation")
+            return False
+        if not previous:
+            self.intervene(run, "This review has no verified preparation checkpoints. Return to the first application section and resume.", "validation")
+            return False
+        accounted = set()
+        for assessment in previous:
+            field = FormField(key=assessment.key, label=assessment.label, selector='', kind=assessment.kind,
+                              group=assessment.group, row=assessment.row, required=assessment.required)
+            resolution = resolve(field, profile, run, self.store.answers())
+            value = Path(str(resolution.value)).name if field.kind == 'file' else resolution.value
+            accepted = ({'yes', 'true', 'checked'} if value else {'no', 'false', 'unchecked'}) if isinstance(value, bool) else {normalized(str(value))}
+            identity = (normalized(field.label), field.group, field.row)
+            candidates = [s for s in summary if (normalized(s['label']), s['group'], s['row']) == identity]
+            if resolution.value is None or len(candidates) != 1 or normalized(candidates[0]['value']) not in accepted:
+                self.intervene(run, f"Cannot independently reconcile '{field.label}' on this review. Inspect the saved value before submitting.", 'validation', field)
+                return False
+            accounted.add(identity)
+        if any((normalized(s['label']), s['group'], s['row']) not in accounted and s['value'] for s in summary):
+            self.intervene(run, 'The review contains a value without a verified preparation checkpoint. Inspect the application before submitting.', 'validation')
+            return False
+        return True
+
+    async def confirm_submission(self, run):
+        # Confirmation is read-only and deliberately separate from vendor saved-application events.
         for _ in range(20):
-            if await adapter.submission_received():
+            from urllib.parse import urlsplit
+            expected = urlsplit(self.bridge.binding['url'] if self.bridge.binding else run.job_url)
+            frames = [frame for frame in self.bridge.page.frames if urlsplit(frame.url).scheme == 'https' and urlsplit(frame.url).hostname == expected.hostname]
+            received = False
+            if len(frames) == 1:
+                receipts = frames[0].locator('[data-automation-id="applicationSubmitted"],#application_confirmation,.application-confirmation,.ashby-application-form-success-message,.thanks,h1,h2,[role=status]')
+                for receipt in await receipts.all():
+                    if await receipt.is_visible() and normalized(await receipt.inner_text()) in {'application submitted','your application has been submitted','thank you for applying','your application has been received'}:
+                        received = True
+                        break
+            if received:
                 run.submission_confirmed = True
                 run.submitted_at = run.submitted_at or now()
-                run.pipeline = "applied"
-                run.status = "ready_for_review"
-                self.store.record_event(run.id, "submission_confirmed", run.stage)
+                run.pipeline, run.status = 'applied', 'ready_for_review'
+                self.store.record_event(run.id, 'submission_confirmed', run.stage)
                 return
-            if await adapter.errors() or self._pause or self._cancel:
+            if self._pause or self._cancel:
                 break
             await asyncio.sleep(.25)
-        self.intervene(run, "Submission was attempted once, but an employer receipt could not be verified. Inspect the browser; automatic resubmission is disabled.", "verification")
-
-    async def complete_section(self, run, profile, adapter, authentication=False):
-        answers = self.store.answers()
-        attempts = {}
-        # Rescan after every write and require two stable passes before navigation.
-        stable = 0
-        prior_keys = None
-        visit_keys = set()
-        for _ in range(200):
-            if self._pause or self._cancel:
-                return False
-            coverage_problem = await adapter.coverage_problem()
-            if coverage_problem:
-                self.intervene(run, coverage_problem)
-                return False
-            fields = await adapter.scan()
-            if authentication:
-                fields = [f for f in fields if f.kind not in {"password", "email"} and normalized(f.label) not in {"email", "email address", "username"}]
-            current_keys = {run.stage + ":" + f.key for f in fields}
-            # Conditional fields removed by an answer are no longer applicable.
-            for key in list(run.fields):
-                if key in visit_keys and key not in current_keys:
-                    del run.fields[key]
-            visit_keys.update(current_keys)
-            unresolved = []
-            wrote = False
-            for field in fields:
-                key = run.stage + ":" + field.key
-                resolution = resolve(field, profile, run, answers)
-                assessment = FieldAssessment(key=key, label=field.label, section=run.stage,
-                    required=field.required, answer_ref=resolution.ref, disposition="needs_input")
-                if resolution.omit:
-                    # Do not silently leave an existing unapproved value in an omitted field.
-                    if field.value not in ("", False):
-                        assessment.reason = "Clear this optional field before omitting it."
-                    else:
-                        assessment.disposition = "intentionally_omitted"
-                        assessment.evidence = "Explicit approved omission"
-                elif resolution.value is None:
-                    assessment.reason = resolution.reason
-                elif adapter.matches(field, resolution.value) and not field.invalid:
-                    # For radios, at least one actual option must match the approved answer.
-                    radio_options = [f for f in fields if f.label == field.label and f.group == field.group and f.row == field.row and f.kind == "radio"]
-                    if field.kind == "radio" and not any(normalized(f.option) == normalized(str(resolution.value)) for f in radio_options):
-                        assessment.reason = "The approved radio answer is not offered by this form."
-                    else:
-                        assessment.disposition = "verified"
-                        assessment.evidence = "Exact upload payload digest and matching success receipt" if field.uploaded else "DOM read-back after blur; no field validation error"
-                elif field.value not in ("", False) and field.kind != "radio" and not resolution.ref.startswith("answer:"):
-                    assessment.reason = "Existing browser value conflicts with the profile. Correct the profile or explicitly approve the intended answer."
-                else:
-                    count = attempts.get(key, 0)
-                    if count >= 3:
-                        assessment.disposition = "blocked"
-                        assessment.reason = "The value could not be verified after the initial attempt and two retries."
-                    else:
-                        attempts[key] = count + 1
-                        assessment.attempts = count + 1
-                        try:
-                            await adapter.fill(field, resolution.value)
-                        except WorkdayPageError:
-                            raise
-                        except Exception:
-                            pass
-                        wrote = True
-                run.fields[key] = assessment
-                if wrote:
-                    break  # Handles and conditional structure can change after any write.
-                if assessment.disposition in {"needs_input", "blocked"}:
-                    unresolved.append((field, assessment))
-            self.checkpoint(run)
-            if wrote:
-                stable = 0
-                continue
-            if unresolved:
-                for field, assessment in unresolved:
-                    self.intervene(run, assessment.reason, "conflict" if "conflict" in assessment.reason else "answer", field)
-                return False
-            if await adapter.errors():
-                self.intervene(run, "The page still reports validation errors. Resolve them in the browser and resume.", "validation")
-                return False
-            stable = stable + 1 if prior_keys == current_keys else 0
-            prior_keys = current_keys
-            if stable >= 1:
-                return True
-            await asyncio.sleep(.25)
-        self.intervene(run, "The form keeps changing or exceeds the section step budget; inspect it before resuming.")
-        return False
+        self.intervene(run, 'Submission was attempted once, but an employer receipt could not be verified. Inspect the browser or confirm it manually; automatic resubmission is disabled.', 'verification')

@@ -1,15 +1,15 @@
 (rootSelector) => {
-  const root = rootSelector ? document.querySelector(rootSelector) : document;
+  const root = typeof rootSelector === 'string' ? document.querySelector(rootSelector) : rootSelector || document;
   if (!root) return [];
   const visible = e => !!(e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
   const text = e => (e?.innerText || e?.textContent || '').trim();
-  const labelText = e => { const copy = e.cloneNode(true); copy.querySelectorAll('input,select,textarea,button,[role=listbox]').forEach(c=>c.remove()); return text(copy).replace(/\s+/g, ' '); };
+  const labelText = e => { const copy = e.cloneNode(true); copy.querySelectorAll('input,select,textarea,button,[role=listbox],[role=status],.filename,.file-upload-success').forEach(c=>c.remove()); return text(copy).replace(/\s+/g, ' '); };
   const controls = [...root.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]),select,textarea,[role=combobox],[role=checkbox],[role=radio],[role=spinbutton],[contenteditable=true],button[aria-haspopup=listbox],[data-automation-id="resumeUpload"]:not(:has(input[type=file])) [data-automation-id="file-upload-item"]')]
     // Workday's utility bar includes a language listbox, not an applicant question.
     .filter(e => (visible(e) || e.type === 'file') && e.getAttribute('data-automation-id') !== 'beecatcher' && !e.closest('[role=listbox],[data-automation-id="utilityButtonBar"]'));
   const counts = new Map();
   return controls.filter(e => !controls.some(p => p !== e && p.contains(e))).map((e, index) => {
-    const labelled = (e.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => text(document.getElementById(id))).filter(Boolean).join(' ');
+    const labelled = (e.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => text((root.getElementById ? root : document).getElementById(id))).filter(Boolean).join(' ');
     const ownLabel = [...(e.labels || [])].map(labelText).join(' ');
     const fieldset = e.closest('fieldset,[role=radiogroup],[data-automation-id="formField"]');
     const uploadContainer = e.closest('[data-automation-id="resumeUpload"],[role="group"][aria-labelledby="Resume/CV-section"]');
@@ -35,8 +35,8 @@
         dateRequired = /[*✱✳]/.test(legend);
       }
     }
-    const groupContainer = e.closest('[data-intern-group], [data-automation-id="workExperienceSection"], [data-automation-id="educationSection"], [role="group"][aria-labelledby="Work-Experience-section"], [role="group"][aria-labelledby="Education-section"]');
-    const group = groupContainer?.getAttribute('data-intern-group') || (groupContainer?.getAttribute('data-automation-id') === 'workExperienceSection' || groupContainer?.getAttribute('aria-labelledby') === 'Work-Experience-section' ? 'experience' : groupContainer ? 'education' : '');
+    const groupContainer = e.closest('[data-intern-group], [data-automation-id="workExperienceSection"], [data-automation-id="educationSection"], [role="group"][aria-labelledby="Work-Experience-section"], [role="group"][aria-labelledby="Education-section"], [role="group"][aria-labelledby="Languages-section"]');
+    const group = groupContainer?.getAttribute('data-intern-group') || (groupContainer?.getAttribute('aria-labelledby') === 'Languages-section' ? 'language_proficiency' : groupContainer?.getAttribute('data-automation-id') === 'workExperienceSection' || groupContainer?.getAttribute('aria-labelledby') === 'Work-Experience-section' ? 'experience' : groupContainer ? 'education' : '');
     const rows = groupContainer ? [...groupContainer.querySelectorAll('[data-intern-row],[data-automation-id="workExperience"],[data-automation-id="education"],[role="group"][aria-labelledby$="-panel"]')] : [];
     const row = Math.max(0, rows.findIndex(r => r.contains(e)));
     const type = uploaded ? 'file' : prompt || e.getAttribute('aria-haspopup') === 'listbox' ? 'combobox' : e.getAttribute('role') || e.type || e.tagName.toLowerCase();

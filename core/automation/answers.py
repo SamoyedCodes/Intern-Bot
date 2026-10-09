@@ -15,6 +15,16 @@ class Resolution:
 
 # Exact aliases only: "country" must never resolve to a combined address.
 ALIASES = {
+    "are you legally authorized to work in the united states?": "work_authorized_us",
+    "are you authorized to work in the united states?": "work_authorized_us",
+    "will you require sponsorship?": "requires_sponsorship",
+    "do you require sponsorship?": "requires_sponsorship",
+    "middle name": "middle_name", "prefix": "name_prefix", "suffix": "name_suffix",
+    "name prefix": "name_prefix", "name suffix": "name_suffix",
+    "preferred first name": "preferred_name", "preferred middle name": "preferred_middle_name",
+    "preferred last name": "preferred_last_name", "age": "employment_age",
+    "are you hispanic or latino?": "hispanic_or_latino",
+    "phone country code": "phone_country_code", "phone device type": "phone_device_type",
     "first name": "first_name", "given name": "first_name", "last name": "last_name",
     "family name": "last_name", "email": "email", "email address": "email",
     "phone": "phone", "phone number": "phone", "address line 1": "address_line1",
@@ -35,14 +45,21 @@ ALIASES = {
     "veteran status": "veteran_status", "disability status": "disability_status",
 }
 ROW_ALIASES = {
+    "language_proficiency": {"language": "language", "proficiency": "proficiency", "fluent": "fluent", "native language": "fluent", "i am fluent in this language": "fluent"},
     "education": {"school": "school", "school or university": "school", "degree": "degree",
-                  "field of study": "major", "major": "major", "from": "start_date", "to": "end_date",
+                  "field of study": "major", "major": "major", "gpa": "gpa", "currently attending": "current", "from": "start_date", "to": "end_date",
                   "start date": "start_date", "end date": "end_date"},
     "experience": {"company": "employer", "employer": "employer", "job title": "job_title",
                    "location": "location", "from": "start_date", "to": "end_date",
                    "start date": "start_date", "end date": "end_date", "role description": "description",
                    "description": "description", "i currently work here": "current"},
 }
+
+
+def field_value(field, value):
+    if isinstance(value, bool) and field.kind in {"radio", "select-one", "select-multiple", "combobox"}:
+        return "Yes" if value else "No"
+    return value
 
 
 def resolve(field, profile: ApplicantProfile, run: ApplicationRun, answers) -> Resolution:
@@ -68,7 +85,7 @@ def resolve(field, profile: ApplicantProfile, run: ApplicationRun, answers) -> R
         a = matches[-1]
         if a.omit and field.required:
             return Resolution(reason="A required field cannot be omitted.")
-        return Resolution(a.value, "answer:" + a.id, a.omit)
+        return Resolution(field_value(field, a.value), "answer:" + a.id, a.omit)
     attr = None
     source = profile
     if field.group:
@@ -95,6 +112,10 @@ def resolve(field, profile: ApplicantProfile, run: ApplicationRun, answers) -> R
     else:
         if normalized(field.label) == "country phone code" or field.split_phone:
             # ponytail: require an explicit separator; use a phone library if unseparated numbers must be parsed.
+            if profile.phone_country_code and profile.phone_number:
+                if field.split_phone:
+                    return Resolution(profile.phone_number, "profile:phone_number")
+                return Resolution(profile.phone_country_code, "profile:phone_country_code")
             phone = re.fullmatch(r"(\+\d{1,3})[\s-]+([\d\s()-]+)", profile.phone.strip())
             if not phone:
                 return Resolution(reason="Separate the international calling code from the phone number with a space in the profile.")
@@ -107,8 +128,10 @@ def resolve(field, profile: ApplicantProfile, run: ApplicationRun, answers) -> R
                 return Resolution(f"{profile.country} ({phone[1]})", "profile:phone")
             return Resolution(reason="Select the country calling code explicitly.")
         if normalized(field.label) in {"full name", "name"} and profile.first_name and profile.last_name:
-            return Resolution(f"{profile.first_name} {profile.last_name}", "profile:full_name")
+            return Resolution(" ".join(part for part in (profile.first_name, profile.middle_name, profile.last_name, profile.name_suffix) if part), "profile:full_name")
         attr = ALIASES.get(normalized(field.label))
+        if attr == "phone" and profile.phone_number:
+            return Resolution(profile.phone_number, "profile:phone_number")
         if attr == "cover_letter_path" and field.kind != "file":
             attr = "cover_letter"
         if attr == "resume_path" and field.kind != "file":
@@ -117,5 +140,5 @@ def resolve(field, profile: ApplicantProfile, run: ApplicationRun, answers) -> R
         value = getattr(source, attr)
         if value is not None and value != "":
             prefix = f"{field.group}.{field.row}." if field.group else ""
-            return Resolution(value, "profile:" + prefix + attr)
+            return Resolution(field_value(field, value), "profile:" + prefix + attr)
     return Resolution(reason="Approve an answer or update the profile; no value will be guessed.")

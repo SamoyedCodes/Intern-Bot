@@ -7,8 +7,8 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from core.automation.engine import ApplicationEngine
+from core.automation.extension_bridge import ExtensionBridge
 from core.automation.models import canonical_url, site_key
-from core.automation.ats import adapter_for
 from core.browser.playwright_mgr import AsyncPlaywrightManager
 
 
@@ -19,6 +19,7 @@ class AutomationService(QObject):
     def __init__(self, store, parent=None):
         super().__init__(parent)
         self.store = store
+        store.migrate_local_engine()
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
         self.thread.start()
@@ -49,8 +50,13 @@ class AutomationService(QObject):
                 del self.sessions[run.id]
                 session = None
             if not session:
-                session_key = run.id if run.browser == "chromium" else run.id + ":" + run.browser
-                manager = AsyncPlaywrightManager(headless=False, browser=run.browser, user_data_dir=str(Path("data/browser") / hashlib.sha256(session_key.encode()).hexdigest()[:24]))
+                legacy_browser = run.browser != "chromium"
+                session_key = run.id + ":speedy-chromium"
+                if legacy_browser:
+                    self.store.record_event(run.id, "browser_migration", run.stage, "Resuming in bundled Chromium. Employer sign-in may be required again; the old browser directory is preserved.")
+                run.browser = "chromium"
+                self.store.save_run(run)
+                manager = AsyncPlaywrightManager(headless=False, browser="chromium", extension_path=Path(__file__).resolve().parents[2] / "extension", user_data_dir=str(Path("data/browser") / hashlib.sha256(session_key.encode()).hexdigest()[:24]))
                 context = await manager.start()
                 page = context.pages[0] if context.pages else await context.new_page()
                 # Limit app-driven browsing to the selected employer; external verification is manual.
@@ -65,7 +71,7 @@ class AutomationService(QObject):
                     else:
                         await route.continue_()
                 await page.route("**/*", guard)
-                adapter = adapter_for(page, run.job_url)
+                adapter = ExtensionBridge(page, run.id)
                 self.sessions[run.id] = (manager, adapter)
                 await page.goto(run.job_url, wait_until="domcontentloaded")
             else:

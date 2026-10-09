@@ -43,7 +43,7 @@ class SettingsView(QWidget):
         panel_layout.setSpacing(12)
         options = self.store.get("automation_options", {})
         self.browser = QComboBox()
-        for label, value in [("Chromium (bundled)", "chromium"), ("Google Chrome (installed)", "chrome"), ("Firefox (Playwright build)", "firefox")]:
+        for label, value in [("Chromium (bundled, local adapters)", "chromium")]:
             self.browser.addItem(label, value)
         self.browser.setCurrentIndex(max(0, self.browser.findData(options.get("browser", "chromium"))))
         panel_layout.addWidget(QLabel("Browser"))
@@ -99,7 +99,7 @@ class SettingsView(QWidget):
         self.store.put("automation_options", {"browser": self.browser.currentData(),
                        "auto_advance": self.auto_advance.isChecked(), "reuse_answers": self.reuse_answers.isChecked()})
         self.store.put("gemini_model", self.gemini_model.text().strip())
-        self.status.setText("Defaults saved for new applications. Install Firefox with: python -m playwright install firefox")
+        self.status.setText("Defaults saved. Existing applications resume in bundled Chromium; employer sign-in may be required again.")
 
     def save_api_key(self):
         api_key = self.gemini_key.text().strip()
