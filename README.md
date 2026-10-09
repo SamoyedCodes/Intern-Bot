@@ -1,6 +1,6 @@
 # Intern-Bot
 
-A local Python/PySide6 desktop app for application profiles, autofill, exact approved answers, tracking, queues and optional Gemini text assistance. Its autofill engine runs all **28 site-specific SpeedyApply 2.28.0 adapters** inside a local Chromium extension, controlled directly through Playwright.
+A local Python/PySide6 desktop app for application profiles, autofill, exact approved answers, tracking, queues and optional Gemini or OpenAI text assistance. Its autofill engine runs all **28 site-specific SpeedyApply 2.28.0 adapters** inside a local Chromium extension, controlled directly through Playwright.
 
 This is a private personal integration of proprietary user-supplied code. It is not an open-source release of SpeedyApply. Normal autofill requires no SpeedyApply account or server. See the [acceptance record](docs/speedyapply-acceptance.md) for fixture coverage, benchmarks and live-site limitations.
 
@@ -34,17 +34,17 @@ Existing Chrome/Firefox records and browser directories remain intact. Resuming 
 6. Resolve missing facts or conflicts with **Answer questions**. The dialog moves to the next open question after each save and offers **Resume application** once required questions are answered. Filter the list with **Needs you** to see everything waiting on you. Approvals match the exact normalized question, profile, application/employer/global scope and country. Existing conflicting values are preserved until resolved. Broad vendor guesses and hard-coded personal answers are blocked.
 7. Review before submission. Automatic submission is off by default and requires per-job authorization plus verified fields and review. The attempt is saved before clicking and never retried automatically. A click or vendor “saved application” event is not success; only a recognized employer receipt or **I submitted it** confirms it.
 8. Track pipeline stage, notes and the job description in the application's detail panel (they save automatically). Import and export CSV from the ⋯ menu next to **New application**. Imports do not start applications.
-9. Optional Gemini assistance remains in the desktop. **Compare profiles with Gemini…** (detail panel ⋯ menu) and **Draft with Gemini…** (in Answer questions) preview their outgoing context and request consent. Drafts require explicit approval before becoming reusable answers.
+9. Optional AI assistance remains in the desktop. Pick **Gemini** or **OpenAI** (default model `gpt-6-luna`) in Settings; each provider keeps its own model and key. **Compare profiles with AI…** (detail panel ⋯ menu) and **Draft with AI…** (in Answer questions) preview their outgoing context and request consent. Drafts require explicit approval before becoming reusable answers.
 
 Approved answers can be searched and deleted under **Answers**. The browser stays open for manual handoffs. **Settings** controls automatic continuation and approved-answer reuse and saves changes immediately. The app follows the macOS light or dark appearance. Closing the app closes app-owned sessions; reopening retains local records.
 
 ## Data and privacy
 
 - `data/intern-bot.sqlite3` is authoritative for profiles, answers, application snapshots, assessments and history. It has owner-only permissions; personal data is not encrypted.
-- The operating-system keychain stores employer credentials and Gemini API keys. There is no plaintext credential fallback.
+- The operating-system keychain stores employer credentials and Gemini/OpenAI API keys. There is no plaintext credential fallback.
 - `data/browser/<run-hash>/` contains isolated app-owned sessions with exclusive locks. The replacement uses a new directory namespace and preserves old directories.
 - The extension stores run/tab/document bindings in memory-only `storage.session`. It does not persist profile facts, documents, credentials or approvals.
-- Normal autofill has no SpeedyApply, Supabase, AI, telemetry or local HTTP-server dependency. Optional Gemini requests contain only the editable context shown in the consent dialog.
+- Normal autofill has no SpeedyApply, Supabase, AI, telemetry or local HTTP-server dependency. Optional Gemini/OpenAI requests contain only the editable context shown in the consent dialog.
 
 The original XPI, exact source and notices are preserved under `third_party/speedyapply/2.28.0/`. The loaded extension contains only the adapted dependency graph and local controls. See [extension internals](extension/README.md).
 
