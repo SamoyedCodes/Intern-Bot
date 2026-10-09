@@ -1,0 +1,137 @@
+[
+  {
+    "path": "popup.html",
+    "bytes": 858,
+    "sha256": "2b4f8eeb72ed0dda29cf5b88b46f5b69187b17ca0799950104202bf69bc670ef"
+  },
+  {
+    "path": "manifest.json",
+    "bytes": 1804,
+    "sha256": "a7bb4c3431b72b1f6fc9e4d65199a0ebef50ecb5366d48878c12285bbd590ccf"
+  },
+  {
+    "path": "background.js",
+    "bytes": 517634,
+    "sha256": "b1b4be1d05e3289b6d2a07f8a534ca0ab0d139343711d607a4d38f382581e905"
+  },
+  {
+    "path": "sidepanel.html",
+    "bytes": 889,
+    "sha256": "2b17e57159c77ead32c05f4ede39a2915d0a84fa28053bf3fd1ecbbd451ae9be"
+  },
+  {
+    "path": "options.html",
+    "bytes": 818,
+    "sha256": "3f57f3603371233fdd889a4a472789efd35c53c6dfef6899f82dfe6f4087f306"
+  },
+  {
+    "path": "content-scripts/content.js",
+    "bytes": 1071393,
+    "sha256": "13699cc1248dbc11188eca258151524adda104fd9d04c7ea24c3fb7b7fb2eff4"
+  },
+  {
+    "path": "content-scripts/content.css",
+    "bytes": 194504,
+    "sha256": "1ba1920d8fea7d30fc1618848e2836a92ece4fa1e153ba28cf3ed9acaf76ed87"
+  },
+  {
+    "path": "images/icon-pattern.svg",
+    "bytes": 100077,
+    "sha256": "d2fbd9b92eed0744bb5aee57105dbb4fdda59cdaa24ee0967b69a39a2e93a65e"
+  },
+  {
+    "path": "chunks/sidepanel-BeFohAHp.js",
+    "bytes": 11731,
+    "sha256": "a97925b560f7ce6753014a1011fa92743bc6e9d2c81dc64bef6bfc8b786bf7e0"
+  },
+  {
+    "path": "chunks/globals-CUaRnJay.js",
+    "bytes": 809240,
+    "sha256": "6b39501ad418b500a9288f6bed96da6983d2f846053afec8d038dea6570d5555"
+  },
+  {
+    "path": "chunks/options-CSpxVVAF.js",
+    "bytes": 567810,
+    "sha256": "3f78869cae94292078490b78dc2b43d55b79c74373cd6c7706e5ffc0b9efbae8"
+  },
+  {
+    "path": "chunks/chart-lZL7sYqj.js",
+    "bytes": 329892,
+    "sha256": "7407eab4cf095179f51d2fca66138e2a1359716320593451c6adb341c2c3c955"
+  },
+  {
+    "path": "chunks/application-profile-field-DZTG0LIe.js",
+    "bytes": 390042,
+    "sha256": "10774b47647f4d8da0427d194ab9cd05dad4d7033730d5abdad77beac0e79bad"
+  },
+  {
+    "path": "chunks/icon-pattern-CndkILVk.js",
+    "bytes": 481,
+    "sha256": "249aaad833d93bfee02462458dad525a7d975080ec33d4faaf0d5628980a7f87"
+  },
+  {
+    "path": "chunks/rolldown-runtime-QTnfLwEv.js",
+    "bytes": 694,
+    "sha256": "5db5ba82eef00d1dee7e86e663098c9427d01183a88d357437daff295aec3e75"
+  },
+  {
+    "path": "chunks/popup-DVSTFlaA.js",
+    "bytes": 31243,
+    "sha256": "06b872c0491dbe51d67f64301c8c56443adad98b172dde43349cf5083c108729"
+  },
+  {
+    "path": "icon/128.png",
+    "bytes": 9067,
+    "sha256": "ff58004fb4b13189d1dbed63581df0e9e0ae2eeb79657cb839212465d64ff3d9"
+  },
+  {
+    "path": "icon/48.png",
+    "bytes": 2217,
+    "sha256": "6e7e51ba51f2f257c159256024920e3dff3c5484e77b90c59b8423b85950104f"
+  },
+  {
+    "path": "icon/16.png",
+    "bytes": 620,
+    "sha256": "21764003f11ace5839315542eece07e92d91063bdb96038788d2ba0411a273ee"
+  },
+  {
+    "path": "icon/32.png",
+    "bytes": 1294,
+    "sha256": "c3c45f7bed73f383e7dbf78a2f5128c7ecc90358d391d0f838d2d55999fc9a35"
+  },
+  {
+    "path": "icon/96.png",
+    "bytes": 5912,
+    "sha256": "51c75edc07d40efa703d009d3b464b7d1b1570f9f3c79b742052e87dc903a783"
+  },
+  {
+    "path": "assets/globals-BDYqvdbE.css",
+    "bytes": 194492,
+    "sha256": "00b24a6781ea6ecc49a7d52ce6e3d5af975e70ae0c0bbf5cfcda68c499a032ea"
+  },
+  {
+    "path": "META-INF/cose.manifest",
+    "bytes": 3584,
+    "sha256": "9d041ebf438ae46528fb3aaade6f57f7b637fd3e6ede56220c249a1d8c3ebe06"
+  },
+  {
+    "path": "META-INF/cose.sig",
+    "bytes": 3097,
+    "sha256": "e5ef7c444396e2dc92475f2f582a29cf69968a60a010f03ee6875c4d1ca9a945"
+  },
+  {
+    "path": "META-INF/manifest.mf",
+    "bytes": 3905,
+    "sha256": "2c3f114a7f0c4da55b43a919589551ba910cd3b582a955abce6f5eb7b07760da"
+  },
+  {
+    "path": "META-INF/mozilla.sf",
+    "bytes": 144,
+    "sha256": "1f850c6cbd126bd156b44deb1ad4cd5b9756b115ef045f95290c8cf7764ab80e"
+  },
+  {
+    "path": "META-INF/mozilla.rsa",
+    "bytes": 4364,
+    "sha256": "8e0ff52ebb22b359bb9fc5f01fa3e294e7e8f30c03d4037ab8bb88b28dd37170"
+  }
+]
