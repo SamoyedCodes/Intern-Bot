@@ -4,9 +4,14 @@ QWidget#appShell {
 }
 
 QWidget {
+    background: #080b12;
     color: #f4f7fb;
     font-family: "Segoe UI", "Inter", Arial, sans-serif;
     font-size: 13px;
+}
+
+QLabel {
+    background: transparent;
 }
 
 QFrame#sidebar {
@@ -22,7 +27,6 @@ QLabel#brand {
 
 QLabel#brandTagline,
 QLabel#pageSubtitle,
-QLabel#statLabel,
 QLabel#sidebarFooter {
     color: #7f8aa3;
 }
@@ -59,20 +63,25 @@ QWidget#contentArea {
     background: #080b12;
 }
 
-QWidget#profileView,
-QWidget#tasksView,
-QWidget#profileTabPage {
+QTabWidget::pane {
     background: #080b12;
+    border: 1px solid #1c2940;
 }
 
-QTabWidget#profileTabs {
-    background: #080b12;
-}
-
-QTabWidget#profileTabs::pane {
-    background: #080b12;
+QScrollArea {
     border: none;
-    top: -1px;
+    background: #080b12;
+}
+
+QScrollBar:vertical {
+    background: #101725;
+    width: 12px;
+}
+
+QScrollBar::handle:vertical {
+    background: #375078;
+    min-height: 24px;
+    border-radius: 5px;
 }
 
 QTabBar::tab {
@@ -116,42 +125,14 @@ QLabel#topStatus {
     padding: 7px 12px;
 }
 
-QLabel#statusBar {
-    color: #8d98b0;
-    background: #080b12;
-    border-top: 1px solid #151f31;
-    padding: 8px 24px;
-}
-
-QFrame#statCard,
-QGroupBox,
 QFrame#settingsPanel {
     background: #0e1420;
     border: 1px solid #1c2940;
     border-radius: 8px;
 }
 
-QGroupBox {
-    margin-top: 16px;
-    padding: 16px;
-    font-weight: 700;
-    color: #eaf0ff;
-}
-
-QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 14px;
-    padding: 0 6px;
-    color: #dfe8ff;
-    background: #080b12;
-}
-
-QLabel#statValue {
-    font-size: 26px;
-    font-weight: 800;
-}
-
 QLineEdit,
+QComboBox,
 QPlainTextEdit {
     background: #101725;
     border: 1px solid #23324d;
@@ -164,10 +145,6 @@ QPlainTextEdit {
 QLineEdit:focus,
 QPlainTextEdit:focus {
     border: 1px solid #19d68b;
-}
-
-QLineEdit#searchInput {
-    min-width: 250px;
 }
 
 QPushButton {
@@ -194,38 +171,6 @@ QPushButton#primaryButton:hover {
     background: #19d68b;
 }
 
-QPushButton#dangerButton {
-    color: #ff6b85;
-    border-color: #4c2230;
-}
-
-QPushButton#taskStartButton,
-QPushButton#taskResumeButton,
-QPushButton#taskRunningButton {
-    padding: 5px 10px;
-    border-radius: 5px;
-    font-size: 12px;
-    min-height: 28px;
-}
-
-QPushButton#taskStartButton {
-    color: #03120c;
-    background: #19d68b;
-    border-color: #19d68b;
-}
-
-QPushButton#taskResumeButton {
-    color: #ffcc66;
-    background: #19170f;
-    border-color: #4c3c1d;
-}
-
-QPushButton#taskRunningButton {
-    color: #7f8aa3;
-    background: #101725;
-    border-color: #24334e;
-}
-
 QTableWidget {
     background: #090d16;
     border: 1px solid #182338;
@@ -245,11 +190,6 @@ QTableWidget QLineEdit {
     padding: 4px 8px;
 }
 
-QLabel#fitTaskCell {
-    background: transparent;
-    padding: 0 6px;
-}
-
 QHeaderView::section {
     background: #0c1220;
     color: #8792aa;
@@ -263,11 +203,6 @@ QDialog {
     background: #0a0f19;
 }
 
-QLabel#dialogTitle {
-    font-size: 18px;
-    font-weight: 700;
-}
-
 QLabel#settingLine {
     color: #dbe4f5;
     padding: 8px;
@@ -276,4 +211,26 @@ QLabel#settingLine {
 QLabel#settingStatus {
     color: #19d68b;
     padding: 4px;
+}
+
+QCheckBox {
+    background: transparent;
+    spacing: 8px;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #8792aa;
+    border-radius: 3px;
+    background: #101725;
+}
+
+QCheckBox::indicator:checked {
+    background: #19d68b;
+    border: 3px solid #dbe4f5;
+}
+
+QCheckBox:focus {
+    outline: 1px solid #19d68b;
 }

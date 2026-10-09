@@ -1,73 +1,92 @@
-import subprocess
+"""Persistent browser ownership without process searches or lock-file deletion."""
+import fcntl
+import json
+import os
+import tempfile
 from pathlib import Path
-
-from playwright.async_api import async_playwright, BrowserContext
 from typing import Optional
 
+from playwright.async_api import async_playwright, BrowserContext
+
+
 class AsyncPlaywrightManager:
-    """Manages the Playwright headless browser context for navigating ATS domains."""
-    def __init__(self, headless: bool = True, user_data_dir: str = "./playwright_profile"):
+    def __init__(self, headless: bool = True, user_data_dir: str = "./data/browser/default", executable_path=None, browser="chromium"):
+        if browser not in {"chromium", "chrome", "firefox"}:
+            raise ValueError("Choose Chromium, Chrome or Firefox.")
+        self.browser = browser
         self.headless = headless
         self.user_data_dir = str(Path(user_data_dir).resolve())
+        self.executable_path = executable_path
         self._playwright = None
+        self._lock = None
+        self._session_ready = False
         self.context: Optional[BrowserContext] = None
 
     async def start(self) -> BrowserContext:
-        """Initializes the browser and returns the persistent context."""
-        self._kill_orphaned_browsers()
-        self._clear_stale_singleton_files()
-        self._playwright = await async_playwright().start()
-
-        self.context = await self._playwright.chromium.launch_persistent_context(
-            user_data_dir=self.user_data_dir,
-            headless=self.headless,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-            ],
-            # Let Playwright use its own UA so the header matches the real
-            # navigator properties. A mismatched UA triggers bot detection.
-            viewport={"width": 1280, "height": 800},
-            locale="en-US",
-        )
-
-        # Hide navigator.webdriver from detection scripts
-        await self.context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-        """)
-
-        return self.context
-
-    def _kill_orphaned_browsers(self):
-        """Kill any leftover Chromium processes using this profile directory."""
+        if self.context is not None:
+            return self.context
+        directory = Path(self.user_data_dir)
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(directory, 0o700)
+        self._lock = open(directory / ".intern-bot.lock", "a")
         try:
-            result = subprocess.run(
-                ["pgrep", "-f", self.user_data_dir],
-                capture_output=True, text=True, timeout=5,
+            fcntl.flock(self._lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            self._lock.close()
+            self._lock = None
+            raise RuntimeError("This browser profile is already in use. Close its other Intern-Bot session first.") from None
+        try:
+            self._playwright = await async_playwright().start()
+            browser_type = self._playwright.firefox if self.browser == "firefox" else self._playwright.chromium
+            self.context = await browser_type.launch_persistent_context(
+                self.user_data_dir, headless=self.headless, timeout=30000,
+                **({"channel": "chrome"} if self.browser == "chrome" else {}),
+                **({"args": ["--disable-blink-features=AutomationControlled"],
+                    "ignore_default_args": ["--enable-automation"]} if self.browser != "firefox" else {}),
+                executable_path=self.executable_path,
+                **({"viewport": {"width": 1280, "height": 800}} if self.headless else {"no_viewport": True}),
             )
-            for pid in result.stdout.strip().splitlines():
-                try:
-                    subprocess.run(["kill", pid.strip()], timeout=5)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    def _clear_stale_singleton_files(self):
-        """Remove Chromium SingletonLock/Socket/Cookie files left by unclean shutdowns."""
-        profile = Path(self.user_data_dir)
-        if not profile.is_dir():
-            return
-        for name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
-            lock = profile / name
-            if lock.exists():
-                try:
-                    lock.unlink()
-                except OSError:
-                    pass
+            self.context.set_default_timeout(5000)
+            saved = directory / "session-cookies.json"
+            if saved.exists():
+                await self.context.add_cookies(json.loads(saved.read_text()))
+            self._session_ready = True
+            return self.context
+        except BaseException:
+            await self.stop()
+            raise
 
     async def stop(self):
-        """Cleanly closes the persistent context to flush cookies/cache to disk."""
-        if self.context:
-            await self.context.close()
-        if self._playwright:
-            await self._playwright.stop()
+        try:
+            if self.context:
+                try:
+                    if self._session_ready:
+                        await self.save_session()
+                finally:
+                    await self.context.close()
+        finally:
+            self._session_ready = False
+            self.context = None
+            try:
+                if self._playwright:
+                    await self._playwright.stop()
+            finally:
+                self._playwright = None
+                if self._lock:
+                    self._lock.close()
+                    self._lock = None
+
+    async def save_session(self):
+        if not self.context or not self._session_ready:
+            return
+        cookies = await self.context.cookies()
+        directory = Path(self.user_data_dir)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as file:
+                temporary = Path(file.name)
+                json.dump(cookies, file)
+            os.replace(temporary, directory / "session-cookies.json")
+        finally:
+            if temporary and temporary.exists():
+                temporary.unlink()

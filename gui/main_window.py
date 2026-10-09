@@ -1,9 +1,10 @@
-import os
-from pathlib import Path
-from dotenv import set_key
+from core.automation.assistant import DEFAULT_MODEL
+from core.storage.local_store import LocalStore
 
 from PySide6.QtWidgets import (
     QFormLayout,
+    QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -20,15 +21,16 @@ from gui.views.tasks_view import TasksView
 
 
 class SettingsView(QWidget):
-    def __init__(self):
+    def __init__(self, store=None):
         super().__init__()
+        self.store = store or LocalStore()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 24)
         layout.setSpacing(14)
 
         title = QLabel("Automation Settings")
         title.setObjectName("pageTitle")
-        subtitle = QLabel("Keep final submit manual, run visible browsers, and reuse Workday sessions.")
+        subtitle = QLabel("Defaults for new applications. Existing applications keep their saved settings.")
         subtitle.setObjectName("pageSubtitle")
 
         layout.addWidget(title)
@@ -39,12 +41,30 @@ class SettingsView(QWidget):
         panel_layout = QVBoxLayout(panel)
         panel_layout.setContentsMargins(18, 18, 18, 18)
         panel_layout.setSpacing(12)
+        options = self.store.get("automation_options", {})
+        self.browser = QComboBox()
+        for label, value in [("Chromium (bundled)", "chromium"), ("Google Chrome (installed)", "chrome"), ("Firefox (Playwright build)", "firefox")]:
+            self.browser.addItem(label, value)
+        self.browser.setCurrentIndex(max(0, self.browser.findData(options.get("browser", "chromium"))))
+        panel_layout.addWidget(QLabel("Browser"))
+        panel_layout.addWidget(self.browser)
+        self.auto_advance = QCheckBox("Automatically continue after verifying each section")
+        self.auto_advance.setChecked(options.get("auto_advance", True))
+        self.reuse_answers = QCheckBox("Reuse explicitly approved answers")
+        self.reuse_answers.setChecked(options.get("reuse_answers", True))
+        panel_layout.addWidget(self.auto_advance)
+        panel_layout.addWidget(self.reuse_answers)
+        save_options = QPushButton("Save automation defaults")
+        save_options.clicked.connect(self.save_options)
+        panel_layout.addWidget(save_options)
 
         api_form = QFormLayout()
+        self.gemini_model = QLineEdit(self.store.get("gemini_model", DEFAULT_MODEL))
+        api_form.addRow("Gemini model", self.gemini_model)
         self.gemini_key = QLineEdit()
         self.gemini_key.setEchoMode(QLineEdit.Password)
         self.gemini_key.setPlaceholderText("GEMINI_API_KEY")
-        self.gemini_key.setText(os.environ.get("GEMINI_API_KEY", ""))
+
 
         self.save_api_key_btn = QPushButton("Save API Key")
         self.save_api_key_btn.setObjectName("primaryButton")
@@ -58,9 +78,10 @@ class SettingsView(QWidget):
 
         items = [
             "Browser mode: visible",
-            "Final submit: manual review required",
+            "Final submit: manual by default; opt in separately for each new application",
             "Session storage: Playwright persistent profile",
-            "LLM mapping: Gemini field mapper when deterministic selectors are not enough",
+            "Gemini drafts / profile comparison: explicit context preview and consent per request",
+            "AI browser recovery: disabled; no browser observations are sent",
         ]
         for text in items:
             label = QLabel(text)
@@ -74,25 +95,31 @@ class SettingsView(QWidget):
         self.status.setObjectName("settingStatus")
         layout.addWidget(self.status)
 
+    def save_options(self):
+        self.store.put("automation_options", {"browser": self.browser.currentData(),
+                       "auto_advance": self.auto_advance.isChecked(), "reuse_answers": self.reuse_answers.isChecked()})
+        self.store.put("gemini_model", self.gemini_model.text().strip())
+        self.status.setText("Defaults saved for new applications. Install Firefox with: python -m playwright install firefox")
+
     def save_api_key(self):
         api_key = self.gemini_key.text().strip()
         if not api_key:
             self.status.setText("Enter a Gemini API key before saving.")
             return
 
-        os.environ["GEMINI_API_KEY"] = api_key
-        self._write_env_value("GEMINI_API_KEY", api_key)
-        self.status.setText("Gemini API key saved for this session and .env.")
+        try:
+            self.store._vault().set("gemini-api-key", api_key)
+            self.store.put("gemini_model", self.gemini_model.text().strip())
+        except Exception:
+            self.status.setText("Could not save the key to the operating-system keychain. Nothing was written to disk.")
+            return
+        self.gemini_key.clear()
+        self.status.setText("API key saved to the OS keychain. Drafts and comparisons require a separate request and context review.")
 
-    def _write_env_value(self, key, value):
-        env_path = Path(".env")
-        if not env_path.exists():
-            env_path.touch()
-        set_key(str(env_path), key, value)
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, scheduler=None):
+    def __init__(self, store=None):
         super().__init__()
         self.setWindowTitle("Intern-Bot")
         self.resize(1280, 760)
@@ -119,20 +146,16 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(self._build_topbar())
 
         self.stack = QStackedWidget()
-        self.profile_view = ProfileView()
-        self.tasks_view = TasksView(profile_provider=self.profile_view.to_profile_dict)
-        self.settings_view = SettingsView()
+        self.store = store or LocalStore()
+        self.profile_view = ProfileView(self.store)
+        self.tasks_view = TasksView(self.store)
+        self.settings_view = SettingsView(self.store)
 
-        self.tasks_view.status_message.connect(self.set_status)
 
         self.stack.addWidget(self.tasks_view)
         self.stack.addWidget(self.profile_view)
         self.stack.addWidget(self.settings_view)
         content_layout.addWidget(self.stack)
-
-        self.status = QLabel("Ready")
-        self.status.setObjectName("statusBar")
-        content_layout.addWidget(self.status)
 
         root.addWidget(content)
         self._select_nav(0)
@@ -148,7 +171,7 @@ class MainWindow(QMainWindow):
 
         brand = QLabel("Intern-Bot")
         brand.setObjectName("brand")
-        tagline = QLabel("Workday application desk")
+        tagline = QLabel("Local application desk")
         tagline.setObjectName("brandTagline")
         layout.addWidget(brand)
         layout.addWidget(tagline)
@@ -194,5 +217,6 @@ class MainWindow(QMainWindow):
         for button_index, button in enumerate(self.nav_buttons):
             button.setChecked(button_index == index)
 
-    def set_status(self, message: str):
-        self.status.setText(message)
+    def closeEvent(self, event):
+        self.tasks_view.shutdown()
+        super().closeEvent(event)

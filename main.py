@@ -1,7 +1,6 @@
 import sys
 import os
 from pathlib import Path
-from dotenv import load_dotenv
 
 ROOT = Path(__file__).parent
 
@@ -10,7 +9,8 @@ ROOT = Path(__file__).parent
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
-load_dotenv(ROOT / ".env")
+from core.automation.privacy import configure_privacy
+configure_privacy()
 
 
 def configure_qt_plugin_path():
@@ -23,7 +23,7 @@ def configure_qt_plugin_path():
 
 configure_qt_plugin_path()
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 from gui.main_window import MainWindow
 
 
@@ -36,9 +36,13 @@ def main():
     else:
         print(f"Warning: {styles_path} not found. Using default styles.")
 
-    window = MainWindow()
+    try:
+        window = MainWindow()
+    except Exception:
+        QMessageBox.critical(None, "Intern-Bot could not start", "Could not initialize local state or the operating-system keychain. Check that the keychain is available and the local data files are valid. No data files were removed.")
+        return 1
     window.show()
-    sys.exit(app.exec())
+    return app.exec()
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

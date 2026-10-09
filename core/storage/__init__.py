@@ -1,3 +1,1 @@
-from .json_store import JsonStore
-
-__all__ = ["JsonStore"]
+"""Local SQLite storage and operating-system credential vault."""
