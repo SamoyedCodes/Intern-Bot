@@ -109,6 +109,55 @@ def test_credentials_and_catchall_do_not_write_password_to_sqlite(tmp_path, monk
         window.close()
 
 
+def test_auto_created_workday_login_and_verification_handoff(tmp_path, monkeypatch):
+    import gui.views.tasks_view as tasks_module
+    from core.automation.models import InterventionRequest
+    monkeypatch.chdir(tmp_path)
+    app, window = desktop(tmp_path)
+    try:
+        profile_view, view = window.profile_view, window.tasks_view
+        vault = window.store._vault()
+        url = 'https://acme.wd1.myworkdayjobs.com/job/R1'
+        captured = []
+        monkeypatch.setattr(view.service, 'start', lambda r, p, c, **kwargs: captured.append(dict(c) if c else c) or True)
+        run = ApplicationRun(job_url=url, profile_snapshot=ApplicantProfile(email='me@example.test'))
+        view.add_task(run)
+
+        # Off by default: no login is invented.
+        view._start_task(run)
+        assert captured[-1] == {} and not vault.credential(url)
+        view._active_id = None
+
+        profile_view.catchall.setText('apps.example.test')
+        profile_view.catchall_format.setText('ben-{company}')
+        assert 'ben-company@apps.example.test' in profile_view.address_preview.text()
+        profile_view.auto_create.setChecked(True)
+        profile_view.save_account_settings()
+        view._start_task(run)
+        assert captured[-1]['username'] == 'ben-acme@apps.example.test' and captured[-1]['state'] == 'new'
+        assert vault.credential(url) == captured[-1]
+        view._active_id = None
+
+        # The engine handed off for email verification.
+        vault.set_account_state(url, 'pending_verification')
+        run.status, run.authentication_attempted = 'needs_input', True
+        run.interventions = [InterventionRequest(kind='activation', message='Verify')]
+        notifications = []
+        monkeypatch.setattr(tasks_module.sys, 'platform', 'darwin')
+        monkeypatch.setattr(tasks_module.subprocess, 'Popen', lambda args, **kwargs: notifications.append(args))
+        view.on_finished(run)
+        assert view.status_label(run) == 'Waiting for email verification'
+        assert len(notifications) == 1 and notifications[0][-1].startswith('acme.wd1.myworkdayjobs.com:')
+        view.render(select_id=run.id)
+        assert view.start_btn.text() == "I've verified my account"
+
+        view.start_btn.click()
+        assert captured[-1]['state'] == 'verified' and vault.credential(url)['state'] == 'verified'
+        assert not window.store.get_run(run.id).authentication_attempted
+    finally:
+        window.close()
+
+
 def test_new_application_uses_only_saved_structured_profile(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     app, window = desktop(tmp_path)

@@ -79,3 +79,25 @@ def test_date_components_do_not_invent_missing_day():
     assert resolve(field, profile, run, []).value == '2025'
     field.label = 'From Day'
     assert resolve(field, profile, run, []).value is None
+
+
+def test_account_state_and_generated_logins():
+    from core.automation.accounts import generate_login
+    vault = CredentialVault(MemoryKeychain())
+    vault.backend.set_password('intern-bot', 'workday:a.wd1.myworkdayjobs.com', json.dumps({'username': 'u', 'password': 'p'}))
+    assert vault.credential('a.wd1.myworkdayjobs.com')['state'] == 'verified'  # hand-saved logins predate account creation
+    vault.save_credential('b.wd1.myworkdayjobs.com', 'u', 'p', 'new')
+    vault.set_account_state('b.wd1.myworkdayjobs.com', 'pending_verification')
+    assert vault.credential('b.wd1.myworkdayjobs.com') == {'username': 'u', 'password': 'p', 'state': 'pending_verification'}
+    with pytest.raises(ValueError):
+        vault.set_account_state('c.wd1.myworkdayjobs.com', 'verified')
+
+    site = 'acme-corp.wd5.myworkdayjobs.com'
+    username, password = generate_login(site, 'me@example.test', 'apps.example.test')
+    assert username == 'acme_corp_intern@apps.example.test'
+    assert len(password) == 18 and any(c.isupper() for c in password) and any(c.isdigit() for c in password)
+    assert generate_login(site, 'me@example.test', '@apps.example.test', 'ben-{company}')[0] == 'ben-acme_corp@apps.example.test'
+    assert generate_login(site, 'me@example.test', '', 'ignored')[0] == 'me@example.test'
+    for domain, fmt in (('apps.example.test', 'bad name'), ('apps.example.test', '.{company}'), ('apps.example.test', 'a..b'), ('no-dot', ''), ('', '')):
+        with pytest.raises(ValueError):
+            generate_login(site, '' if not domain else 'me@example.test', domain, fmt)

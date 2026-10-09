@@ -12,6 +12,9 @@ from core.automation.privacy import configure_privacy
 from core.automation.fields import FormField
 
 ENGINE_VERSION = 'speedyapply-local-2.28.0-v1'
+SIGN_IN_HANDOFF = 'Complete employer sign-in or activation in Chromium, then resume. Saved credentials remain in the operating-system keychain; an existing authentication attempt will not be repeated.'
+ACTIVATION_HANDOFF = "Check {} for Workday's verification email and open its link, then click I've verified my account."
+REJECTED_ACCOUNT = "Workday didn't accept the new account. It may already exist: sign in or reset the password in Chromium, save that login under Profile → Workday logins, then resume."
 
 
 class ApplicationEngine:
@@ -100,19 +103,16 @@ class ApplicationEngine:
                     return run
                 await self.authorize(run, profile, fields)
                 if any(f.kind == 'password' for f in fields):
-                    if match['adapter']['id'] == 'workday' and credential and not run.authentication_attempted:
-                        if (await bridge.command('open_sign_in')).get('opened'):
-                            await asyncio.sleep(.3)
+                    if match['adapter']['id'] == 'workday' and credential:
+                        if await self.account_step(run, profile, fields, bridge, credential):
                             continue
-                        run.authentication_attempted = True
-                        self.checkpoint(run)
-                        if self._pause or self._cancel:
-                            return run
-                        await bridge.command('authenticate', {'credential': credential})
-                        await asyncio.sleep(.5)
-                        continue
-                    self.intervene(run, 'Complete employer sign-in or activation in Chromium, then resume. Saved credentials remain in the operating-system keychain; an existing authentication attempt will not be repeated.', 'verification')
+                    else:
+                        self.intervene(run, SIGN_IN_HANDOFF, 'verification')
                     return run
+                if run.authentication_attempted and fields and credential and credential.get('state') == 'pending_verification':
+                    # This run's Create Account click led straight into the application: the tenant needed no email verification.
+                    self.store._vault().set_account_state(run.job_url, 'verified')
+                    credential['state'] = 'verified'
                 run.authentication_attempted = False
                 await bridge.command('start')
                 settled = await self.wait_for_section(run, profile)
@@ -194,6 +194,46 @@ class ApplicationEngine:
         return run
 
     resume = start
+
+    async def account_step(self, run, profile, fields, bridge, credential):
+        """One guarded Workday create-account or sign-in step. True continues the section loop; False hands off or pauses."""
+        state = credential.get('state', 'verified')
+        auth = await bridge.command('auth_page')
+        if state == 'pending_verification':
+            if auth['page'] == 'create' and run.authentication_attempted and (await bridge.command('snapshot'))['errors']:
+                self.intervene(run, REJECTED_ACCOUNT, 'verification')
+            else:
+                self.intervene(run, ACTIVATION_HANDOFF.format(credential['username']), 'activation')
+            return False
+        create = state == 'new'
+        if run.authentication_attempted:
+            self.intervene(run, SIGN_IN_HANDOFF, 'verification')
+            return False
+        expected = 'create' if create else 'sign_in'
+        if auth['page'] != expected:
+            if (await bridge.command('open_create_account' if create else 'open_sign_in')).get('opened'):
+                await asyncio.sleep(.3)
+                return True
+            self.intervene(run, "Open Workday's Create Account page in Chromium, then resume." if create else SIGN_IN_HANDOFF, 'verification')
+            return False
+        # The runtime refuses unapproved extra questions (such as a terms checkbox); ask before consuming the single attempt.
+        credentials, answers = set(auth['credentials']), self.store.answers()
+        for field in fields:
+            resolution = resolve(field, profile, run, answers)
+            if field.selector not in credentials and resolution.value is None and not resolution.omit:
+                self.intervene(run, resolution.reason, 'answer', field)
+                return False
+        if create:
+            # Persist before the click: a crash afterwards must never create a second account.
+            self.store._vault().set_account_state(run.job_url, 'pending_verification')
+            credential['state'] = 'pending_verification'
+        run.authentication_attempted = True
+        self.checkpoint(run)
+        if self._pause or self._cancel:
+            return False
+        await bridge.command('authenticate', {'credential': {'username': credential['username'], 'password': credential['password']}})
+        await asyncio.sleep(.5)
+        return True
 
     async def authorize(self, run, profile, fields):
         answers = self.store.answers()

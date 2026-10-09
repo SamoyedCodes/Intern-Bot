@@ -174,7 +174,7 @@ class FieldAssessment(BaseModel):
 
 
 class InterventionRequest(BaseModel):
-    kind: Literal["answer", "conflict", "browser", "profile", "verification", "validation"]
+    kind: Literal["answer", "conflict", "browser", "profile", "verification", "validation", "activation"]
     message: str
     field_key: str = ""
     question: str = ""
