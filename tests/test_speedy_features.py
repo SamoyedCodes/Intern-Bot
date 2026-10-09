@@ -101,7 +101,6 @@ def test_gemini_context_is_allowlisted_and_draft_request_is_bounded(monkeypatch)
 
 def test_desktop_profiles_settings_tracker_and_cloud_consent(tmp_path, monkeypatch):
     from gui.views.tasks_view import TaskDialog
-    from gui.views.tracker_dialog import TrackerDialog
     from gui.views.assistant_dialog import AssistantDialog
     monkeypatch.chdir(tmp_path)
     app, window = desktop(tmp_path)
@@ -117,7 +116,6 @@ def test_desktop_profiles_settings_tracker_and_cloud_consent(tmp_path, monkeypat
         view.profile_names.setCurrentText('Engineering')
         assert view.editor.inputs['skills'].text() == 'Python'
         settings = window.settings_view
-        settings.browser.setCurrentIndex(settings.browser.findData('chromium'))
         settings.auto_advance.setChecked(False)
         settings.save_options()
         dialog = TaskDialog(window.tasks_view)
@@ -126,11 +124,13 @@ def test_desktop_profiles_settings_tracker_and_cloud_consent(tmp_path, monkeypat
         assert run.browser == 'chromium' and not run.auto_submit and not run.auto_advance
         assert run.profile_name == 'Engineering' and run.profile_snapshot.skills == 'Python'
         assert window.tasks_view.add_task(run)
-        tracker = TrackerDialog(window.store, run)
-        tracker.pipeline.setCurrentText('interviewing')
+        tracker = window.tasks_view
+        assert tracker.selected().id == run.id
+        tracker.stage.setCurrentIndex(tracker.stage.findData('interviewing'))
         tracker.notes.setPlainText('Follow up next week')
-        tracker.save()
-        assert window.store.get_run(run.id).notes == 'Follow up next week'
+        tracker.save_tracking()
+        saved = window.store.get_run(run.id)
+        assert saved.notes == 'Follow up next week' and saved.pipeline == 'interviewing' and saved.submitted_at
         cloud = AssistantDialog(window.store, run)
         cloud.start()
         assert cloud.worker is None and 'consent' in cloud.notice.text()

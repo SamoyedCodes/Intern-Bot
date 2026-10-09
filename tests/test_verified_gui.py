@@ -1,21 +1,21 @@
 import os
 from pathlib import Path
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-STYLES = (Path(__file__).parents[1] / 'gui' / 'styles.qss').read_text()
 
 from PySide6.QtCore import QCoreApplication, QEvent
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 from core.automation.models import ApplicantProfile, ApplicationRun
 from core.storage.local_store import LocalStore
 from core.storage.vault import CredentialVault
 from gui.main_window import MainWindow
-from gui.views.application_dialogs import RunDetailsDialog, AnswerBankDialog
+from gui.theme import apply_theme
+from gui.views.application_dialogs import RunDetailsDialog
 from tests.test_verified_storage import MemoryKeychain
 
 
 def desktop(tmp_path):
     app = QApplication.instance() or QApplication([])
-    app.setStyleSheet(STYLES)
+    apply_theme(app)
     store = LocalStore(tmp_path / 'state.db', CredentialVault(MemoryKeychain()))
     return app, MainWindow(store)
 
@@ -39,7 +39,9 @@ def test_single_profile_answers_and_restart_state(tmp_path, monkeypatch):
         details.kind.setCurrentIndex(2)
         details.save_answer()
         assert window.store.answers()[0].value is False
-        bank = AnswerBankDialog(window.store)
+        monkeypatch.setattr(QMessageBox, 'question', lambda *args, **kwargs: QMessageBox.Yes)
+        bank = window.answers_view
+        bank.refresh()
         bank.table.setCurrentCell(0, 0)
         bank.remove()
         assert window.store.answers() == []
@@ -159,7 +161,7 @@ def test_gui_workflow_uses_real_browser_service_and_answer_dialog(tmp_path, monk
     monkeypatch.setattr(Page, 'goto', intercepted_goto)
     view = window.tasks_view
     def click(label, root=None):
-        button = next(b for b in (root or view).findChildren(QPushButton) if b.text() == label)
+        button = next(b for b in (root or view).findChildren(QPushButton) if b.text() == label and b.isVisible())
         QTest.mouseClick(button, Qt.LeftButton)
     def until(predicate, seconds=25):
         deadline = time.monotonic() + seconds
@@ -187,12 +189,12 @@ def test_gui_workflow_uses_real_browser_service_and_answer_dialog(tmp_path, monk
         saved = directory / 'session-cookies.json'
         saved.write_text(json.dumps([{'name':'gui_session','value':'fixture-only','url':url,'httpOnly':True,'secure':True}]))
         os.chmod(saved,0o600)
-        click('Start / Resume')
+        click('Start')
         until(lambda: view.service.busy)
         click('Pause')
         until(lambda: not view.service.busy and view._active_id is None)
         assert view.tasks[0].status == 'needs_input'
-        click('Start / Resume')
+        click('Resume')
         until(lambda: not view.service.busy and view._active_id is None)
         assert view.tasks[0].stage.startswith('Greenhouse:')
         assert view.tasks[0].interventions[0].question == 'Available for this internship?'
@@ -212,16 +214,16 @@ def test_gui_workflow_uses_real_browser_service_and_answer_dialog(tmp_path, monk
                 if app.activeModalWidget():
                     app.activeModalWidget().reject()
         QTimer.singleShot(50,approve)
-        click('Details / Answers')
+        click('Answer questions')
         assert not errors, errors
         assert window.store.answers()[0].value is False
-        click('Start / Resume')
+        click('Resume')
         until(lambda: not view.service.busy and view._active_id is None)
         final = view.tasks[0]
         assert final.status == 'ready_for_review', final.interventions
         assert all(f.disposition == 'verified' for f in final.fields.values())
         assert window.store.get_run(run.id).status == 'ready_for_review'
-        assert view.table.item(0,3).text() == 'Ready for review'
+        assert view.table.item(0,2).text() == 'Ready for review'
         async def verify():
             manager, adapter = view.service.sessions[run.id]
             assert any(c['name']=='gui_session' and c['value']=='fixture-only' for c in await manager.context.cookies(url))
