@@ -18,7 +18,7 @@ Automated tests use fictional data and never submit real applications. Browser f
 
 Storage tests check keychain-only credentials, ignored old JSON input, credential absence from SQLite, country/scope isolation and missing date components. GUI checks cover structured editing, answer approval/removal, duplicate task detection, restored interrupted states and sequential scheduling.
 
-The AI recovery boundary is disabled. Its test establishes that calling it sends no requests; it does **not** certify an enabled cloud/Browser Use integration.
+The AI recovery boundary was disabled then and has since been removed entirely; no AI recovery path exists, and nothing certifies a cloud/Browser Use integration.
 
 ## Live acceptance procedure
 
@@ -41,7 +41,7 @@ No employer URLs or approved personal profile were supplied during implementatio
 - Chromium: full suite passes. Installed Chrome: hosted autofill/upload, automatic receipt handling and persistent-profile locking pass in five targeted tests.
 - Firefox: browser-selection code is implemented, but this host's downloaded Playwright Firefox fails to launch with macOS sandbox-extension errors. Firefox runtime acceptance remains pending; Chromium/Chrome are the validated choices here.
 
-New browser tests can run with `INTERN_BOT_TEST_ENGINE=chrome` or `INTERN_BOT_TEST_ENGINE=firefox`. Every application fixture blocks network requests. A failed browser launch is not counted as an application compatibility result.
+Every application fixture blocks network requests. A failed browser launch is not counted as an application compatibility result. The `INTERN_BOT_TEST_ENGINE` switch used for these runs was later removed when the app became Chromium-only.
 
 ## Supplied-resume check and live Workday discovery — 2026-10-08
 
@@ -63,7 +63,7 @@ The corrected live run, including a resume attempt, stopped at `needs_input / au
 
 ### Local supplied-PDF acceptance
 
-The opt-in test `tests/test_resume_acceptance.py` uses the supplied PDF and structured sample profile with the actual persistent-browser manager, Workday adapter, application engine and SQLite checkpoints. Every browser request is intercepted locally; the fictional form is not a captured employer form.
+The opt-in test `tests/test_resume_acceptance.py` uses the supplied PDF and structured sample profile with the actual persistent-browser manager, Workday adapter, application engine and SQLite checkpoints. Every browser request is intercepted locally; the fictional form is not a captured employer form. The test now runs against the Greenhouse fixture; the results below describe the original Workday run.
 
 Verified: byte-for-byte SHA-256 upload read-back, pause after upload, restart of the engine from SQLite checkpoints, contact/education/employment field filling, a missing-answer handoff, local-only answer approval, final summary reconciliation, no duplicate rows, and zero submission attempts. The fictional availability answer is explicitly fixture-only and does not assert the sample applicant's real availability. The local final review contains 18 verified fields.
 
@@ -71,7 +71,6 @@ Reproduce from the project root after creating an explicit acceptance profile:
 
 ```sh
 INTERN_BOT_ACCEPTANCE_PROFILE="$PWD/data/acceptance-2026-10-08/sample-profile.json" \
-INTERN_BOT_TEST_ENGINE=chrome QT_QPA_PLATFORM=offscreen \
 .venv/bin/python -m pytest -q tests/test_resume_acceptance.py
 ```
 

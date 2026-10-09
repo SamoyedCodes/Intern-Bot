@@ -18,6 +18,10 @@ REJECTED_ACCOUNT = "Workday didn't accept the new account. It may already exist:
 
 
 class ApplicationEngine:
+    # Bounded polls (~0.1s and 0.25s apart); tests shrink them to fail fast.
+    SECTION_POLLS = 210
+    RECEIPT_POLLS = 20
+
     def __init__(self, store, emit=None):
         configure_privacy()
         self.store, self.emit = store, emit or (lambda run: None)
@@ -245,7 +249,7 @@ class ApplicationEngine:
         await self.bridge.command('authorize', {'policies': policies})
 
     async def wait_for_section(self, run, profile):
-        for _ in range(210):
+        for _ in range(self.SECTION_POLLS):
             if self._pause or self._cancel:
                 return None
             snapshot = await self.bridge.command('snapshot')
@@ -322,7 +326,7 @@ class ApplicationEngine:
 
     async def confirm_submission(self, run):
         # Confirmation is read-only and deliberately separate from vendor saved-application events.
-        for _ in range(20):
+        for _ in range(self.RECEIPT_POLLS):
             from urllib.parse import urlsplit
             expected = urlsplit(self.bridge.binding['url'] if self.bridge.binding else run.job_url)
             frames = [frame for frame in self.bridge.page.frames if urlsplit(frame.url).scheme == 'https' and urlsplit(frame.url).hostname == expected.hostname]

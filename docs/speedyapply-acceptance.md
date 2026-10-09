@@ -83,7 +83,7 @@ See `speedyapply-old-benchmark.json` and `speedyapply-new-benchmark.json` for ra
 npm ci --prefix extension --ignore-scripts
 npm run build --prefix extension
 npm test --prefix extension
-QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q
 PYTHONPATH=. .venv/bin/python tools/benchmark_adapters.py --iterations 5 --output /tmp/intern-bot-benchmark.json
 ```
 
