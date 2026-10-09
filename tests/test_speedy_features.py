@@ -99,6 +99,34 @@ def test_gemini_context_is_allowlisted_and_draft_request_is_bounded(monkeypatch)
     assert len(captured) == 1
 
 
+def test_openai_request_uses_responses_api_without_storage(monkeypatch):
+    from core.automation import assistant
+    captured, status = [], ['completed']
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self, limit):
+            return json.dumps({'status': status[0], 'output': [{'type': 'reasoning', 'summary': []},
+                {'type': 'message', 'content': [{'type': 'output_text', 'text': 'Luna draft.'}]}]}).encode()
+    class Opener:
+        def open(self, request, timeout):
+            captured.append(request)
+            return Response()
+    monkeypatch.setattr(assistant, 'build_opener', lambda *args: Opener())
+    assert generate_text('sk-test', 'gpt-6-luna', 'draft', 'facts', 'openai') == 'Luna draft.'
+    body = json.loads(captured[0].data)
+    assert captured[0].full_url == 'https://api.openai.com/v1/responses'
+    assert captured[0].get_header('Authorization') == 'Bearer sk-test'
+    assert body['model'] == 'gpt-6-luna' and body['input'] == 'facts' and body['store'] is False and 'tools' not in body
+    status[0] = 'incomplete'
+    with pytest.raises(ValueError, match='OpenAI could not'):
+        generate_text('sk-test', 'gpt-6-luna', 'draft', 'facts', 'openai')
+    with pytest.raises(ValueError):
+        generate_text('sk-test', '../../evil', 'draft', 'facts', 'openai')
+    with pytest.raises(ValueError):
+        generate_text('sk-test', 'gpt-6-luna', 'draft', 'facts', 'nope')
+
+
 def test_desktop_profiles_settings_tracker_and_cloud_consent(tmp_path, monkeypatch):
     from gui.views.tasks_view import TaskDialog
     from gui.views.assistant_dialog import AssistantDialog
@@ -134,6 +162,12 @@ def test_desktop_profiles_settings_tracker_and_cloud_consent(tmp_path, monkeypat
         cloud = AssistantDialog(window.store, run)
         cloud.start()
         assert cloud.worker is None and 'consent' in cloud.notice.text()
+        settings.provider.setCurrentIndex(settings.provider.findData('openai'))
+        assert window.store.get('ai_provider') == 'openai' and settings.ai_model.text() == 'gpt-6-luna'
+        settings.ai_key.setText('sk-test')
+        settings.save_api_key()
+        assert window.store._vault().get('openai-api-key') == 'sk-test' and not window.store._vault().get('gemini-api-key')
+        assert 'OpenAI' in AssistantDialog(window.store, run).consent.text()
         window.tasks_view.start_all_tasks()
         assert not window.tasks_view._active_id
         window.show()
