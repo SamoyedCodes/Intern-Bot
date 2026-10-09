@@ -30,11 +30,8 @@ from gui.main_window import MainWindow
 def main():
     app = QApplication(sys.argv)
 
-    styles_path = ROOT / "gui" / "styles.qss"
-    if styles_path.exists():
-        app.setStyleSheet(styles_path.read_text(encoding="utf-8"))
-    else:
-        print(f"Warning: {styles_path} not found. Using default styles.")
+    from gui.theme import apply_theme
+    apply_theme(app)
 
     try:
         window = MainWindow()
