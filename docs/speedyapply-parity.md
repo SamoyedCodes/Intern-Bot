@@ -17,7 +17,7 @@ Reference: [SpeedyApply overview](https://www.speedyapply.com/), [profiles](http
 | Accounts | Existing Workday keychain credentials, catchall generation and account/authentication handoffs | No mailbox access or automatic activation. Other ATS sign-ins are manual. |
 | Tracker and insights | Saved/applied/screen/interviewing/offer/rejected/archived pipeline, notes, job description, daily submission bars, current pipeline counts | Manual submission must be recorded by the user. Interview percentage describes the current interviewing/offer share, not historical interview conversion. |
 | CSV | Import/export with common column aliases, duplicate URL checks, ISO dates, atomic import, spreadsheet-formula neutralization | Role and HTTPS job URL required. No arbitrary column-mapping UI. Duplicate identity ignores tracking parameters. |
-| AI answers | Explicit Gemini draft action in Details / Answers; editable context preview and consent per request | Drafts must be reviewed and saved as approved answers. The browser engine never requests or approves AI output. |
+| AI answers | Explicit Gemini draft action in Answer questions; editable context preview and consent per request | Drafts must be reviewed and saved as approved answers. The browser engine never requests or approves AI output. |
 | AI profile scores | Compare saved profiles against a pasted job description via Gemini; scores, strengths and gaps | Advisory text only. Does not switch the application's profile automatically. API key/model access required; no live cloud call was made during validation. |
 | Cloud sync / job alerts | Not included | State stays local. No account backend, third-party inbox access, Discord integration, or extension-store release. |
 
@@ -26,9 +26,9 @@ Reference: [SpeedyApply overview](https://www.speedyapply.com/), [profiles](http
 1. In **Profile**, save your details, use **Save as new profile** for variations, and choose the active profile.
 2. In **Settings**, choose the browser and continuation/answer defaults, then save them.
 3. Create a **New application**, select a profile, and paste a supported hosted ATS URL. Other HTTPS jobs are tracking-only. Final submission defaults to manual; automatic submission requires explicit approval for that job.
-4. Start/resume. Missing answers appear in **Details / Answers**. Saved answers belong to that application's named profile.
-5. Open **Tracker / Notes / CSV** for the selected job to record pipeline progress, notes and the job description. With nothing selected it opens overall totals and import/export.
-6. Optional: save your Gemini key and model in Settings. Use **Compare profiles with Gemini…**, or **Draft answer with Gemini…** from Details. Review the exact outgoing context before consenting.
+4. Start/resume. Missing answers appear in **Answer questions**. Saved answers belong to that application's named profile.
+5. Use the selected job's detail panel to record pipeline stage, notes and the job description. Totals appear under the Applications title; CSV import/export is in the ⋯ menu.
+6. Optional: save your Gemini key and model in Settings. Use **Compare profiles with Gemini…**, or **Draft with Gemini…** from Answer questions. Review the exact outgoing context before consenting.
 
 AI requests send only the context shown in that dialog. The default context includes career facts and job information, and excludes structured identity/contact/EEO fields, file contents, browser observations and credentials. User-entered career text can itself contain personal information; it remains editable before sending. Keys stay in the OS keychain. API requests use a fixed HTTPS endpoint, bounded input/output, no tools and no redirect following. Errors do not expose provider bodies or keys.
 
