@@ -1,4 +1,6 @@
 """Applications workspace: one list, one detail panel, one sequential queue."""
+import subprocess
+import sys
 from datetime import datetime, timezone
 
 from PySide6.QtCore import QTimer, QUrl, Qt, Signal
@@ -9,6 +11,7 @@ from PySide6.QtWidgets import (
     QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from core.automation.accounts import generate_login
 from core.automation.models import ApplicantProfile, ApplicationRun, InterventionRequest, ats_name, canonical_url, job_identity, now, site_key
 from core.automation.service import AutomationService
 from core.storage.local_store import LocalStore
@@ -31,6 +34,17 @@ FINISHED = {
 }
 
 
+def awaiting_verification(run):
+    return run.status == "needs_input" and any(i.kind == "activation" for i in run.interventions)
+
+
+def desktop_notification(title, text):
+    if sys.platform == "darwin":
+        # Values travel as argv, never as AppleScript source.
+        subprocess.Popen(["osascript", "-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run", title, text],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def status_meta(run):
     """(label, tone, filter group) for a run: the single source of truth for status display."""
     if run.pipeline in {"rejected", "archived"}:
@@ -39,6 +53,8 @@ def status_meta(run):
         return run.pipeline.title(), "success", "Applied"
     if run.is_submitted or run.submitted_at or run.pipeline == "applied":
         return ("Submitted by you" if run.submitted_by_user else "Applied"), "success", "Applied"
+    if awaiting_verification(run):
+        return "Waiting for email verification", "warning", "Needs you"
     if run.status == "needs_input":
         return ("Needs your answer" if any(i.question for i in run.interventions) else "Needs attention"), "warning", "Needs you"
     return STATUS[run.status]
@@ -333,7 +349,7 @@ class TasksView(QWidget):
         actions.addStretch()
         self.detail_menu = QMenu(self)
         self.report_action = self.detail_menu.addAction("Field report and history…", self.details)
-        self.compare_action = self.detail_menu.addAction("Compare profiles with Gemini…", self.compare_profiles)
+        self.compare_action = self.detail_menu.addAction("Compare profiles with AI…", self.compare_profiles)
         self.cancel_action = self.detail_menu.addAction("Stop and cancel automation", self.cancel)
         actions.addWidget(more_button(self.detail_menu))
         body.addLayout(actions)
@@ -362,7 +378,7 @@ class TasksView(QWidget):
         self.notes.setPlaceholderText("Follow-ups, contacts, interview dates…")
         self.notes.setFixedHeight(80)
         self.description = QPlainTextEdit()
-        self.description.setPlaceholderText("Paste the job description to compare profiles with Gemini")
+        self.description.setPlaceholderText("Paste the job description to compare profiles with AI")
         self.description.setMinimumHeight(100)
         form.addRow("Stage", self.stage)
         form.addRow("Notes", self.notes)
@@ -546,7 +562,7 @@ class TasksView(QWidget):
         idle = bool(run) and not active and not done
         status = run.status if run else ""
         self.pause_btn.setVisible(active)
-        self.start_btn.setText({"needs_input": "Resume", "failed": "Retry", "cancelled": "Restart"}.get(status, "Start"))
+        self.start_btn.setText("I've verified my account" if run and awaiting_verification(run) else {"needs_input": "Resume", "failed": "Retry", "cancelled": "Restart"}.get(status, "Start"))
         self.start_btn.setVisible(idle and status in {"queued", "needs_input", "failed", "cancelled"})
         self.answer_btn.setVisible(idle and any(i.question for i in run.interventions))
         self.review_btn.setVisible(idle and status == "ready_for_review")
@@ -648,7 +664,20 @@ class TasksView(QWidget):
             return
         try:
             profile = run.profile_snapshot or ApplicantProfile.model_validate(self.store.get("verified_profile", {}))
-            credential = self.store._vault().credential(run.job_url) if ats_name(run.job_url) == "Workday" else None
+            credential = None
+            if ats_name(run.job_url) == "Workday":
+                vault = self.store._vault()
+                if awaiting_verification(run):
+                    # The user confirmed the emailed link, so the new account gets exactly one sign-in attempt.
+                    vault.set_account_state(run.job_url, "verified")
+                    run.authentication_attempted = False
+                    self.store.save_run(run)
+                credential = vault.credential(run.job_url)
+                if not credential and self.store.get("auto_create_workday_accounts", False):
+                    # Saved before the browser sees it, so a generated password can never be lost.
+                    username, password = generate_login(site_key(run.job_url), profile.email, self.store.get("catchall_domain", ""), self.store.get("catchall_format", ""))
+                    vault.save_credential(run.job_url, username, password, "new")
+                    credential = vault.credential(run.job_url)
             if self.service.start(run.model_copy(deep=True), profile, credential, inspect_only=inspect_only):
                 self._active_id = run.id
                 self._queue = [i for i in self._queue if i != run.id]
@@ -675,7 +704,12 @@ class TasksView(QWidget):
         self.render()
         if run.status in FINISHED and not self._closing:
             message, tone = FINISHED[run.status]
-            self.notify(message.format(run.company or "The application"), tone)
+            name = run.company or "The application"
+            if awaiting_verification(run):
+                name = run.company or site_key(run.job_url)
+                message = "Verify the Workday email for {}, then click I've verified my account."
+                desktop_notification("Verify your Workday email", f"{name}: open the verification link, then click I've verified my account in Intern-Bot.")
+            self.notify(message.format(name), tone)
             QApplication.alert(self.window())
         self._start_next()
 

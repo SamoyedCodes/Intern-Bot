@@ -225,6 +225,11 @@
     observer.observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-invalid','disabled','hidden','aria-busy']});observers.add(observer);
     timers.add(native.setTimeout(()=>{if(live()){report('browser','The adapter reached its bounded wait limit. Inspect the form and resume.');stop();}},20000));
     window.addEventListener('unhandledrejection',fail,{signal:abort.signal});
+    const authControls=()=>({
+      emails:[...document.querySelectorAll('input[type=email],input[autocomplete=email],input[autocomplete=username],input[data-automation-id=email]')].filter(visible),
+      passwords:[...document.querySelectorAll('input[type=password]')].filter(visible),
+      buttons:[...document.querySelectorAll('[data-automation-id="signInSubmitButton"],[data-automation-id="createAccountSubmitButton"]')].filter(visible),
+    });
     return {
       token,document:documentId,R,
       scan,
@@ -253,16 +258,21 @@
         value:(e.querySelector('dd,[data-value]')?.textContent||(e.tagName==='DT'?e.nextElementSibling?.textContent:'')||'').trim(),
         group:e.getAttribute('data-group')||'',row:Number(e.getAttribute('data-row')||0)
       })),errors:(/\bVPS\|[0-9a-f-]{36}\b/i.test(document.body.innerText)||/something went wrong[\s\S]*please refresh the page and then try again/i.test(document.body.innerText)?1:0)+[...document.querySelectorAll('[role=alert],.field-error-msg,.form-error,[data-automation-id=inputError]')].filter(e=>visible(e)&&e.textContent.trim()).length,status,live:live(),settled:performance.now()-lastChange>350&&timers.size<=1,proposals:proposals.size,events,problems:[...problems.values()],actions:[...actions].filter(([,a])=>a.element.isConnected&&visible(a.element)&&!a.element.disabled).map(([id,a])=>({id,kind:a.kind})),url};},
-      openSignIn(){
-        const links=[...document.querySelectorAll('[data-automation-id="signInLink"]')].filter(visible);
-        if(config.adapter!=='workday'||!live()||links.length!==1)return false;
+      openAuthLink(id){
+        const links=[...document.querySelectorAll(`[data-automation-id="${id}"]`)].filter(visible);
+        if(config.adapter!=='workday'||!live()||!['signInLink','createAccountLink'].includes(id)||links.length!==1)return false;
         links[0].click();return true;
+      },
+      // Which Workday authentication form is shown, and which scanned controls receive the saved login.
+      authPage(){
+        if(config.adapter!=='workday')return {page:'',credentials:[]};
+        const {emails,passwords,buttons}=authControls();
+        const page=buttons.length!==1?'':buttons[0].matches('[data-automation-id="createAccountSubmitButton"]')?'create':'sign_in';
+        return {page,credentials:[...handles].filter(([,e])=>e===emails[0]||passwords.includes(e)).map(([selector])=>selector)};
       },
       authenticate(credential){
         if(config.adapter!=='workday'||!live())throw Error('Authentication not authorized');
-        const emails=[...document.querySelectorAll('input[type=email],input[autocomplete=email],input[autocomplete=username]')].filter(visible);
-        const passwords=[...document.querySelectorAll('input[type=password]')].filter(visible);
-        const buttons=[...document.querySelectorAll('[data-automation-id="signInSubmitButton"],[data-automation-id="createAccountSubmitButton"]')].filter(visible);
+        const {emails,passwords,buttons}=authControls();
         if(emails.length!==1||!passwords.length||buttons.length!==1||!credential.username||!credential.password)throw Error('Ambiguous authentication');
         if(emails[0].value&&emails[0].value!==credential.username||passwords.some(e=>e.value&&e.value!==credential.password))throw Error('Existing authentication value conflicts with saved credentials');
         for(const [selector,element] of handles){
@@ -318,7 +328,9 @@
       else if(message.command==='snapshot')result=active.snapshot();
       else if(message.command==='stop')active.R.stop();
       else if(message.command==='action')await active.action(message.payload.id,message.payload.fields,message.payload.summary);
-      else if(message.command==='open_sign_in')result.opened=active.openSignIn();
+      else if(message.command==='open_sign_in')result.opened=active.openAuthLink('signInLink');
+      else if(message.command==='open_create_account')result.opened=active.openAuthLink('createAccountLink');
+      else if(message.command==='auth_page')result=active.authPage();
       else if(message.command==='authenticate')active.authenticate(message.payload.credential);
       respond({...result,token:message.token,document:message.document});
     }catch {respond({error:'Local adapter command failed. Reopen or inspect the application.',token:message.token,document:message.document});}})();

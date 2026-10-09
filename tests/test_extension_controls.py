@@ -385,3 +385,86 @@ def test_apply_label_is_never_treated_as_unauthorized_continuation(tmp_path):
         assert run.status == 'ready_for_review', run.interventions
         assert not run.submission_attempted and not await page.evaluate('Boolean(window.submissions)')
     asyncio.run(with_extension(tmp_path, scenario))
+
+
+def account_pages(start, after):
+    email = '<label>Email Address<input type=text data-automation-id=email></label><label>Password<input type=password data-automation-id=password></label>'
+    create = email + '<label>Verify New Password<input type=password data-automation-id=verifyPassword></label><label><input type=checkbox data-automation-id=createAccountCheckbox>I agree to the terms</label><button type=button data-automation-id=signInLink onclick="show(`signin`)">Sign In</button><button type=button data-automation-id=createAccountSubmitButton onclick="created()">Create Account</button>'
+    pages = {
+        'signin': email + '<button type=button data-automation-id=createAccountLink onclick="show(`create`)">Create Account</button><button type=button data-automation-id=signInSubmitButton onclick="window.logins=(window.logins||0)+1">Sign In</button>',
+        'create': create,
+        'error': create + '<div data-automation-id=inputError>An account with this email already exists.</div>',
+        'form': '<label>Preferred Name<input></label>',
+    }
+    return f'''<div id=root></div><script>
+const pages={json.dumps(pages)};
+function show(name){{document.getElementById('root').innerHTML=pages[name];}}
+function created(){{window.creates=(window.creates||0)+1;const q=s=>document.querySelector(`[data-automation-id=${{s}}]`);
+window.created=[q('email').value,q('password').value,q('verifyPassword').value,q('createAccountCheckbox').checked];show('{after}');}}
+show('{start}');</script>'''
+
+
+def test_new_workday_account_is_created_once_then_waits_for_verification_before_one_sign_in(tmp_path):
+    from core.automation.models import employer_key
+    from core.storage.vault import CredentialVault
+    from tests.test_verified_storage import MemoryKeychain
+
+    async def scenario(context, store):
+        store.vault = vault = CredentialVault(MemoryKeychain())
+        page = await open_fixture(context, 'workday', account_pages('signin', 'signin'))
+        url = page.url
+        vault.save_credential(url, 'acme_intern@apps.example.test', 'Fixture-only-1!', 'new')
+        run = ApplicationRun(job_url=url)
+        states = []
+        engine = ApplicationEngine(store, lambda r: states.append((r.authentication_attempted, vault.credential(url)['state'])))
+        start = lambda: engine.resume(run, ApplicantProfile(), ExtensionBridge(page, run.id), vault.credential(url))
+
+        # Sign In is shown first: the bot opens Create Account, then asks about the unapproved terms checkbox.
+        await start()
+        assert run.interventions[-1].kind == 'answer', run.interventions
+        assert not await page.evaluate('Boolean(window.creates)') and not run.authentication_attempted
+        assert vault.credential(url)['state'] == 'new'
+
+        store.save_answer(ApprovedAnswer(question=run.interventions[-1].question, profile_name=run.profile_name, value=True, scope='employer', scope_key=employer_key(url)))
+        await start()
+        assert await page.evaluate('window.creates') == 1
+        assert await page.evaluate('window.created') == ['acme_intern@apps.example.test', 'Fixture-only-1!', 'Fixture-only-1!', True]
+        # The keychain recorded the attempt before the click could happen.
+        assert next(s for s in states if s[0]) == (True, 'pending_verification')
+        assert run.interventions[-1].kind == 'activation' and 'acme_intern@apps.example.test' in run.interventions[-1].message
+
+        # Resuming without confirming verification neither re-creates nor signs in.
+        await start()
+        assert await page.evaluate('window.creates') == 1 and not await page.evaluate('Boolean(window.logins)')
+        assert run.interventions[-1].kind == 'activation'
+
+        # "I've verified my account": exactly one sign-in, never repeated.
+        vault.set_account_state(url, 'verified')
+        run.authentication_attempted = False
+        await start()
+        assert await page.evaluate('window.logins') == 1
+        await start()
+        assert await page.evaluate('window.logins') == 1 and await page.evaluate('window.creates') == 1
+        assert b'Fixture-only-1!' not in store.path.read_bytes()
+    asyncio.run(with_extension(tmp_path, scenario))
+
+
+def test_rejected_or_immediately_signed_in_new_workday_account(tmp_path):
+    from core.automation.models import employer_key
+    from core.storage.vault import CredentialVault
+    from tests.test_verified_storage import MemoryKeychain
+
+    async def scenario(context, store):
+        store.vault = vault = CredentialVault(MemoryKeychain())
+        for after, expected in (('error', 'pending_verification'), ('form', 'verified')):
+            page = await open_fixture(context, 'workday', account_pages('create', after))
+            vault.save_credential(page.url, 'acme_intern@apps.example.test', 'Fixture-only-1!', 'new')
+            run = ApplicationRun(job_url=page.url)
+            store.save_answer(ApprovedAnswer(question='I agree to the terms', profile_name=run.profile_name, value=True, scope='employer', scope_key=employer_key(page.url)))
+            await ApplicationEngine(store).start(run, ApplicantProfile(), ExtensionBridge(page, run.id), vault.credential(page.url))
+            assert await page.evaluate('window.creates') == 1, run.interventions
+            assert vault.credential(page.url)['state'] == expected
+            if after == 'error':
+                assert run.interventions[-1].kind == 'verification' and "didn't accept" in run.interventions[-1].message
+            await page.close()
+    asyncio.run(with_extension(tmp_path, scenario))

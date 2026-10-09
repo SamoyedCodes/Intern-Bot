@@ -1,14 +1,13 @@
 """Applicant profiles (sectioned editor) and explicit employer credential editor."""
-import secrets
-import string
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLineEdit, QMenu, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLineEdit, QMenu, QVBoxLayout, QWidget,
 )
 
+from core.automation.accounts import DEFAULT_CATCHALL_FORMAT, generate_login, login_address
 from core.automation.models import ApplicantProfile, ats_name, canonical_url, site_key
 from core.storage.local_store import LocalStore
 from gui.theme import form_layout, MessageBar, button, card, label, more_button, shortcut
@@ -149,10 +148,22 @@ class ProfileView(QWidget):
         self.password.setEchoMode(QLineEdit.Password)
         self.catchall = QLineEdit(self.store.get("catchall_domain", ""))
         self.catchall.setPlaceholderText("applications.example.com (optional)")
-        for text, widget in [("Employer site", self.site), ("Username or email", self.username), ("Password", self.password), ("Catch-all domain", self.catchall)]:
+        self.catchall_format = QLineEdit(self.store.get("catchall_format", ""))
+        self.catchall_format.setPlaceholderText(DEFAULT_CATCHALL_FORMAT)
+        for text, widget in [("Employer site", self.site), ("Username or email", self.username), ("Password", self.password), ("Catch-all domain", self.catchall), ("Catch-all address", self.catchall_format)]:
             form.addRow(text, widget)
         box.addLayout(form)
-        box.addWidget(label("With a catch-all domain, generated logins use a unique address per employer instead of your profile email.", "caption"))
+        self.address_preview = label(role="caption")
+        box.addWidget(self.address_preview)
+        self.auto_create = QCheckBox("Create Workday accounts automatically when no login is saved")
+        self.auto_create.setChecked(self.store.get("auto_create_workday_accounts", False))
+        self.auto_create.setToolTip("The bot generates a login, saves it to the keychain, creates the account, then waits for you to verify the email.")
+        box.addWidget(self.auto_create)
+        for widget in (self.catchall, self.catchall_format):
+            widget.textChanged.connect(self.preview_address)
+            widget.editingFinished.connect(self.save_account_settings)
+        self.auto_create.toggled.connect(self.save_account_settings)
+        self.preview_address()
         buttons = QHBoxLayout()
         buttons.addWidget(button("Load saved login", self.load_credential))
         buttons.addWidget(button("Generate login", self.generate_credential))
@@ -168,31 +179,35 @@ class ProfileView(QWidget):
             raise ValueError("Use a Workday employer site for saved credentials.")
         return site_key(canonical_url(value if "://" in value else "https://" + value))
 
+    def preview_address(self):
+        domain = self.catchall.text().strip()
+        try:
+            example = login_address("company.wd1.myworkdayjobs.com", "you@example.com", domain, self.catchall_format.text())
+            self.address_preview.setText(f"New accounts use addresses like {example}. {{company}} becomes the employer's Workday name." if domain
+                                         else "Without a catch-all domain, new accounts use your profile email.")
+        except ValueError:
+            self.address_preview.setText("That catch-all domain or address isn't a valid email address.")
+
+    def save_account_settings(self):
+        self.store.put("catchall_domain", self.catchall.text().strip().lstrip("@"))
+        self.store.put("catchall_format", self.catchall_format.text().strip())
+        self.store.put("auto_create_workday_accounts", self.auto_create.isChecked())
+
     def load_credential(self):
         try:
             value = self.store._vault().credential(self.credential_site())
             self.username.setText(value.get("username", ""))
             self.password.setText(value.get("password", ""))
-            self.notice.notify("Login loaded from the keychain." if value else "No saved login for this employer.", "success" if value else "info")
+            state = {"new": " The account hasn't been created yet.", "pending_verification": " Workday is waiting for you to verify the email."}.get(value.get("state"), "")
+            self.notice.notify("Login loaded from the keychain." + state if value else "No saved login for this employer.", "success" if value else "info")
         except Exception:
             self.notice.notify("Couldn't load the login. Check the employer site and keychain access.", "danger")
 
     def generate_credential(self):
         try:
-            site = self.credential_site()
-            domain = self.catchall.text().strip().lstrip("@")
-            email = self.editor.profile().email
-            if domain:
-                if any(c.isspace() for c in domain) or "/" in domain or "@" in domain or "." not in domain:
-                    raise ValueError("Invalid catchall domain")
-                email = site.split('.')[0].replace('-', '_') + "_intern@" + domain
-            if not email or "@" not in email:
-                raise ValueError("An email is required")
-            chars = [secrets.choice(pool) for pool in (string.ascii_lowercase, string.ascii_uppercase, string.digits, "!@#$%^&*")]
-            chars += [secrets.choice(string.ascii_letters + string.digits + "!@#$%^&*") for _ in range(14)]
-            secrets.SystemRandom().shuffle(chars)
-            self.username.setText(email)
-            self.password.setText("".join(chars))
+            username, password = generate_login(self.credential_site(), self.editor.profile().email, self.catchall.text(), self.catchall_format.text())
+            self.username.setText(username)
+            self.password.setText(password)
             self.notice.notify("Login generated on this Mac. Save it before starting this employer's application.", "warning")
         except ValueError:
             self.notice.notify("Enter a valid Workday employer site and your email or catch-all domain first.", "warning")
@@ -204,7 +219,7 @@ class ProfileView(QWidget):
             if not username or not password:
                 raise ValueError("Missing login")
             self.store._vault().save_credential(site, username, password)
-            self.store.put("catchall_domain", self.catchall.text().strip().lstrip("@"))
+            self.save_account_settings()
             self.password.clear()
             self.notice.notify("Login saved to the system keychain.", "success")
         except Exception:
