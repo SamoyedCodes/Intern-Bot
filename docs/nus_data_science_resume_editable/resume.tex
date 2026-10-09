@@ -1,0 +1,42 @@
+\documentclass[10pt]{article}
+\usepackage[utf8]{inputenc}
+
+% Fictional student resume, adapted from Timmy Chan's public
+% Data Science & Tech Resume Template.
+% Edit the variables below, then compile resume.tex with pdfLaTeX.
+\usepackage{TLCresume}
+
+%====================
+% CONTACT INFORMATION (ALL DETAILS ARE PLACEHOLDERS)
+%====================
+\def\name{Alex Tan}
+\def\phone{+65 XXXX XXXX}
+\def\city{Singapore}
+\def\email{alex.tan@example.com}
+\def\LinkedIn{example-nus-student}
+\def\github{example-nus-student}
+\def\role{Data Science Undergraduate}
+\def\portfoliourl{https://example.com}
+\def\portfolioname{example.com}
+
+\input{_header}
+\begin{document}\pagestyle{others}\thispagestyle{first_page}
+
+\input{sections/objective}
+
+\section{Education}
+\input{sections/education}
+
+\section{Technical Skills}
+\input{sections/skills}
+
+\section{Experience \& Projects}
+\input{sections/experience}
+
+\section{Leadership \& Activities}
+\input{sections/activities}
+
+\vfill
+{\footnotesize\color{gray}Fictional sample resume. Contact details, experience and results are illustrative.}
+
+\end{document}
