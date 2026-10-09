@@ -51,7 +51,8 @@ The original XPI, exact source and notices are preserved under `third_party/spee
 ## Tests and limitations
 
 ```sh
-QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q                  # everything
+.venv/bin/python -m pytest -q -m "not browser"  # unit tier without Chromium, about a second
 npm test --prefix extension
 PYTHONPATH=. .venv/bin/python tools/benchmark_adapters.py --output /tmp/intern-bot-benchmark.json
 ```
