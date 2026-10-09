@@ -34,6 +34,23 @@ class LocalStore:
         finally:
             db.close()
 
+    def migrate_local_engine(self):
+        """Invalidate verification only; preserve all historical submission decisions."""
+        with self.connect() as db:
+            if db.execute("SELECT 1 FROM state WHERE key='local_adapter_migration_v1'").fetchone():
+                return
+            for run_id, payload in db.execute("SELECT id,payload FROM runs").fetchall():
+                run = ApplicationRun.model_validate_json(payload)
+                if run.is_submitted or run.submitted_at:
+                    continue
+                run.fields, run.completed_sections = {}, []
+                if run.status in {"running", "ready_for_review"}:
+                    run.status = "needs_input"
+                db.execute("UPDATE runs SET payload=? WHERE id=?", (run.model_dump_json(), run_id))
+                db.execute("INSERT INTO events(run_id,at,kind,stage,note) VALUES (?,?,?,?,?)",
+                    (run_id, now(), "engine_migration", run.stage, "Local adapters require fresh verification. Chromium may require employer sign-in again; existing browser directories are preserved."))
+            db.execute("INSERT INTO state VALUES ('local_adapter_migration_v1','true')")
+
     def _vault(self):
         if self.vault is None:
             self.vault = CredentialVault()

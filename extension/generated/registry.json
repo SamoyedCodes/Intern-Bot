@@ -1,0 +1,226 @@
+[
+  {
+    "id": "workday",
+    "name": "Workday",
+    "symbol": "QV",
+    "pattern": [
+      "^https?://.*\\.(myworkdayjobs|myworkdaysite)\\.com/"
+    ]
+  },
+  {
+    "id": "greenhouse",
+    "name": "Greenhouse",
+    "symbol": "PR",
+    "pattern": [
+      "^https?://(job-boards|boards)\\.(eu\\.)?greenhouse\\.io/.*"
+    ]
+  },
+  {
+    "id": "lever",
+    "name": "Lever",
+    "symbol": "uz",
+    "pattern": [
+      "^https?://jobs(?:\\.[a-z]+)?\\.lever\\.co/[^/]+/[^/]+/.*"
+    ]
+  },
+  {
+    "id": "sap-successfactors",
+    "name": "SAP SuccessFactors",
+    "symbol": "BB",
+    "pattern": [
+      "^https?://(?:.*\\.)?(?:successfactors|sapsf)\\.(?:com|eu)/.*"
+    ]
+  },
+  {
+    "id": "icims",
+    "name": "iCIMS",
+    "symbol": "XR",
+    "pattern": [
+      "^https?://.*.icims.(com|eu)/.*"
+    ]
+  },
+  {
+    "id": "workable",
+    "name": "Workable",
+    "symbol": "gV",
+    "pattern": [
+      "^https://apply\\.workable\\.com/"
+    ]
+  },
+  {
+    "id": "rippling",
+    "name": "Rippling",
+    "symbol": "oB",
+    "pattern": [
+      "^https?://(?:ats\\.rippling\\.com/[^/]+/jobs(?:/.*|\\?.*|$)|[^/]*\\.rippling-ats\\.com/job/[^/]+(?:/.*)?)"
+    ]
+  },
+  {
+    "id": "breezy",
+    "name": "Breezy",
+    "symbol": "bL",
+    "pattern": [
+      "^https://[^/]*\\.breezy\\.hr/p/[a-z0-9-]+"
+    ]
+  },
+  {
+    "id": "jazzhr",
+    "name": "JazzHR",
+    "symbol": "QR",
+    "pattern": [
+      "^https?://[^/]+\\.(applytojob|theresumator)\\.com/apply/[^/]+(/[^/]+)?"
+    ]
+  },
+  {
+    "id": "ashby",
+    "name": "Ashby",
+    "symbol": "eL",
+    "pattern": [
+      "^https://jobs.ashbyhq.com/.*"
+    ]
+  },
+  {
+    "id": "smartrecruiters",
+    "name": "SmartRecruiters",
+    "symbol": "EB",
+    "pattern": [
+      "^https://jobs\\.smartrecruiters\\.com/oneclick-ui/company/[^/]+/(publication|job)/.*"
+    ]
+  },
+  {
+    "id": "paylocity",
+    "name": "Paylocity",
+    "symbol": "Oz",
+    "pattern": [
+      "^https://recruiting\\.paylocity\\.com/Recruiting/Jobs/.*",
+      "i"
+    ]
+  },
+  {
+    "id": "freshteam",
+    "name": "Freshteam",
+    "symbol": "sR",
+    "pattern": [
+      "^https://[^/]+\\.freshteam\\.com/jobs/[^/]+/[^/]+"
+    ]
+  },
+  {
+    "id": "dover",
+    "name": "Dover",
+    "symbol": "GL",
+    "pattern": [
+      "^https://app\\.dover\\.(io|com)/apply/.+"
+    ]
+  },
+  {
+    "id": "pinpoint",
+    "name": "Pinpoint",
+    "symbol": "Uz",
+    "pattern": [
+      "^https://[^/]+\\.pinpointhq\\.com/.*"
+    ]
+  },
+  {
+    "id": "comeet",
+    "name": "Comeet",
+    "symbol": "DL",
+    "pattern": [
+      "^https://www\\.comeet\\.co/jobs/.*/apply.*"
+    ]
+  },
+  {
+    "id": "gusto",
+    "name": "Gusto",
+    "symbol": "FR",
+    "pattern": [
+      "^https://jobs\\.gusto\\.com/postings/[^/]+/applicants(/new)?$"
+    ]
+  },
+  {
+    "id": "polymer",
+    "name": "Polymer",
+    "symbol": "Jz",
+    "pattern": [
+      "^https://jobs\\.polymer\\.co/[^/]+/\\d+(#apply)?$"
+    ]
+  },
+  {
+    "id": "adp",
+    "name": "ADP",
+    "symbol": "qI",
+    "pattern": [
+      "^https://workforcenow\\.adp\\.com/mascsr/.*(\\?.*jobId=\\d+)?"
+    ]
+  },
+  {
+    "id": "jobvite",
+    "name": "Jobvite",
+    "symbol": "iz",
+    "pattern": [
+      "^https://jobs\\.jobvite\\.com/[^/]+(?:/[^/]+)?/job/[^/]+/(apply|applyConfirmation)(\\?.*)?$"
+    ]
+  },
+  {
+    "id": "ultipro",
+    "name": "UltiPro",
+    "symbol": "aV",
+    "pattern": [
+      "^https://[^/]+\\.ultipro\\.(com|ca)(/.*)?$"
+    ]
+  },
+  {
+    "id": "tesla",
+    "name": "Tesla",
+    "symbol": "VB",
+    "pattern": [
+      "^https://www\\.tesla\\.com/careers/search/job/apply/\\d+$"
+    ]
+  },
+  {
+    "id": "tiktok",
+    "name": "TikTok",
+    "symbol": "YB",
+    "pattern": [
+      "^https://(careers\\.tiktok\\.com|lifeattiktok\\.com)(/.*)?$"
+    ]
+  },
+  {
+    "id": "eightfold",
+    "name": "Eightfold",
+    "symbol": "oR",
+    "pattern": [
+      "^https://[a-zA-Z0-9-]+\\.eightfold\\.ai/careers(\\?.*)?(#.*)?$"
+    ],
+    "selector": "#EFSmartApplyContainer"
+  },
+  {
+    "id": "seek",
+    "name": "SEEK",
+    "symbol": "sB",
+    "pattern": [
+      "^https?://(?:www\\.)?seek\\.com\\.au/job/\\d+(?:/apply)?"
+    ]
+  },
+  {
+    "id": "bamboohr",
+    "name": "BambooHR",
+    "symbol": "dL",
+    "pattern": [
+      "^https?://[^/]*\\.bamboohr\\.com/careers(/.*)?$"
+    ]
+  },
+  {
+    "id": "phenom",
+    "name": "Phenom",
+    "symbol": "Nz",
+    "selector": "head[data-ph-id]"
+  },
+  {
+    "id": "dayforce",
+    "name": "Dayforce",
+    "symbol": "UL",
+    "pattern": [
+      "^https?://[^/]*\\.dayforcehcm\\.com(/.*)?$"
+    ]
+  }
+]

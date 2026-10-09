@@ -10,9 +10,12 @@ from playwright.async_api import async_playwright, BrowserContext
 
 
 class AsyncPlaywrightManager:
-    def __init__(self, headless: bool = True, user_data_dir: str = "./data/browser/default", executable_path=None, browser="chromium"):
+    def __init__(self, headless: bool = True, user_data_dir: str = "./data/browser/default", executable_path=None, browser="chromium", extension_path=None):
         if browser not in {"chromium", "chrome", "firefox"}:
             raise ValueError("Choose Chromium, Chrome or Firefox.")
+        if extension_path and browser != "chromium":
+            raise ValueError("Local adapters require bundled Chromium.")
+        self.extension_path = str(Path(extension_path).resolve()) if extension_path else None
         self.browser = browser
         self.headless = headless
         self.user_data_dir = str(Path(user_data_dir).resolve())
@@ -40,8 +43,8 @@ class AsyncPlaywrightManager:
             browser_type = self._playwright.firefox if self.browser == "firefox" else self._playwright.chromium
             self.context = await browser_type.launch_persistent_context(
                 self.user_data_dir, headless=self.headless, timeout=30000,
-                **({"channel": "chrome"} if self.browser == "chrome" else {}),
-                **({"args": ["--disable-blink-features=AutomationControlled"],
+                **({"channel": "chromium"} if self.extension_path else {"channel": "chrome"} if self.browser == "chrome" else {}),
+                **({"args": ["--disable-blink-features=AutomationControlled"] + ([f"--disable-extensions-except={self.extension_path}", f"--load-extension={self.extension_path}"] if self.extension_path else []),
                     "ignore_default_args": ["--enable-automation"]} if self.browser != "firefox" else {}),
                 executable_path=self.executable_path,
                 **({"viewport": {"width": 1280, "height": 800}} if self.headless else {"no_viewport": True}),

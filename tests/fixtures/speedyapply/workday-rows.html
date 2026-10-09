@@ -1,0 +1,17 @@
+<!doctype html><html><head><title>Fictional repeated-row application</title></head><body>
+<div data-automation-id="myExperiencePage"><h2>My Experience</h2>
+<div role="group" aria-labelledby="Work-Experience-section"><h3 id="Work-Experience-section">Work Experience</h3><button type="button" aria-label="Add Work Experience" onclick="addRow('experience')">Add Work Experience</button></div>
+<div role="group" aria-labelledby="Education-section"><h3 id="Education-section">Education</h3><button type="button" aria-label="Add Education" onclick="addRow('education')">Add Education</button></div>
+<button type="button" data-automation-id="bottom-navigation-next-button" onclick="window.advanced=(window.advanced||0)+1">Next</button></div>
+<script>
+function addRow(group) {
+  const section = document.querySelector(`[aria-labelledby="${group==='experience'?'Work-Experience':'Education'}-section"]`);
+  const count = section.querySelectorAll('[role=group]').length + 1;
+  const row = document.createElement('div');
+  row.setAttribute('role','group');
+  row.setAttribute('aria-labelledby',`${group==='experience'?'Work-Experience':'Education'}-${count}-panel`);
+  row.dataset.automationId = `${group==='experience'?'workExperience':'education'}-${count}`;
+  row.innerHTML = group==='experience' ? '<label>Job Title<input data-automation-id="jobTitle"></label><label>Company<input data-automation-id="company"></label><label>Description<textarea data-automation-id="description"></textarea></label>' : '<label>School<input data-automation-id="school"></label><label>GPA<input data-automation-id="gpa"></label>';
+  section.append(row);
+}
+</script></body></html>

@@ -140,8 +140,9 @@ def test_gui_workflow_uses_real_browser_service_and_answer_dialog(tmp_path, monk
 
     monkeypatch.chdir(tmp_path)
     app, window = desktop(tmp_path)
-    url = 'https://fixture.wd1.myworkdayjobs.com/job/GUI_R1'
-    fixture = (Path(__file__).parent / 'fixtures/workday.html').read_text()
+    url = 'https://boards.greenhouse.io/fixture/jobs/GUI_R1'
+    fixture = (Path(__file__).parent / 'fixtures/speedyapply/greenhouse.html').read_text().replace('</form>',
+        '<label>Available for this internship?<input type="checkbox"></label><button type="button" id="submit_app" onclick="window.submissions++">Submit Application</button></form><script>window.submissions=0</script>')
     requests = []
     original_goto = Page.goto
     async def intercepted_goto(page, destination, **kwargs):
@@ -169,15 +170,18 @@ def test_gui_workflow_uses_real_browser_service_and_answer_dialog(tmp_path, monk
     try:
         resume = tmp_path / 'resume.pdf'
         resume.write_bytes(b'%PDF-1.4\nGUI fixture\n%%EOF')
-        profile = ApplicantProfile(first_name='Ada',last_name='Example',country='Singapore',resume_path=str(resume),education=[Education(school='Example University',degree='BSc')],experience=[Experience(employer='Example Co',job_title='Intern')])
-        run = ApplicationRun(job_url=url, company='Fixture', profile_snapshot=profile, browser=os.environ.get('INTERN_BOT_TEST_ENGINE','chromium'))
+        profile = ApplicantProfile(first_name='Ada',last_name='Example',email='ada@example.test')
+        run = ApplicationRun(job_url=url, company='Fixture', profile_snapshot=profile, browser='firefox')
         assert not run.auto_submit
         view.add_task(run)
         view.table.selectRow(0)
         window.show()
         app.processEvents()
+        legacy = tmp_path / 'data/browser' / hashlib.sha256(run.id.encode()).hexdigest()[:24]
+        legacy.mkdir(parents=True)
+        (legacy / 'preserve.txt').write_text('Old browser session must remain intact')
         # Restore an explicit session cookie through the production browser manager.
-        session_key = run.id if run.browser == 'chromium' else run.id + ':' + run.browser
+        session_key = run.id + ':speedy-chromium'
         directory = tmp_path / 'data/browser' / hashlib.sha256(session_key.encode()).hexdigest()[:24]
         directory.mkdir(parents=True, mode=0o700)
         saved = directory / 'session-cookies.json'
@@ -190,7 +194,7 @@ def test_gui_workflow_uses_real_browser_service_and_answer_dialog(tmp_path, monk
         assert view.tasks[0].status == 'needs_input'
         click('Start / Resume')
         until(lambda: not view.service.busy and view._active_id is None)
-        assert view.tasks[0].stage == 'questions'
+        assert view.tasks[0].stage.startswith('Greenhouse:')
         assert view.tasks[0].interventions[0].question == 'Available for this internship?'
         errors = []
         def approve():
@@ -222,11 +226,13 @@ def test_gui_workflow_uses_real_browser_service_and_answer_dialog(tmp_path, monk
             manager, adapter = view.service.sessions[run.id]
             assert any(c['name']=='gui_session' and c['value']=='fixture-only' for c in await manager.context.cookies(url))
             assert await adapter.page.evaluate('window.submissions') == 0
-            assert await adapter.page.locator('[data-intern-review][data-label="Resume"]').get_attribute('data-value') == resume.name
-            assert await adapter.page.locator('[data-intern-review][data-label="Company"]').count() == 1
+            assert await adapter.page.locator('#first_name').input_value() == 'Ada'
+            assert not await adapter.page.locator('input[type=checkbox]').is_checked()
         asyncio.run_coroutine_threadsafe(verify(), view.service.loop).result(timeout=10)
         assert requests == [url]
         assert not final.submission_attempted
+        assert final.browser == 'chromium' and (legacy / 'preserve.txt').read_text() == 'Old browser session must remain intact'
+        assert any(event['kind'] == 'browser_migration' for event in window.store.events(run.id))
         window.grab().save(str(tmp_path/'gui-final-review.png'))
     finally:
         window.close()

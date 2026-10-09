@@ -1,4 +1,4 @@
-(rootSelector) => {
+globalThis.scanInternFields = (rootSelector) => {
   const root = typeof rootSelector === 'string' ? document.querySelector(rootSelector) : rootSelector || document;
   if (!root) return [];
   const visible = e => !!(e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
@@ -68,3 +68,4 @@
       readonly: !!e.readOnly};
   });
 }
+;

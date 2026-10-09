@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from core.automation.models import ApplicantProfile, ApprovedAnswer, Education, Experience, employer_key, normalized
+from core.automation.models import ApplicantProfile, ApprovedAnswer, Education, Experience, Language, employer_key, normalized
 
 
 class ProfileEditor(QWidget):
@@ -19,12 +19,20 @@ class ProfileEditor(QWidget):
         form = QFormLayout(fields)
         optional_fields = QWidget()
         optional_form = QFormLayout(optional_fields)
-        optional_keys = {"preferred_name", "pronouns", "gender", "race_ethnicity", "veteran_status", "disability_status", "skills", "languages", "summary"}
+        optional_keys = {"preferred_name", "pronouns", "gender", "race_ethnicity", "veteran_status", "disability_status", "skills", "languages", "summary", "work_authorized_us", "requires_sponsorship", "hispanic_or_latino", "employment_age"}
         self.inputs = {}
-        for name in ApplicantProfile.model_fields:
-            if name in {"schema_version", "education", "experience"}:
+        primary = ["first_name", "last_name", "email", "phone", "resume_path", "cover_letter_path"]
+        for name in primary + [name for name in ApplicantProfile.model_fields if name not in primary]:
+            if name in {"schema_version", "education", "experience", "language_proficiency"}:
                 continue
-            widget = QPlainTextEdit(getattr(profile, name)) if name in {"summary", "cover_letter"} else QLineEdit(str(getattr(profile, name)))
+            value = getattr(profile, name)
+            if name in {"work_authorized_us", "requires_sponsorship", "hispanic_or_latino"}:
+                widget = QComboBox()
+                for label, choice in (("Unknown", None), ("Yes", True), ("No", False)):
+                    widget.addItem(label, choice)
+                widget.setCurrentIndex(0 if value is None else 1 if value else 2)
+            else:
+                widget = QPlainTextEdit(value) if name in {"summary", "cover_letter"} else QLineEdit("" if value is None else str(value))
             if isinstance(widget, QPlainTextEdit):
                 widget.setMaximumHeight(110)
             self.inputs[name] = widget
@@ -46,7 +54,7 @@ class ProfileEditor(QWidget):
         optional_scroll.setWidget(optional_fields)
         tabs.addTab(optional_scroll, "Skills and optional details")
         self.tables = {}
-        for group, model in (("education", Education), ("experience", Experience)):
+        for group, model in (("education", Education), ("experience", Experience), ("language_proficiency", Language)):
             page = QWidget()
             section = QVBoxLayout(page)
             keys = list(model.model_fields)
@@ -65,9 +73,9 @@ class ProfileEditor(QWidget):
             actions.addWidget(remove)
             section.addLayout(actions)
             section.addWidget(QLabel("Use dates as required by your target form. Current: true / false, or leave unknown blank."))
-            tabs.addTab(page, group.title())
+            tabs.addTab(page, group.replace("_", " ").title())
     def pick_resume(self, key="resume_path"):
-        path, _ = QFileDialog.getOpenFileName(self, "Choose resume", "", "Resumes (*.pdf *.doc *.docx)")
+        path, _ = QFileDialog.getOpenFileName(self, "Choose resume", "", "Documents (*.pdf *.doc *.docx *.txt *.rtf)")
         if path:
             self.inputs[key].setText(path)
 
@@ -80,15 +88,18 @@ class ProfileEditor(QWidget):
             table.setItem(row, col, QTableWidgetItem("" if value is None else str(value)))
 
     def profile(self):
-        data = {k: (w.toPlainText() if isinstance(w, QPlainTextEdit) else w.text()).strip() for k, w in self.inputs.items()}
+        data = {k: (w.toPlainText() if isinstance(w, QPlainTextEdit) else w.text()).strip() if not isinstance(w, QComboBox) else w.currentData() for k, w in self.inputs.items()}
+        if not data["employment_age"]:
+            data["employment_age"] = None
         for group, (table, keys) in self.tables.items():
             rows = []
             for row in range(table.rowCount()):
                 entry = {key: table.item(row, col).text().strip() if table.item(row, col) else "" for col, key in enumerate(keys)}
                 if not any(entry.values()):
                     continue
-                if "current" in entry and not entry["current"]:
-                    entry["current"] = None
+                for key in ("current", "fluent"):
+                    if key in entry and not entry[key]:
+                        entry[key] = None
                 rows.append(entry)
             data[group] = rows
         return ApplicantProfile.model_validate(data)
@@ -97,8 +108,12 @@ class ProfileEditor(QWidget):
         for name, widget in self.inputs.items():
             if isinstance(widget, QPlainTextEdit):
                 widget.setPlainText(getattr(profile, name))
+            elif isinstance(widget, QComboBox):
+                value = getattr(profile, name)
+                widget.setCurrentIndex(0 if value is None else 1 if value else 2)
             else:
-                widget.setText(getattr(profile, name))
+                value = getattr(profile, name)
+                widget.setText("" if value is None else str(value))
         for group, (table, keys) in self.tables.items():
             table.setRowCount(0)
             for entry in getattr(profile, group):
@@ -124,7 +139,7 @@ class ProfileDialog(QDialog):
         try:
             self.profile()
         except ValueError:
-            QMessageBox.warning(self, "Check profile", "Current must be true, false, or blank.")
+            QMessageBox.warning(self, "Check profile", "Boolean fields must be true, false, or blank. Age must be a whole number or blank.")
             return
         self.accept()
 

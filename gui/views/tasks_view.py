@@ -1,4 +1,4 @@
-"""One Workday engine, one persisted application model, one sequential queue."""
+"""One local extension engine, one persisted application model, one sequential queue."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
@@ -31,7 +31,7 @@ class TaskDialog(QDialog):
         form.addRow("Applicant profile", self.profile)
         self.auto_submit = QCheckBox("Submit automatically after all fields and review are verified")
         form.addRow(self.auto_submit)
-        form.addRow(QLabel("Workday, Greenhouse, Lever and Ashby: autofill preview. Other HTTPS URLs: tracking only."))
+        form.addRow(QLabel("28 local adapters in Chromium. Other HTTPS pages are opened for detection; unmatched forms remain manual."))
         layout.addLayout(form)
         self.error = QLabel("")
         self.error.setWordWrap(True)
@@ -55,7 +55,7 @@ class TaskDialog(QDialog):
         return ApplicationRun(job_url=canonical_url(self.url.text().strip(), supported_only=False),
                               company=self.company.text().strip(), role=self.role.text().strip() or "Internship",
                               profile_name=self.profile.currentText(), profile_snapshot=self.store.profiles()[self.profile.currentText()],
-                              auto_submit=self.auto_submit.isChecked(), **self.store.get("automation_options", {}))
+                              auto_submit=self.auto_submit.isChecked(), **{**self.store.get("automation_options", {}), "browser": "chromium"})
 
 
 class TasksView(QWidget):
@@ -187,7 +187,7 @@ class TasksView(QWidget):
             self.notice.setText("Select an application first.")
 
     def start_all_tasks(self):
-        self._queue = [r.id for r in self.tasks if r.status in {"queued", "failed"} and not r.is_submitted and not r.submitted_at and r.pipeline == "saved" and ats_name(r.job_url) and r.id != self._active_id]
+        self._queue = [r.id for r in self.tasks if r.status in {"queued", "failed"} and not r.is_submitted and not r.submitted_at and r.pipeline == "saved" and r.id != self._active_id]
         self._start_next()
 
     def _start_next(self):
@@ -206,9 +206,6 @@ class TasksView(QWidget):
         if run.is_submitted or run.submitted_at or run.pipeline != "saved":
             self.notice.setText("This application is already in your pipeline and will not restart.")
             return
-        if not ats_name(run.job_url):
-            self.notice.setText("This site is tracking-only. Apply in your browser, then update the tracker.")
-            return
         inspect_only = run.status == "ready_for_review"
         if inspect_only and self.service.show_browser(run.id):
             return
@@ -221,7 +218,7 @@ class TasksView(QWidget):
                 run.status = "running"
                 run.interventions = []
                 self.render()
-                self.notice.setText("Preparing application. " + ("Automatic submission authorized for this job." if run.auto_submit else "Final submission remains manual."))
+                self.notice.setText("Preparing application in Chromium. Employer sign-in may be required again. " + ("Automatic submission authorized for this job." if run.auto_submit else "Final submission remains manual."))
         except Exception as exc:
             run.status = "failed"
             run.interventions = [InterventionRequest(kind="browser", message=f"Check the profile, URL and operating-system keychain ({type(exc).__name__}).")]
@@ -244,7 +241,7 @@ class TasksView(QWidget):
         self._queue = []
         if self._active_id:
             self.service.pause(self._active_id)
-            self.notice.setText("Pausing after the current browser operation.")
+            self.notice.setText("Stopping adapter writes and pending waits.")
 
     def cancel(self):
         run = self.selected()
