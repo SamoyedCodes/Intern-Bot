@@ -1,12 +1,10 @@
 # Intern-Bot
 
-A local Python/PySide6 desktop application with SpeedyApply-style profiles, application autofill, saved responses, tracking, and optional AI assistance. One automation engine fills known controls, reads values back, and records incomplete fields. Workday has a dedicated workflow; Greenhouse, Lever and Ashby have a shared conventional-form adapter.
+A local Python/PySide6 desktop app for application profiles, autofill, exact approved answers, tracking, queues and optional Gemini text assistance. Its autofill engine runs all **28 site-specific SpeedyApply 2.28.0 adapters** inside a local Chromium extension, controlled directly through Playwright.
 
-The engine is a **preview**. Fictional browser tests pass; reliability across real employers still needs live acceptance testing. See the [capability comparison and limits](docs/speedyapply-parity.md). This is built into the desktop app; no Chrome/Firefox extension installation is needed.
+This is a private personal integration of proprietary user-supplied code. It is not an open-source release of SpeedyApply. Normal autofill requires no SpeedyApply account or server. See the [acceptance record](docs/speedyapply-acceptance.md) for fixture coverage, benchmarks and live-site limitations.
 
 ## Install and run (macOS)
-
-Use Python 3.11 or newer. Create the virtual environment once:
 
 ```sh
 python3 -m venv .venv
@@ -16,56 +14,48 @@ python -m playwright install chromium
 python main.py
 ```
 
-Choose **Settings → Browser** to use installed Google Chrome or Playwright's Firefox build. For Firefox, also run `python -m playwright install firefox`. These use isolated app-owned profiles, not your normal browser tabs or passwords. Firefox launch is currently unverified on this host; see the acceptance record.
-
-For subsequent launches:
+The desktop loads the checked-in extension automatically into bundled Chromium. You do not install it in your regular browser. Playwright is pinned to 1.59.0 for MV3 worker-restart support. Node is needed only to rebuild the adapter package:
 
 ```sh
-source .venv/bin/activate
-python main.py
+npm ci --prefix extension --ignore-scripts
+npm run build --prefix extension
+npm test --prefix extension
 ```
 
-Credentials require macOS Keychain. There is no plaintext fallback. Browser ownership currently uses POSIX file locking; other platforms have not been validated.
+Existing Chrome/Firefox records and browser directories remain intact. Resuming opens a separate Chromium session and may require employer sign-in again. On first use, pending drafts lose old field-verification checkpoints and must be checked by the replacement engine. Historical applications and submission-attempt flags are preserved.
 
 ## Workflow
 
-1. Open **Profile → Applicant details**. Enter explicit address components, education and experience rows, skills, languages, optional EEO answers, and select an existing resume/cover letter. Click **Save profile**. Use **Save as new profile** for role-specific variants or import/export profile JSON.
-2. Under **Workday credentials**, enter the employer site and load or save its login. **Generate login** uses your email or optional catchall domain and creates a password locally; click **Save login** to store it. Account consent and activation still need explicit approval/manual action.
-3. In **Tasks**, choose **New application**, select a profile, and add a job you genuinely intend to apply to. Workday, hosted Greenhouse, Lever and Ashby URLs support autofill. Other HTTPS jobs can be tracked manually. Browser and continuation defaults come from Settings.
-4. Use **Start / Resume**, or **Start queue** for sequential queued/failed applications. Applications waiting for input or review are not automatically restarted.
-5. When paused, open **Details / Answers**, approve an exact answer or optional omission, and resume. Complete email verification or CAPTCHA in the browser when requested.
-6. Use **Edit application profile** to change that application's profile snapshot or resume. Revisit its first section before resuming so changed facts are reverified. Saving the main profile affects new applications only.
-7. At **Ready for review**, inspect and submit yourself. **Mark submitted by me** records your confirmation. Alternatively, explicitly authorize automatic submission for that job when creating it. Automatic submission requires verified fields/review, persists its attempt before clicking, and never retries an ambiguous submission. Only a recognized employer receipt marks it applied automatically.
-8. Use **Tracker / Notes / CSV** to update pipeline status, save a job description and notes, view activity totals, or import/export applications. Imports never start applications. Submitted, interviewing, rejected, offered and archived jobs stay out of the queue.
-9. Optional: save a Gemini key/model in Settings. **Compare profiles with Gemini…** evaluates saved career profiles against your pasted job description. **Details / Answers → Draft answer with Gemini…** produces an editable draft. Each request previews its outgoing context and requires consent. Drafts only become reusable after explicit answer approval.
+1. Open **Profile → Applicant details** and enter explicit contact facts, education, experience, language proficiency and optional employment eligibility. Unknown Boolean answers stay unknown. Choose a resume and optional cover letter. Documents retain their original bytes and file types.
+2. Use named profiles for different applications. Existing profile JSON, education and experience rows, saved answers and tracker records remain available. Saving a main profile affects new applications; **Edit application profile** updates an existing application's snapshot.
+3. Under **Workday credentials**, save/load employer credentials through the operating-system keychain. Recognized Workday authentication uses credentials only for that employer. CAPTCHA, activation and unfamiliar sign-in flows require manual completion.
+4. In **Tasks → New application**, choose a profile and enter an HTTPS job URL. All 28 routing rules and the DOM-detected Phenom adapter are available. Other HTTPS pages can open for detection; unmatched pages remain manual. Ambiguous application frames require a handoff.
+5. Use **Start / Resume** or **Start queue**. Queues run sequentially and skip submitted applications and jobs awaiting input/review. Pause/cancel stops subsequent adapter writes and pending timers/observers.
+6. Resolve missing facts or conflicts in **Details / Answers**. Approvals match the exact normalized question, profile, application/employer/global scope and country. Existing conflicting values are preserved until resolved. Broad vendor guesses and hard-coded personal answers are blocked.
+7. Review before submission. Automatic submission is off by default and requires per-job authorization plus verified fields and review. The attempt is saved before clicking and never retried automatically. A click or vendor “saved application” event is not success; only a recognized employer receipt or **Mark submitted by me** confirms it.
+8. Use **Tracker / Notes / CSV** for pipeline status, descriptions, notes, imports and exports. Imports do not start applications.
+9. Optional Gemini assistance remains in the desktop. **Compare profiles with Gemini…** and **Draft answer with Gemini…** preview their outgoing context and request consent. Drafts require explicit approval before becoming reusable answers.
 
-**Profile → Approved answers** lets you inspect/remove outdated approvals. Matching uses exact normalized question wording, named profile, application/employer/global scope, and country context. On shared ATS hosts, employer scope includes the tenant path. Unknown answers are never guessed. Turning off saved-answer reuse still allows answers approved for that particular application.
-
-The browser stays open for handoffs. Closing the app closes app-owned sessions. Restarting retains checkpoints; resume the employer's saved draft when prompted.
-
-Chrome/Chromium launches omit `--enable-automation` and disable Blink's `AutomationControlled` flag. Visible sessions use the native window size and browser locale, without user-agent or hardware fingerprint overrides. Restart the app to apply launch changes to existing sessions. These measures do not guarantee that automation is undetectable or prevent all Workday errors. A visible `VPS|…` error or the “Something went wrong / Please refresh” page pauses the run for manual recovery without automatic refresh or repeated submission. The error code alone does not establish the cause. CAPTCHA remains a manual handoff.
+The browser stays open for manual handoffs. **Settings** controls automatic continuation and approved-answer reuse. Closing the app closes app-owned sessions; reopening retains local records.
 
 ## Data and privacy
 
-- `data/intern-bot.sqlite3`: structured profiles, application runs, approved answers, field assessments, and local event history. Personal data is not encrypted; the database uses owner-only file permissions.
-- Operating-system keychain, service `intern-bot`: employer logins and saved Gemini API keys.
-- `data/browser/<run-hash>/`: isolated persistent browser sessions with exclusive ownership locks.
+- `data/intern-bot.sqlite3` is authoritative for profiles, answers, application snapshots, assessments and history. It has owner-only permissions; personal data is not encrypted.
+- The operating-system keychain stores employer credentials and Gemini API keys. There is no plaintext credential fallback.
+- `data/browser/<run-hash>/` contains isolated app-owned sessions with exclusive locks. The replacement uses a new directory namespace and preserves old directories.
+- The extension stores run/tab/document bindings in memory-only `storage.session`. It does not persist profile facts, documents, credentials or approvals.
+- Normal autofill has no SpeedyApply, Supabase, AI, telemetry or local HTTP-server dependency. Optional Gemini requests contain only the editable context shown in the consent dialog.
 
-The app does not automatically import old JSON state or read `.env`. The previous plugin engine and extension remain removed. Existing structured profiles, application runs and Chromium browser sessions remain available; existing profile data and approvals belong to **Default**. Explicit JSON profile import/export uses the current profile schema. Old JSON files, exports and installed extension data are left untouched.
+The original XPI, exact source and notices are preserved under `third_party/speedyapply/2.28.0/`. The loaded extension contains only the adapted dependency graph and local controls. See [extension internals](extension/README.md).
 
-Normal automation sends no data to AI. Optional Gemini text assistance sends only the editable, consented context shown in its dialog. The default context contains career facts and job information, excluding structured contact/identity/EEO fields, file contents, browser HTML, screenshots and credentials. Free-text facts can still contain personal information: review them before sending. Diagnostics omit provider bodies, passwords and raw browser exceptions. Browser Use recovery remains disabled; saving an API key does not enable browser observation sharing. `requirements-browser-use.txt` is not needed for normal operation. No new dependencies were added for text assistance or tracking.
-
-## Tests
+## Tests and limitations
 
 ```sh
-source .venv/bin/activate
-QT_QPA_PLATFORM=offscreen python -m pytest -q
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
+npm test --prefix extension
+PYTHONPATH=. .venv/bin/python tools/benchmark_adapters.py --output /tmp/intern-bot-benchmark.json
 ```
 
-Browser tests use fictional forms and block page network requests. Set `INTERN_BOT_TEST_BROWSER=/absolute/path/to/chromium` only if testing against a different browser executable.
+Tests use fictional forms and intercept their network requests. They exercise the actual adapter functions, not just routing names. Unknown widgets, unrecognized upload receipts, extra/unmatched rows and unrecognized review summaries produce manual handoffs. Only explicitly recognized native/accessible controls can be verified. Final multi-step review requires independently labeled saved values; unsupported summaries cannot be automatically submitted.
 
-For targeted cross-browser checks, set `INTERN_BOT_TEST_ENGINE=chrome` or `INTERN_BOT_TEST_ENGINE=firefox`. Install the matching browser first. Gemini tests use mocked responses and never call a paid API.
-
-## Acceptance and limitations
-
-See [acceptance record](docs/acceptance.md). Unsupported controls, ambiguous authentication, embedded frames/shadow roots, generic repeated-section layouts and unrecognized review summaries cause handoffs. Workday pages with the same section heading may need manual navigation. There is no cloud sync, installable browser extension, mailbox integration, job discovery, resume generation or 25+ ATS compatibility claim. Live Gemini access and live employer submissions have not been tested.
+Fixture success establishes implementation coverage, not reliability on every employer's current application form. Live employer acceptance and live submissions have not been performed. Browser ownership currently uses POSIX locking; other operating systems are unverified.
