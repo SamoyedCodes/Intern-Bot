@@ -1,0 +1,2 @@
+# Optional evaluation dependency. The privacy-gated adapter is disabled by default.
+browser-use==0.13.10

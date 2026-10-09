@@ -1,0 +1,233 @@
+import os
+from pathlib import Path
+os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+STYLES = (Path(__file__).parents[1] / 'gui' / 'styles.qss').read_text()
+
+from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtWidgets import QApplication, QPushButton
+from core.automation.models import ApplicantProfile, ApplicationRun
+from core.storage.local_store import LocalStore
+from core.storage.vault import CredentialVault
+from gui.main_window import MainWindow
+from gui.views.application_dialogs import RunDetailsDialog, AnswerBankDialog
+from tests.test_verified_storage import MemoryKeychain
+
+
+def desktop(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(STYLES)
+    store = LocalStore(tmp_path / 'state.db', CredentialVault(MemoryKeychain()))
+    return app, MainWindow(store)
+
+
+def test_single_profile_answers_and_restart_state(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    app, window = desktop(tmp_path)
+    try:
+        view = window.profile_view
+        view.editor.inputs['first_name'].setText('Ada')
+        view.editor.inputs['country'].setText('Singapore')
+        table, keys = view.editor.tables['education']
+        view.editor.add_row(table, keys, {'school':'Example University', 'degree':'BSc'})
+        assert view.save_profile()
+        profile = ApplicantProfile.model_validate(window.store.get('verified_profile'))
+        assert profile.education[0].school == 'Example University'
+        assert profile.country == 'Singapore'
+        run = ApplicationRun(company='Example', job_url='https://a.wd1.myworkdayjobs.com/job/R123', profile_snapshot=profile, status='running')
+        details = RunDetailsDialog(window.store, run)
+        details.questions.setCurrentText('Require sponsorship?')
+        details.kind.setCurrentIndex(2)
+        details.save_answer()
+        assert window.store.answers()[0].value is False
+        bank = AnswerBankDialog(window.store)
+        bank.table.setCurrentCell(0, 0)
+        bank.remove()
+        assert window.store.answers() == []
+        window.tasks_view.add_task(run)
+        window.tasks_view.load_state()
+        assert window.tasks_view.tasks[0].status == 'needs_input'
+        assert window.store.get_run(run.id).status == 'needs_input'
+        window.tasks_view.add_task(ApplicationRun(company='Example', job_url=run.job_url+'?source=other'))
+        assert len(window.tasks_view.tasks) == 1
+        labels = [button.text() for button in window.findChildren(QPushButton)]
+        assert 'Edit verified engine profile' not in labels
+        assert 'Export Extension JSON' not in labels
+        window._select_nav(1)
+        window.show()
+        app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        app.processEvents()
+        window.grab().save(str(tmp_path/'profile.png'))
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_queue_starts_only_one_task_and_skips_handoffs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    app, window = desktop(tmp_path)
+    try:
+        view = window.tasks_view
+        tasks = [ApplicationRun(company=str(i), job_url=f'https://a.wd1.myworkdayjobs.com/job/R{i}') for i in range(3)]
+        tasks[1].status = 'needs_input'
+        view.tasks = tasks
+        started = []
+        def start(run):
+            started.append(run.id)
+            view._active_id = run.id
+        monkeypatch.setattr(view, '_start_task', start)
+        view.start_all_tasks()
+        assert started == [tasks[0].id]
+        assert view._queue == [tasks[2].id]
+        view._active_id = None
+        view._start_next()
+        assert started == [tasks[0].id, tasks[2].id]
+    finally:
+        window.close()
+
+
+def test_credentials_and_catchall_do_not_write_password_to_sqlite(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    app, window = desktop(tmp_path)
+    try:
+        view = window.profile_view
+        view.site.setText('company.wd1.myworkdayjobs.com')
+        view.catchall.setText('applications.example.test')
+        view.generate_credential()
+        assert view.username.text() == 'company_intern@applications.example.test'
+        password = view.password.text()
+        assert len(password) == 18
+        view.save_credential()
+        assert view.password.text() == ''
+        assert password.encode() not in window.store.path.read_bytes()
+        view.load_credential()
+        assert view.password.text() == password
+        assert window.store.get('catchall_domain') == 'applications.example.test'
+    finally:
+        window.close()
+
+
+def test_new_application_uses_only_saved_structured_profile(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    app, window = desktop(tmp_path)
+    try:
+        window.store.put('verified_profile', ApplicantProfile(first_name='Ada').model_dump())
+        # Stale desktop data is never consulted.
+        window.store.put('desktop', {'profile': {'first_name': 'Old'}, 'tasks': [{'job_url':'bad'}]})
+        view = window.tasks_view
+        run = ApplicationRun(job_url='https://a.wd1.myworkdayjobs.com/job/R1')
+        view.add_task(run)
+        captured = []
+        monkeypatch.setattr(view.service, 'start', lambda r, p, c, **kwargs: captured.append((r,p,c)) or True)
+        view._start_task(run)
+        assert captured[0][1].first_name == 'Ada'
+        assert view._active_id == run.id
+        assert not hasattr(run, 'engine')
+    finally:
+        window.close()
+
+
+def test_gui_workflow_uses_real_browser_service_and_answer_dialog(tmp_path, monkeypatch):
+    import asyncio
+    import json
+    import time
+    import hashlib
+    from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QDialogButtonBox
+    from playwright.async_api import Page
+    from core.automation.models import Education, Experience
+
+    monkeypatch.chdir(tmp_path)
+    app, window = desktop(tmp_path)
+    url = 'https://fixture.wd1.myworkdayjobs.com/job/GUI_R1'
+    fixture = (Path(__file__).parent / 'fixtures/workday.html').read_text()
+    requests = []
+    original_goto = Page.goto
+    async def intercepted_goto(page, destination, **kwargs):
+        assert destination == url
+        async def local_only(route):
+            requests.append(route.request.url)
+            if route.request.url == url and route.request.method == 'GET':
+                await route.fulfill(status=200, content_type='text/html', body=fixture)
+            else:
+                await route.abort()
+        # Install after the service origin guard; all requests remain local.
+        await page.route('**/*', local_only)
+        return await original_goto(page, destination, **kwargs)
+    monkeypatch.setattr(Page, 'goto', intercepted_goto)
+    view = window.tasks_view
+    def click(label, root=None):
+        button = next(b for b in (root or view).findChildren(QPushButton) if b.text() == label)
+        QTest.mouseClick(button, Qt.LeftButton)
+    def until(predicate, seconds=25):
+        deadline = time.monotonic() + seconds
+        while not predicate() and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(.02)
+        assert predicate(), [(r.status, r.stage, r.interventions) for r in view.tasks]
+    try:
+        resume = tmp_path / 'resume.pdf'
+        resume.write_bytes(b'%PDF-1.4\nGUI fixture\n%%EOF')
+        profile = ApplicantProfile(first_name='Ada',last_name='Example',country='Singapore',resume_path=str(resume),education=[Education(school='Example University',degree='BSc')],experience=[Experience(employer='Example Co',job_title='Intern')])
+        run = ApplicationRun(job_url=url, company='Fixture', profile_snapshot=profile, browser=os.environ.get('INTERN_BOT_TEST_ENGINE','chromium'))
+        assert not run.auto_submit
+        view.add_task(run)
+        view.table.selectRow(0)
+        window.show()
+        app.processEvents()
+        # Restore an explicit session cookie through the production browser manager.
+        session_key = run.id if run.browser == 'chromium' else run.id + ':' + run.browser
+        directory = tmp_path / 'data/browser' / hashlib.sha256(session_key.encode()).hexdigest()[:24]
+        directory.mkdir(parents=True, mode=0o700)
+        saved = directory / 'session-cookies.json'
+        saved.write_text(json.dumps([{'name':'gui_session','value':'fixture-only','url':url,'httpOnly':True,'secure':True}]))
+        os.chmod(saved,0o600)
+        click('Start / Resume')
+        until(lambda: view.service.busy)
+        click('Pause')
+        until(lambda: not view.service.busy and view._active_id is None)
+        assert view.tasks[0].status == 'needs_input'
+        click('Start / Resume')
+        until(lambda: not view.service.busy and view._active_id is None)
+        assert view.tasks[0].stage == 'questions'
+        assert view.tasks[0].interventions[0].question == 'Available for this internship?'
+        errors = []
+        def approve():
+            try:
+                dialog = app.activeModalWidget()
+                assert isinstance(dialog, RunDetailsDialog)
+                assert dialog.questions.currentText() == 'Available for this internship?'
+                dialog.kind.setCurrentIndex(2)
+                click('Save approved answer', dialog)
+                assert 'saved' in dialog.notice.text().lower()
+                close = dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.Close)
+                QTest.mouseClick(close,Qt.LeftButton)
+            except Exception as error:
+                errors.append(error)
+                if app.activeModalWidget():
+                    app.activeModalWidget().reject()
+        QTimer.singleShot(50,approve)
+        click('Details / Answers')
+        assert not errors, errors
+        assert window.store.answers()[0].value is False
+        click('Start / Resume')
+        until(lambda: not view.service.busy and view._active_id is None)
+        final = view.tasks[0]
+        assert final.status == 'ready_for_review', final.interventions
+        assert all(f.disposition == 'verified' for f in final.fields.values())
+        assert window.store.get_run(run.id).status == 'ready_for_review'
+        assert view.table.item(0,3).text() == 'Ready for review'
+        async def verify():
+            manager, adapter = view.service.sessions[run.id]
+            assert any(c['name']=='gui_session' and c['value']=='fixture-only' for c in await manager.context.cookies(url))
+            assert await adapter.page.evaluate('window.submissions') == 0
+            assert await adapter.page.locator('[data-intern-review][data-label="Resume"]').get_attribute('data-value') == resume.name
+            assert await adapter.page.locator('[data-intern-review][data-label="Company"]').count() == 1
+        asyncio.run_coroutine_threadsafe(verify(), view.service.loop).result(timeout=10)
+        assert requests == [url]
+        assert not final.submission_attempted
+        window.grab().save(str(tmp_path/'gui-final-review.png'))
+    finally:
+        window.close()
+        app.processEvents()

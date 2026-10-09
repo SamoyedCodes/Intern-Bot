@@ -1,553 +1,324 @@
-import asyncio
-import threading
-from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional
-from urllib.parse import urlparse
-
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QFont, QFontMetrics
+"""One Workday engine, one persisted application model, one sequential queue."""
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView,
-    QDialog,
-    QDialogButtonBox,
-    QFrame,
-    QGridLayout,
-    QHBoxLayout,
-    QHeaderView,
-    QLabel,
-    QLineEdit,
-    QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
-    QVBoxLayout,
-    QWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from core.storage import JsonStore
-from plugins.manager import PluginManager
-
-
-@dataclass
-class ApplicationTask:
-    company: str
-    role: str
-    job_url: str
-    platform: str = "Workday"
-    phase: str = "phase_1_login"
-    status: str = "Queued"
-    note: str = "Ready"
-
-    def to_dict(self):
-        return {
-            "company": self.company,
-            "role": self.role,
-            "job_url": self.job_url,
-            "platform": self.platform,
-            "phase": self.phase,
-            "status": self.status,
-            "note": self.note,
-        }
-
-    @classmethod
-    def from_dict(cls, data):
-        phase = data.get("phase", "phase_1_login")
-        status = cls._normalize_status(data.get("status", "Queued"), phase)
-        return cls(
-            company=data.get("company", "Unknown Company"),
-            role=data.get("role", "Internship"),
-            job_url=data.get("job_url", ""),
-            platform=data.get("platform", "Workday"),
-            phase=phase,
-            status=status,
-            note=data.get("note", "Ready"),
-        )
-
-    @staticmethod
-    def _normalize_status(status: str, phase: str):
-        if status == "Awaiting Activation":
-            return "Needs Review"
-        if status == "Needs Review" and phase != "phase_1_awaiting_activation":
-            if phase == "phase_3_application_questions_manual":
-                return "Manual Questions"
-            if phase == "phase_3_review_submit_manual":
-                return "Manual Review"
-            return "Manual Required"
-        return status
+from core.automation.models import ApplicantProfile, ApplicationRun, InterventionRequest, ats_name, canonical_url, job_identity, now
+from core.automation.service import AutomationService
+from core.storage.local_store import LocalStore
+from gui.views.application_dialogs import ProfileDialog, RunDetailsDialog
+from gui.views.tracker_dialog import TrackerDialog
 
 
 class TaskDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Create Application Task")
-        self.setModal(True)
+        self.store = parent.store if parent else LocalStore()
+        self.setWindowTitle("New application")
         self.setMinimumWidth(520)
-
         layout = QVBoxLayout(self)
-        layout.setSpacing(14)
-
-        title = QLabel("New Application")
-        title.setObjectName("dialogTitle")
-        layout.addWidget(title)
-
-        self.company = QLineEdit()
-        self.role = QLineEdit()
-        self.url = QLineEdit()
-        self.company.setPlaceholderText("Company")
-        self.role.setPlaceholderText("Software Engineering Intern")
+        form = QFormLayout()
+        self.company, self.role, self.url = QLineEdit(), QLineEdit(), QLineEdit()
         self.url.setPlaceholderText("https://company.wd1.myworkdayjobs.com/...")
-
-        layout.addWidget(self.company)
-        layout.addWidget(self.role)
-        layout.addWidget(self.url)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Save)
-        buttons.accepted.connect(self.accept)
+        for label, widget in [("Company", self.company), ("Role", self.role), ("Job URL", self.url)]:
+            form.addRow(label, widget)
+        self.profile = QComboBox()
+        self.profile.addItems(self.store.profiles())
+        self.profile.setCurrentText(self.store.get("active_profile", "Default"))
+        form.addRow("Applicant profile", self.profile)
+        self.auto_submit = QCheckBox("Submit automatically after all fields and review are verified")
+        form.addRow(self.auto_submit)
+        form.addRow(QLabel("Workday, Greenhouse, Lever and Ashby: autofill preview. Other HTTPS URLs: tracking only."))
+        layout.addLayout(form)
+        self.error = QLabel("")
+        self.error.setWordWrap(True)
+        layout.addWidget(self.error)
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.validate)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def get_task(self) -> ApplicationTask:
-        return ApplicationTask(
-            company=self.company.text().strip() or "Unknown Company",
-            role=self.role.text().strip() or "Internship",
-            job_url=self.url.text().strip(),
-        )
+    def validate(self):
+        try:
+            canonical_url(self.url.text().strip(), supported_only=False)
+        except ValueError as exc:
+            self.error.setText(str(exc))
+            return
+        if self.auto_submit.isChecked() and QMessageBox.question(self, "Authorize this application", "Allow Intern-Bot to submit this specific application using the selected profile and approved answers? It will stop if anything cannot be verified.") != QMessageBox.Yes:
+            return
+        self.accept()
 
-
-class StatCard(QFrame):
-    def __init__(self, label: str, value: str, accent: str):
-        super().__init__()
-        self.setObjectName("statCard")
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(6)
-
-        self.value_label = QLabel(value)
-        self.value_label.setObjectName("statValue")
-        self.value_label.setStyleSheet(f"color: {accent};")
-
-        label_widget = QLabel(label)
-        label_widget.setObjectName("statLabel")
-
-        layout.addWidget(self.value_label)
-        layout.addWidget(label_widget)
-
-    def set_value(self, value: int):
-        self.value_label.setText(str(value))
-
-
-class FitTextLabel(QLabel):
-    """Single-line table label that shrinks text instead of eliding it."""
-
-    def __init__(self, text: str, color=None):
-        super().__init__(text)
-        self._base_font = self.font()
-        self._color = color
-        self.setObjectName("fitTaskCell")
-        self.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        self.setToolTip(text)
-        self.setMinimumWidth(1)
-        if color:
-            self.setStyleSheet(f"color: {color};")
-        self._fit_text()
-
-    def sizeHint(self):
-        fm = QFontMetrics(self._base_font)
-        width = fm.horizontalAdvance(self.text()) + 12
-        return QSize(min(width, 250), super().sizeHint().height())
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._fit_text()
-
-    def _fit_text(self):
-        width = max(1, self.width() - 12)
-        base_size = self._base_font.pointSize() if self._base_font.pointSize() > 0 else 10
-
-        for size in range(base_size, 0, -1):
-            candidate = QFont(self._base_font)
-            candidate.setPointSize(size)
-            if QFontMetrics(candidate).horizontalAdvance(self.text()) <= width:
-                self.setFont(candidate)
-                return
-
-        smallest = QFont(self._base_font)
-        smallest.setPointSize(1)
-        self.setFont(smallest)
+    def application(self):
+        return ApplicationRun(job_url=canonical_url(self.url.text().strip(), supported_only=False),
+                              company=self.company.text().strip(), role=self.role.text().strip() or "Internship",
+                              profile_name=self.profile.currentText(), profile_snapshot=self.store.profiles()[self.profile.currentText()],
+                              auto_submit=self.auto_submit.isChecked(), **self.store.get("automation_options", {}))
 
 
 class TasksView(QWidget):
-    status_message = Signal(str)
-    task_finished = Signal(object, bool, object)
-
-    def __init__(self, scheduler=None, profile_provider: Optional[Callable[[], Dict]] = None):
+    def __init__(self, store=None):
         super().__init__()
-        self.scheduler = scheduler
-        self.profile_provider = profile_provider
-        self.plugin_manager = PluginManager()
-        self.store = JsonStore()
-        self.tasks: List[ApplicationTask] = []
-        self._loading_state = False
-        self.task_finished.connect(self._on_task_finished)
-
-        self.setObjectName("tasksView")
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 22, 24, 24)
-        root.setSpacing(18)
-
-        header = QHBoxLayout()
-        title_block = QVBoxLayout()
-        title = QLabel("Application Queue")
+        self.store = store or LocalStore()
+        self.service = AutomationService(self.store, self)
+        self.service.progress.connect(self.on_progress)
+        self.service.finished.connect(self.on_finished)
+        self.tasks = []
+        self._queue = []
+        self._active_id = None
+        self._closing = False
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 24)
+        layout.setSpacing(14)
+        title = QLabel("Applications")
         title.setObjectName("pageTitle")
-        subtitle = QLabel("Stage Workday internship applications, launch them, and review before submit.")
-        subtitle.setObjectName("pageSubtitle")
-        title_block.addWidget(title)
-        title_block.addWidget(subtitle)
-
+        layout.addWidget(title)
+        subtitle = QLabel("Prepare applications with your saved profiles, resolve missing answers, and track interviews and offers.")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
         self.search = QLineEdit()
-        self.search.setObjectName("searchInput")
-        self.search.setPlaceholderText("Search tasks")
-        self.search.textChanged.connect(self._render_table)
-
-        header.addLayout(title_block)
-        header.addStretch()
-        header.addWidget(self.search)
-        root.addLayout(header)
-
-        stats = QGridLayout()
-        stats.setHorizontalSpacing(14)
-        self.total_card = StatCard("Total Tasks", "0", "#19d68b")
-        self.ready_card = StatCard("Queued", "0", "#7c8cff")
-        self.running_card = StatCard("Running", "0", "#37a7ff")
-        self.needs_card = StatCard("Needs Review", "0", "#ffcc66")
-        stats.addWidget(self.total_card, 0, 0)
-        stats.addWidget(self.ready_card, 0, 1)
-        stats.addWidget(self.running_card, 0, 2)
-        stats.addWidget(self.needs_card, 0, 3)
-        root.addLayout(stats)
-
-        commands = QHBoxLayout()
-        self.add_btn = QPushButton("New Task")
-        self.add_btn.setObjectName("primaryButton")
-        self.add_btn.clicked.connect(self.add_task_dialog)
-
-        self.start_selected_btn = QPushButton("Start Selected")
-        self.start_selected_btn.clicked.connect(self.start_selected_task)
-
-        self.start_all_btn = QPushButton("Start All")
-        self.start_all_btn.clicked.connect(self.start_all_tasks)
-
-        self.delete_btn = QPushButton("Delete Selected")
-        self.delete_btn.setObjectName("dangerButton")
-        self.delete_btn.clicked.connect(self.delete_selected_task)
-
-        commands.addWidget(self.add_btn)
-        commands.addWidget(self.start_selected_btn)
-        commands.addWidget(self.start_all_btn)
-        commands.addStretch()
-        commands.addWidget(self.delete_btn)
-        root.addLayout(commands)
-
-        self.table = QTableWidget(0, 8)
-        self.table.setHorizontalHeaderLabels(["Company", "Role", "Platform", "Phase", "Status", "Note", "URL", "Action"])
+        self.search.setPlaceholderText("Search applications")
+        self.search.textChanged.connect(self.render)
+        layout.addWidget(self.search)
+        self.counts = QLabel("")
+        layout.addWidget(self.counts)
+        for actions in [
+            [("New application", self.add_dialog), ("Start / Resume", self.start_selected), ("Start queue", self.start_all_tasks), ("Pause", self.pause), ("Cancel selected", self.cancel)],
+            [("Details / Answers", self.details), ("Edit application profile", self.edit_profile), ("Mark submitted by me", self.mark_submitted), ("Delete selected", self.delete_selected)],
+            [("Tracker / Notes / CSV", self.tracker), ("Compare profiles with Gemini…", self.compare_profiles)],
+        ]:
+            row = QHBoxLayout()
+            for label, callback in actions:
+                button = QPushButton(label)
+                button.clicked.connect(callback)
+                row.addWidget(button)
+            row.addStretch()
+            layout.addLayout(row)
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["Company", "Role", "Stage", "Status", "Progress / Action needed", "Job URL"])
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(64)
-        self.table.setShowGrid(False)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table.verticalHeader().setDefaultSectionSize(72)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Fixed)
-        self.table.horizontalHeader().resizeSection(7, 120)
-        self.table.setTextElideMode(Qt.ElideNone)
-        root.addWidget(self.table)
-
+        self.table.setWordWrap(True)
+        layout.addWidget(self.table)
+        self.notice = QLabel("Preview: live employer acceptance testing remains pending.")
+        self.notice.setWordWrap(True)
+        layout.addWidget(self.notice)
         self.load_state()
 
-    def add_task_dialog(self):
-        dialog = TaskDialog(self)
-        if dialog.exec() != QDialog.Accepted:
-            return
+    def load_state(self):
+        self.tasks = self.store.runs()
+        for run in self.tasks:
+            if run.status == "running":
+                run.status = "needs_input"
+                run.interventions = [InterventionRequest(kind="browser", message="Interrupted application. Resume to inspect the saved draft.")]
+                self.store.save_run(run)
+        self.render()
 
-        task = dialog.get_task()
-        if not task.job_url:
-            self.status_message.emit("A task needs a job URL.")
-            return
-        self.add_task(task)
+    def filtered(self):
+        query = self.search.text().strip().casefold()
+        return [r for r in self.tasks if query in f"{r.company} {r.role} {r.job_url}".casefold()]
 
-    def add_task(self, task: ApplicationTask):
-        self.tasks.append(task)
-        self._render_table()
-        self.save_state()
-        self.status_message.emit(f"Queued {task.role} at {task.company}.")
-
-    def start_selected_task(self):
+    def selected(self):
         row = self.table.currentRow()
-        if row < 0:
-            self.status_message.emit("Select a task first.")
-            return
-        task = self._task_for_visible_row(row)
-        if task:
-            self._start_task(task)
-
-    def start_all_tasks(self):
-        if not self.tasks:
-            self.status_message.emit("No tasks to start.")
-            return
-        for task in list(self.tasks):
-            if task.status in {"Queued", "Failed", "Paused", "Needs Review", "Manual Required", "Manual Questions", "Manual Review"}:
-                self._start_task(task)
-
-    def delete_selected_task(self):
-        row = self.table.currentRow()
-        task = self._task_for_visible_row(row)
-        if not task:
-            self.status_message.emit("Select a task to delete.")
-            return
-        self.tasks.remove(task)
-        self._render_table()
-        self.save_state()
-        self.status_message.emit(f"Deleted {task.company} task.")
-
-    def _start_task(self, task: ApplicationTask):
-        plugin = self.plugin_manager.get_plugin_for_url(task.job_url)
-        if not plugin:
-            task.status = "Failed"
-            task.note = "No ATS plugin matched this URL"
-            self._render_table()
-            self.save_state()
-            self.status_message.emit(task.note)
-            return
-
-        task.platform = plugin.portal_name
-        if plugin.portal_name == "Workday":
-            task.company = self._company_name_from_workday_url(task.job_url)
-        task.status = "Running"
-        task.note = "Launching browser"
-        self._render_table()
-        self.save_state()
-
-        profile = self._get_profile_for_task(task)
-        worker = threading.Thread(
-            target=self._run_plugin_task_in_thread,
-            args=(task, plugin, profile),
-            daemon=True,
-        )
-        worker.start()
-        self.status_message.emit(f"Started {task.company}.")
-
-    def _pause_or_resume_task(self, task: ApplicationTask):
-        if task.status == "Running":
-            self.status_message.emit(f"{task.company} is already running.")
-            return
-
-        if task.status in {"Paused", "Failed", "Queued", "Needs Review", "Manual Required", "Manual Questions", "Manual Review"}:
-            self._start_task(task)
-            return
-
-        self.status_message.emit(f"{task.company} is not in a resumable state.")
-
-    def _get_profile_for_task(self, task: ApplicationTask):
-        if not self.profile_provider:
-            return {}
-
-        try:
-            return self.profile_provider(task.job_url)
-        except TypeError:
-            return self.profile_provider()
-
-    def _run_plugin_task_in_thread(self, task: ApplicationTask, plugin, profile: Dict):
-        try:
-            result = asyncio.run(plugin.apply_to_job(task.job_url, profile, {"phase": task.phase}))
-            payload = self._normalize_plugin_result(result)
-            self.task_finished.emit(task, payload["success"], payload)
-        except Exception as exc:
-            self.task_finished.emit(task, False, {"status": "Failed", "note": str(exc)})
-
-    def _normalize_plugin_result(self, result):
-        if isinstance(result, dict):
-            return {
-                "success": bool(result.get("success")),
-                "status": result.get("status") or ("Manual Required" if result.get("success") else "Failed"),
-                "phase": result.get("phase"),
-                "note": result.get("note", ""),
-            }
-
-        return {
-            "success": bool(result),
-            "status": "Manual Required" if result else "Failed",
-            "phase": None,
-            "note": "Review browser before final submit" if result else "Automation returned false",
-        }
-
-    def _on_task_finished(self, task: ApplicationTask, success: bool, result: dict):
-        task.status = result.get("status") or ("Manual Required" if success else "Failed")
-        task.note = result.get("note", "")
-        if result.get("phase"):
-            task.phase = result["phase"]
-        self._render_table()
-        self.save_state()
-        self.status_message.emit(f"{task.company}: {task.status}")
-
-    def _task_for_visible_row(self, row: int) -> Optional[ApplicationTask]:
-        if row < 0:
-            return None
-        tasks = self._filtered_tasks()
-        return tasks[row] if row < len(tasks) else None
-
-    def _filtered_tasks(self) -> List[ApplicationTask]:
-        query = self.search.text().strip().lower()
-        if not query:
-            return self.tasks
-        return [
-            task for task in self.tasks
-            if query in task.company.lower()
-            or query in task.role.lower()
-            or query in task.job_url.lower()
-        ]
-
-    def _render_table(self):
-        visible_tasks = self._filtered_tasks()
-        self.table.setRowCount(len(visible_tasks))
-        for row, task in enumerate(visible_tasks):
-            self.table.setRowHeight(row, 64)
-            values = [
-                task.company,
-                task.role,
-                task.platform,
-                self._phase_label(task.phase),
-                task.status,
-                task.note,
-                task.job_url,
-            ]
-            for col, value in enumerate(values):
-                if col in {3, 4}:
-                    color = self._status_color_name(task.status) if col == 4 else None
-                    self.table.setCellWidget(row, col, FitTextLabel(value, color=color))
-                    continue
-                if col == 5:
-                    note_label = QLabel(value)
-                    note_label.setObjectName("fitTaskCell")
-                    note_label.setWordWrap(True)
-                    note_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-                    note_label.setContentsMargins(4, 4, 4, 4)
-                    self.table.setCellWidget(row, col, note_label)
-                    continue
-                item = QTableWidgetItem(value)
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                self.table.setItem(row, col, item)
-            action = QPushButton(self._action_label(task))
-            action.setObjectName(self._action_object_name(task))
-            action.setMinimumHeight(30)
-            action.setMinimumWidth(96)
-            action.setEnabled(task.status != "Running")
-            action.clicked.connect(lambda checked=False, t=task: self._pause_or_resume_task(t))
-            self.table.setCellWidget(row, 7, action)
-        self._refresh_stats()
-
-    def _action_label(self, task: ApplicationTask):
-        if task.status == "Queued":
-            return "Start"
-        if task.status == "Running":
-            return "Running"
-        if task.status == "Needs Review":
-            return "Resume"
-        if task.status == "Manual Questions":
-            return "Manual"
-        if task.status == "Manual Review":
-            return "Review"
-        return "Resume"
-
-    def _action_object_name(self, task: ApplicationTask):
-        if task.status == "Queued":
-            return "taskStartButton"
-        if task.status == "Running":
-            return "taskRunningButton"
-        return "taskResumeButton"
-
-    def _phase_label(self, phase: str):
-        labels = {
-            "phase_1_login": "Sign In / Account",
-            "phase_1_awaiting_activation": "Email Activation",
-            "phase_2_autofill_resume": "Autofill with Resume",
-            "phase_2_my_information": "My Information",
-            "phase_2_my_experience": "My Experience",
-            "phase_3_application_questions_manual": "Application Questions - Manual",
-            "phase_3_review_submit_manual": "Review / Submit - Manual",
-        }
-        return labels.get(phase, phase)
-
-    def _refresh_stats(self):
-        counts = {
-            "total": len(self.tasks),
-            "queued": sum(1 for task in self.tasks if task.status == "Queued"),
-            "running": sum(1 for task in self.tasks if task.status == "Running"),
-            "needs": sum(1 for task in self.tasks if task.status == "Needs Review"),
-        }
-        self.total_card.set_value(counts["total"])
-        self.ready_card.set_value(counts["queued"])
-        self.running_card.set_value(counts["running"])
-        self.needs_card.set_value(counts["needs"])
-
-    def _status_color(self, status: str):
-        if status == "Running":
-            return Qt.cyan
-        if status == "Needs Review":
-            return Qt.yellow
-        if status == "Manual Required":
-            return Qt.yellow
-        if status == "Manual Questions":
-            return Qt.yellow
-        if status == "Manual Review":
-            return Qt.yellow
-        if status == "Paused":
-            return Qt.lightGray
-        if status == "Failed":
-            return Qt.red
-        return Qt.green
-
-    def _status_color_name(self, status: str):
-        colors = {
-            "Running": "#37f2ff",
-            "Needs Review": "#ffcc66",
-            "Manual Required": "#ffcc66",
-            "Manual Questions": "#ffcc66",
-            "Manual Review": "#ffcc66",
-            "Paused": "#b9c0cc",
-            "Failed": "#ff6b85",
-        }
-        return colors.get(status, "#19d68b")
+        visible = self.filtered()
+        return visible[row] if 0 <= row < len(visible) else None
 
     @staticmethod
-    def _company_name_from_workday_url(job_url):
-        parsed = urlparse(job_url)
-        host = parsed.netloc.lower()
-        if not host:
-            host = job_url.lower().split("/")[0]
-        host = host.replace("www.", "")
-        slug = host.split(".", 1)[0] if host else "Workday"
-        return slug.replace("-", " ").replace("_", " ").title()
+    def status_label(run):
+        if run.pipeline not in {"saved", "applied"}:
+            return run.pipeline.title()
+        if run.is_submitted or run.submitted_at:
+            return "Submitted by you" if run.submitted_by_user else "Applied"
+        return run.status.replace("_", " ").capitalize()
 
-    def load_state(self):
-        self._loading_state = True
-        data = self.store.load()
-        task_rows = data.get("tasks", [])
-        self.tasks = [
-            ApplicationTask.from_dict(row)
-            for row in task_rows
-            if row.get("job_url")
-        ]
-        self._loading_state = False
-        self._render_table()
+    def render(self):
+        current = self.selected() if self.table.rowCount() else None
+        visible = self.filtered()
+        self.table.setRowCount(len(visible))
+        for row, run in enumerate(visible):
+            message = run.interventions[0].message if run.interventions else f"{sum(f.disposition == 'verified' for f in run.fields.values())} fields verified"
+            stage = "Application form" if run.stage.startswith("form_") else run.stage.replace('_', ' ').title()
+            for col, text in enumerate([run.company, run.role, stage, self.status_label(run), message, run.job_url]):
+                item = QTableWidgetItem(text)
+                item.setToolTip(text)
+                self.table.setItem(row, col, item)
+            if current and current.id == run.id:
+                self.table.selectRow(row)
+        self.counts.setText(f"{len(self.tasks)} applications   •   {sum(r.status == 'queued' and r.pipeline == 'saved' and not r.is_submitted for r in self.tasks)} queued   •   {sum(r.status == 'needs_input' and r.pipeline == 'saved' and not r.is_submitted for r in self.tasks)} need input")
 
-    def save_state(self):
-        if self._loading_state:
+    def add_dialog(self):
+        dialog = TaskDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            self.add_task(dialog.application())
+
+    def add_task(self, run):
+        try:
+            run.job_url = canonical_url(run.job_url, supported_only=False)
+        except ValueError as exc:
+            self.notice.setText(str(exc))
+            return False
+        if any(job_identity(r.job_url) == job_identity(run.job_url) for r in self.tasks):
+            self.notice.setText("This job is already in the queue. Resume the existing application.")
+            return False
+        if any(r.company.casefold() == run.company.casefold() and r.role.casefold() == run.role.casefold() for r in self.tasks):
+            if QMessageBox.question(self, "Possible duplicate", "An application with this company and role already exists. Add this different URL as a separate application?") != QMessageBox.Yes:
+                return False
+        if run.profile_snapshot is None:
+            run.profile_name = self.store.get("active_profile", "Default")
+            run.profile_snapshot = self.store.profiles()[run.profile_name]
+        self.store.save_run(run)
+        self.tasks.append(run)
+        self.render()
+        return True
+
+    def start_selected(self):
+        run = self.selected()
+        if run:
+            self._start_task(run)
+        else:
+            self.notice.setText("Select an application first.")
+
+    def start_all_tasks(self):
+        self._queue = [r.id for r in self.tasks if r.status in {"queued", "failed"} and not r.is_submitted and not r.submitted_at and r.pipeline == "saved" and ats_name(r.job_url) and r.id != self._active_id]
+        self._start_next()
+
+    def _start_next(self):
+        if self._closing or self._active_id:
             return
+        while self._queue and not self._active_id:
+            run_id = self._queue.pop(0)
+            run = next((r for r in self.tasks if r.id == run_id), None)
+            if run:
+                self._start_task(run)
 
-        data = self.store.load()
-        data["tasks"] = [task.to_dict() for task in self.tasks]
-        self.store.save(data)
+    def _start_task(self, run):
+        if self._active_id:
+            self.notice.setText("Another application is running. Pause it or wait before starting this one.")
+            return
+        if run.is_submitted or run.submitted_at or run.pipeline != "saved":
+            self.notice.setText("This application is already in your pipeline and will not restart.")
+            return
+        if not ats_name(run.job_url):
+            self.notice.setText("This site is tracking-only. Apply in your browser, then update the tracker.")
+            return
+        inspect_only = run.status == "ready_for_review"
+        if inspect_only and self.service.show_browser(run.id):
+            return
+        try:
+            profile = run.profile_snapshot or ApplicantProfile.model_validate(self.store.get("verified_profile", {}))
+            credential = self.store._vault().credential(run.job_url) if ats_name(run.job_url) == "Workday" else None
+            if self.service.start(run.model_copy(deep=True), profile, credential, inspect_only=inspect_only):
+                self._active_id = run.id
+                self._queue = [i for i in self._queue if i != run.id]
+                run.status = "running"
+                run.interventions = []
+                self.render()
+                self.notice.setText("Preparing application. " + ("Automatic submission authorized for this job." if run.auto_submit else "Final submission remains manual."))
+        except Exception as exc:
+            run.status = "failed"
+            run.interventions = [InterventionRequest(kind="browser", message=f"Check the profile, URL and operating-system keychain ({type(exc).__name__}).")]
+            self.store.save_run(run)
+            self.render()
+
+    def on_progress(self, run):
+        for index, previous in enumerate(self.tasks):
+            if previous.id == run.id:
+                self.tasks[index] = run
+                break
+        self.render()
+
+    def on_finished(self, run):
+        self.on_progress(run)
+        self._active_id = None
+        self._start_next()
+
+    def pause(self):
+        self._queue = []
+        if self._active_id:
+            self.service.pause(self._active_id)
+            self.notice.setText("Pausing after the current browser operation.")
+
+    def cancel(self):
+        run = self.selected()
+        if not run:
+            return
+        self._queue = [i for i in self._queue if i != run.id]
+        if run.id == self._active_id:
+            self.service.pause(run.id, cancel=True)
+        else:
+            run.status = "cancelled"
+            self.store.save_run(run)
+            self.render()
+
+    def details(self):
+        run = self.selected()
+        if run and not self._active_id:
+            RunDetailsDialog(self.store, run, self).exec()
+        else:
+            self.notice.setText("Select an application and pause any active queue before editing answers.")
+
+    def compare_profiles(self):
+        from gui.views.assistant_dialog import AssistantDialog
+        run = self.selected()
+        if not run or self._active_id:
+            self.notice.setText("Select an inactive application. Add its job description in Tracker for a useful comparison.")
+            return
+        AssistantDialog(self.store, run, mode="compare", parent=self).exec()
+
+    def edit_profile(self):
+        run = self.selected()
+        if not run or self._active_id or run.is_submitted or run.submission_attempted or run.pipeline != "saved":
+            self.notice.setText("Select an inactive application to edit its profile.")
+            return
+        profile = run.profile_snapshot or ApplicantProfile.model_validate(self.store.get("verified_profile", {}))
+        dialog = ProfileDialog(profile, self)
+        if dialog.exec() == QDialog.Accepted:
+            run.profile_snapshot = dialog.profile()
+            run.status = "needs_input"
+            self.store.save_run(run)
+            self.render()
+            self.notice.setText("Application profile saved. Revisit its first section before resuming verification.")
+
+    def mark_submitted(self):
+        run = self.selected()
+        if not run or run.id == self._active_id:
+            return
+        if QMessageBox.question(self, "Record manual submission", "Have you submitted this application yourself and seen confirmation from the employer?") != QMessageBox.Yes:
+            return
+        run.submitted_by_user = True
+        run.submitted_at = run.submitted_at or now()
+        run.pipeline = "applied"
+        self._queue = [i for i in self._queue if i != run.id]
+        self.store.record_event(run.id, "submitted_by_user", run.stage, "User confirmed employer submission receipt.")
+        self.store.save_run(run)
+        self.render()
+
+    def tracker(self):
+        if self._active_id:
+            self.notice.setText("Pause the active application before editing tracker records.")
+            return
+        TrackerDialog(self.store, self.selected(), self).exec()
+        self.load_state()
+
+    def delete_selected(self):
+        run = self.selected()
+        if not run or run.id == self._active_id:
+            self.notice.setText("Select an inactive application to delete.")
+            return
+        self._queue = [i for i in self._queue if i != run.id]
+        self.store.delete_run(run.id)
+        self.tasks = [r for r in self.tasks if r.id != run.id]
+        self.render()
+
+    def shutdown(self):
+        self._closing = True
+        self._queue = []
+        self.service.shutdown()
