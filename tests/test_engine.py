@@ -374,6 +374,50 @@ async def test_workday_dropdown_lists_options_and_selects_the_approved_choice(co
     assert await page.locator('[data-automation-id="languageProficiency-0"]').inner_text() == '2 - Fair'
 
 
+WORKDAY_PROMPT = '''<div data-automation-id="myExperiencePage"><h2>My Experience</h2>
+<div data-automation-id="formField-fieldOfStudy"><label for="study">Field of Study</label>
+<div data-automation-id="multiselectInputContainer"><ul role="listbox"></ul>
+<input id="study" data-uxi-widget-type="selectinput" data-uxi-multiselect-id="study-prompt" onkeydown="if(event.key==='Enter')search(this.value);if(event.key==='Escape')closeResults()"></div></div>
+<button type="button" data-automation-id="bottom-navigation-next-button">Next</button></div>
+<script>
+const categories=['Computer'], fields=['Accounting','Computer Engineering','Computer Science'];
+const closeResults=()=>document.querySelector('[data-associated-widget]')?.remove();
+// Like Workday, results come from the server only after Enter; a category opens a nested list instead of selecting.
+function search(query){
+    const found=list=>list.filter(f=>f.toLowerCase().includes(query.toLowerCase()));
+    setTimeout(()=>{
+        closeResults();
+        const popup=document.createElement('div');popup.dataset.associatedWidget='study-prompt';
+        popup.innerHTML='<div data-automation-id="activeListContainer"><div role="presentation">'
+            +found(categories).map(c=>`<div role="option" onclick="window.categoryOpened=true"><div data-automation-id="promptOption">${c}</div></div>`).join('')
+            +found(fields).map(f=>`<div role="option"><div><input type="radio" onclick="pick('${f}')"></div><div data-automation-id="promptOption">${f}</div></div>`).join('')+'</div></div>';
+        document.body.append(popup);
+    },200);
+}
+function pick(value){
+    document.querySelector('[data-automation-id="multiselectInputContainer"] ul').innerHTML=`<li data-automation-id="menuItem"><div data-automation-id="selectedItem"><div data-automation-id="promptOption">${value}</div></div></li>`;
+    document.getElementById('study').value='';closeResults();
+}
+</script>'''
+
+
+async def test_workday_prompt_searches_the_answer_and_selects_only_an_exact_result(context, store):
+    page = await open_fixture(context, 'workday', WORKDAY_PROMPT)
+    run = ApplicationRun(job_url=page.url, auto_advance=False)
+    answer = ApprovedAnswer(question='Field of Study', value='Computer', scope_key=run.id)
+    store.save_answer(answer)
+    run = await apply(store, page, run, ApplicantProfile())
+    # 'Computer' exactly names only a category, so nothing is clicked and the search's choices are offered instead.
+    request = next(i for i in run.interventions if i.question == 'Field of Study')
+    assert request.options == ['Computer Engineering', 'Computer Science']
+    assert not await page.locator('[data-automation-id="selectedItem"]').count()
+    assert not await page.evaluate('window.categoryOpened')
+    store.save_answer(answer.model_copy(update={'value': 'Computer Science'}))
+    run = await apply(store, page, run, ApplicantProfile())
+    assert all(f.disposition == 'verified' for f in run.fields.values()), run.interventions
+    assert await page.locator('[data-automation-id="selectedItem"]').all_inner_texts() == ['Computer Science']
+
+
 async def test_greenhouse_boolean_question_selects_the_profile_fact(context, store):
     question = '<div id="custom_fields"><div class="field"><label>Do you require sponsorship?<select><option value="">Select One</option><option>Yes</option><option>No</option></select></label></div></div>'
     page = await open_fixture(context, 'greenhouse', greenhouse(extra=question))

@@ -212,6 +212,35 @@
       return items();
     }
     const close = e => e.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+    // Workday prompts load their options from the server only after Enter. Results with a radio or checkbox are choices; categories have none.
+    const prompt = e => e?.isConnected && e.matches('[data-uxi-widget-type=selectinput][data-uxi-multiselect-id]');
+    const selections = e => [...(e.closest('[data-automation-id=multiselectInputContainer]')?.querySelectorAll('[data-automation-id=selectedItem] [data-automation-id=promptOption]')||[])].map(o=>normalize(o.textContent));
+    const choice = o => o.querySelector('input[type=radio],input[type=checkbox]');
+    const optionText = o => (o.querySelector('[data-automation-id=promptOption]')||o).textContent.trim();
+    const typeText = (e,text) => {Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,text);e.dispatchEvent(new Event('input',{bubbles:true}));};
+    async function search(e,query){
+      const id=CSS.escape(e.getAttribute('data-uxi-multiselect-id'));
+      const results=()=>[...document.querySelectorAll(`[data-uxi-popup-anchor="${id}"] [role=option],[data-associated-widget="${id}"] [role=option]`)];
+      e.focus();typeText(e,query);
+      const stale=new Set(results());
+      for(const name of ['keydown','keypress','keyup'])e.dispatchEvent(new KeyboardEvent(name,{key:'Enter',code:'Enter',keyCode:13,bubbles:true,cancelable:true}));
+      let fresh=[];
+      for(let i=0;i<30&&!(fresh=results().filter(o=>!stale.has(o))).length;i++)await pause(100);
+      return fresh.filter(choice);
+    }
+    // Restore the search text and close the results without choosing.
+    const dismiss = (e,text) => {typeText(e,text);close(e);};
+    async function pick(e,value){
+      const chosen=()=>selections(e).includes(normalize(value));
+      // A prompt that already shows a selection is left to verification.
+      if(selections(e).length)return false;
+      const text=e.value, exact=(await search(e,value)).filter(o=>normalize(optionText(o))===normalize(value));
+      if(chosen())return true; // Workday may select a lone result itself.
+      if(exact.length!==1){dismiss(e,text);return false;}
+      choice(exact[0]).click();lastChange=performance.now();
+      for(let i=0;i<10&&!chosen();i++)await pause(100);
+      return chosen();
+    }
     async function scan() {
       handles.clear();
       const formRoots=[...document.querySelectorAll('form')].filter(e=>visible(e)&&!e.parentElement.closest('form'));
@@ -277,18 +306,27 @@
         value:(e.querySelector('dd,[data-value]')?.textContent||(e.tagName==='DT'?e.nextElementSibling?.textContent:'')||'').trim(),
         group:e.getAttribute('data-group')||'',row:Number(e.getAttribute('data-row')||0)
       })),errors:(/\bVPS\|[0-9a-f-]{36}\b/i.test(document.body.innerText)||/something went wrong[\s\S]*please refresh the page and then try again/i.test(document.body.innerText)?1:0)+[...document.querySelectorAll('[role=alert],.field-error-msg,.form-error,[data-automation-id=inputError]')].filter(e=>visible(e)&&e.textContent.trim()).length,status,live:live(),settled:performance.now()-lastChange>350&&timers.size<=1,proposals:proposals.size,events,problems:[...problems.values()],actions:[...actions].filter(([,a])=>a.element.isConnected&&visible(a.element)&&!a.element.disabled).map(([id,a])=>({id,kind:a.kind})),url};},
-      async options(selector){
-        const e=handles.get(selector), items=await listbox(e);
+      async options(selector,query){
+        const e=handles.get(selector);
+        if(prompt(e)){
+          const text=e.value;
+          if(!(query||text))return [];
+          const found=await search(e,query||text);dismiss(e,text);
+          return found.map(optionText);
+        }
+        const items=await listbox(e);
         if(items.length)close(e);
         return items.map(o=>o.textContent.trim());
       },
-      // The adapter fills Workday dropdowns only from profile guesses; select the approved options it left unset.
-      // ponytail: up to ~3 s per dropdown inside the bridge's 8 s command limit; batch per dropdown if a page has many unopenable ones.
+      // The adapter fills Workday dropdowns only from profile guesses and cannot search prompts; select the approved options it left unset.
+      // ponytail: up to ~3 s per dropdown and ~4 s per prompt inside the bridge's 8 s command limit; batch per control if a page has many unresolved ones.
       async choose(){
         let chosen=0;
         for(const e of handles.values()){
           const p=policies.get(e), shown=()=>normalize(e.innerText||e.textContent);
-          if(!p||p.omit||p.value==null||p.value===''||!e.isConnected||!e.matches('button[aria-haspopup=listbox]')||shown()===normalize(p.value))continue;
+          if(!p||p.omit||p.value==null||p.value===''||!e.isConnected)continue;
+          if(prompt(e)){if(await pick(e,String(p.value)))chosen++;continue;}
+          if(!e.matches('button[aria-haspopup=listbox]')||shown()===normalize(p.value))continue;
           if(shown()&&shown()!=='select one'&&!p.replace)continue;
           const exact=(await listbox(e)).filter(o=>normalize(o.innerText||o.textContent)===normalize(p.value));
           if(exact.length!==1){close(e);continue;}
@@ -392,7 +430,7 @@
       else if(message.command==='open_create_account')result.opened=active.openLink('createAccountLink');
       else if(message.command==='open_application')result.opened=await active.openApplication();
       else if(message.command==='auth_page')result=active.authPage();
-      else if(message.command==='options')result.options=await active.options(message.payload.selector);
+      else if(message.command==='options')result.options=await active.options(message.payload.selector,message.payload.query);
       else if(message.command==='choose')result.chosen=await active.choose();
       else if(message.command==='authenticate')await active.authenticate(message.payload.credential);
       respond({...result,token:message.token,document:message.document});

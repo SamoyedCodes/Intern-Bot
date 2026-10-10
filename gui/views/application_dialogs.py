@@ -1,7 +1,7 @@
 """Structured profile editing, guided answer approval and the approved-answer bank."""
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QHeaderView, QLineEdit, QListWidget,
+    QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QHeaderView, QLineEdit, QListWidget,
     QMessageBox, QPlainTextEdit, QScrollArea, QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
@@ -277,8 +277,13 @@ class RunDetailsDialog(QDialog):
         self.kind = QComboBox()
         self.kind.addItems(["Text answer", "Yes", "No", "Leave blank (optional questions only)"])
         self.form.addRow("Answer type", self.kind)
+        # Type to filter long lists; only picking an actual option fills the answer.
         self.choices = QComboBox()
-        self.choices.setPlaceholderText("Pick one of the form's options")
+        self.choices.setEditable(True)
+        self.choices.setInsertPolicy(QComboBox.NoInsert)
+        self.choices.lineEdit().setPlaceholderText("Type to filter the form's options")
+        self.choices.completer().setFilterMode(Qt.MatchContains)
+        self.choices.completer().setCompletionMode(QCompleter.PopupCompletion)
         self.choices.activated.connect(lambda: self.answer.setPlainText(self.choices.currentText()))
         self.form.addRow("Form choices", self.choices)
         self.answer = QPlainTextEdit()
@@ -349,6 +354,7 @@ class RunDetailsDialog(QDialog):
         request = self.request()
         self.choices.clear()
         self.choices.addItems(request.options if request else [])
+        self.choices.setCurrentIndex(-1)
         required = bool(request and request.required)
         # Required questions can't be omitted, so the option is unavailable rather than an error after saving.
         self.kind.model().item(3).setEnabled(not required)
