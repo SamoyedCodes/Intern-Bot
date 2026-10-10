@@ -143,6 +143,11 @@ class ApplicantProfile(BaseModel):
     def revision(self) -> str:
         return hashlib.sha256(self.model_dump_json().encode()).hexdigest()[:16]
 
+    @property
+    def has_preferred_name(self) -> bool:
+        # A preferred name identical to the legal first name is not a different name to declare.
+        return bool(self.preferred_name) and normalized(self.preferred_name) != normalized(self.first_name)
+
 
 
 class ApprovedAnswer(BaseModel):

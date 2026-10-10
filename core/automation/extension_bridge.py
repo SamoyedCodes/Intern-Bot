@@ -1,5 +1,6 @@
 """Direct Playwright service-worker commands, scoped to one run and document."""
 import asyncio
+from urllib.parse import urlsplit
 
 
 class ExtensionBridge:
@@ -14,7 +15,9 @@ class ExtensionBridge:
         page.on('requestfailed', lambda request: self.pending.discard(request))
 
     def _request_started(self, request):
-        if request.resource_type in {'document', 'script', 'xhr', 'fetch'}:
+        # Only the employer's own traffic signals form activity; third-party trackers (LinkedIn's beacons) can stay pending forever.
+        hosts = {urlsplit(url).hostname for url in (self.page.url, (self.binding or {}).get('url') or self.page.url)}
+        if request.resource_type in {'document', 'script', 'xhr', 'fetch'} and urlsplit(request.url).hostname in hosts:
             self.pending.add(request)
 
     async def command(self, command, payload=None, binding=None):
