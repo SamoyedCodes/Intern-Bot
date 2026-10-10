@@ -1,4 +1,5 @@
 """Workday sign-in and account creation: each authentication click happens at most once and secrets stay in the keychain."""
+import asyncio
 import json
 
 import pytest
@@ -6,10 +7,55 @@ import pytest
 from core.automation.engine import ApplicationEngine
 from core.automation.extension_bridge import ExtensionBridge
 from core.automation.models import ApplicantProfile, ApplicationRun, ApprovedAnswer, employer_key
-from tests.support import account_pages, open_fixture
+from tests.support import account_pages, open_fixture, prepare
 
 LOGIN, PASSWORD = 'acme_intern@apps.example.test', 'Fixture-only-1!'
 SIGN_IN_PAGE = '''<div data-automation-id="signInPage"><label>Email<input autocomplete=email></label><label>Password<input type=password></label><button type=button data-automation-id=signInSubmitButton onclick="window.logins=(window.logins||0)+1">Sign In</button></div>'''
+
+
+@pytest.mark.parametrize('replacement', [False, True])
+async def test_authentication_waits_for_enabled_current_button(context, store, replacement):
+    html = SIGN_IN_PAGE.replace('type=button', 'disabled type=button') + '''<script>
+    document.querySelector('input[type=password]').addEventListener('input', () => setTimeout(() => {
+      let button = document.querySelector('button');
+      REPLACE_BUTTON
+      button.disabled = false;
+    }, 150));
+    </script>'''.replace('REPLACE_BUTTON', 'const copy=button.cloneNode(true);button.replaceWith(copy);button=copy;' if replacement else '')
+    page = await open_fixture(context, 'workday', html)
+    run = ApplicationRun(job_url=page.url)
+    engine = ApplicationEngine(store)
+    credential = {'username': LOGIN, 'password': PASSWORD}
+    await engine.start(run, ApplicantProfile(), ExtensionBridge(page, run.id), credential)
+    assert await page.evaluate('window.logins || 0') == 1
+    await engine.resume(run, ApplicantProfile(), ExtensionBridge(page, run.id), credential)
+    assert await page.evaluate('window.logins') == 1
+
+
+@pytest.mark.parametrize('stop', [False, True])
+async def test_unavailable_authentication_button_never_clicks(context, store, stop):
+    page = await open_fixture(context, 'workday', SIGN_IN_PAGE.replace('type=button', 'disabled type=button'))
+    bridge, _, _, _, _ = await prepare(page, store, 'workday')
+    task = asyncio.create_task(bridge.command('authenticate', {'credential': {'username': LOGIN, 'password': PASSWORD}}))
+    await page.wait_for_function("document.querySelector('input[type=password]').value.length > 0")
+    if stop:
+        await bridge.stop()
+        await page.locator('button').evaluate('e => e.disabled=false')
+    with pytest.raises(Exception, match='Local adapter command failed'):
+        await task
+    assert await page.evaluate('window.logins || 0') == 0
+
+
+async def test_authentication_waits_for_workday_overlay_button(context, store):
+    html = SIGN_IN_PAGE.replace('<button type=button', '<button aria-hidden=true disabled type=button').replace('</button>', '''</button>
+    <div role=button aria-label="Sign In" aria-disabled=true onclick="if(this.getAttribute('aria-disabled')==='false')window.logins=(window.logins||0)+1">Sign In</div>''')
+    html += '''<script>document.querySelector('input[type=password]').addEventListener('input', () => {
+      setTimeout(() => document.querySelector('[role=button]').setAttribute('aria-disabled','false'),150);
+    });</script>'''
+    page = await open_fixture(context, 'workday', html)
+    bridge, _, _, _, _ = await prepare(page, store, 'workday')
+    await bridge.command('authenticate', {'credential': {'username': LOGIN, 'password': PASSWORD}})
+    assert await page.evaluate('window.logins || 0') == 1
 
 
 def approve_terms(store, run):

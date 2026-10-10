@@ -270,7 +270,7 @@
         const page=buttons.length!==1?'':buttons[0].matches('[data-automation-id="createAccountSubmitButton"]')?'create':'sign_in';
         return {page,credentials:[...handles].filter(([,e])=>e===emails[0]||passwords.includes(e)).map(([selector])=>selector)};
       },
-      authenticate(credential){
+      async authenticate(credential){
         if(config.adapter!=='workday'||!live())throw Error('Authentication not authorized');
         const {emails,passwords,buttons}=authControls();
         if(emails.length!==1||!passwords.length||buttons.length!==1||!credential.username||!credential.password)throw Error('Ambiguous authentication');
@@ -286,13 +286,24 @@
         }
         const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
         for(const [element,value]of [[emails[0],credential.username],...passwords.map(e=>[e,credential.password])]){setter.call(element,value);element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));}
-        let button=buttons[0];
-        if(button.getAttribute('aria-hidden')==='true'){
-          const overlays=[...button.parentElement.querySelectorAll('[role=button]')].filter(e=>visible(e)&&/^(sign in|create account)$/.test(normalize(e.getAttribute('aria-label')||e.textContent)));
-          if(overlays.length!==1)throw Error('Ambiguous authentication button');button=overlays[0];
+        const buttonId=buttons[0].getAttribute('data-automation-id');
+        // Workday may enable or replace the submit control after processing input events.
+        for(let attempt=0;attempt<60;attempt++){
+          await new Promise(resolve=>native.setTimeout(resolve,50));
+          if(!live())throw Error('Authentication stopped');
+          const current=authControls();
+          if(current.emails.length!==1||current.passwords.length!==passwords.length||current.buttons.length!==1)continue;
+          if(current.emails[0].value!==credential.username||current.passwords.some(e=>e.value!==credential.password))throw Error('Authentication values changed');
+          let button=current.buttons[0];
+          if(button.getAttribute('data-automation-id')!==buttonId)throw Error('Authentication form changed');
+          if(button.getAttribute('aria-hidden')==='true'){
+            const overlays=[...button.parentElement.querySelectorAll('[role=button]')].filter(e=>visible(e)&&/^(sign in|create account)$/.test(normalize(e.getAttribute('aria-label')||e.textContent)));
+            if(overlays.length!==1)throw Error('Ambiguous authentication button');button=overlays[0];
+          }
+          if(!button.isConnected||!visible(button)||button.disabled||button.getAttribute('aria-disabled')==='true')continue;
+          stop();button.click();return;
         }
-        if(!live())return;
-        stop();button.click();
+        throw Error('Authentication button did not become ready');
       },
       async action(id, expectedFields, expectedSummary){
         const a=actions.get(id);
@@ -331,7 +342,7 @@
       else if(message.command==='open_sign_in')result.opened=active.openAuthLink('signInLink');
       else if(message.command==='open_create_account')result.opened=active.openAuthLink('createAccountLink');
       else if(message.command==='auth_page')result=active.authPage();
-      else if(message.command==='authenticate')active.authenticate(message.payload.credential);
+      else if(message.command==='authenticate')await active.authenticate(message.payload.credential);
       respond({...result,token:message.token,document:message.document});
     }catch {respond({error:'Local adapter command failed. Reopen or inspect the application.',token:message.token,document:message.document});}})();
     return true;
