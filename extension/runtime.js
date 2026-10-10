@@ -108,7 +108,12 @@
       if (e.matches?.('[role=option],option,[data-automation-id=promptOption],[data-automation-id=menuItem]')) {
         const p = picker && policies.get(picker);
         if(picker && !p){proposals.set(picker,{key:'option',value:e});return;}
-        if(!p || normalize(e.innerText || e.textContent)!==normalize(p.value)){report('answer','Choose the exact approved dropdown option manually.',p?.key||'');return;}
+        if(!p || normalize(e.innerText || e.textContent)!==normalize(p.value)){
+          // The adapter guesses options from the profile; an approved value selects its own exact option instead.
+          const exact=p&&!p.omit&&p.value!=null&&p.value!==''?[...(e.closest('[role=listbox]')?.querySelectorAll('[role=option]')||[])].filter(o=>normalize(o.innerText||o.textContent)===normalize(p.value)):[];
+          if(exact.length!==1){report('answer','Choose the exact approved dropdown option manually.',p?.key||'');return;}
+          e=exact[0];
+        }
       }
       if (e.matches?.('[role=combobox],[aria-haspopup=listbox]')) picker=e;
       const text=normalize(e.innerText || e.getAttribute?.('aria-label'));
@@ -197,6 +202,16 @@
       e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));lastChange=performance.now();return true;
     }
     const hex = buffer => [...new Uint8Array(buffer)].map(b=>b.toString(16).padStart(2,'0')).join('');
+    const pause = ms => new Promise(resolve=>native.setTimeout(resolve,ms));
+    // Workday renders a dropdown's options only while it is open.
+    async function listbox(e){
+      if(!e?.isConnected||!e.matches('button[aria-haspopup=listbox]'))return [];
+      const items=()=>[...(document.getElementById(e.getAttribute('aria-controls'))?.querySelectorAll('[role=option]:not(#select-one)')||[])].filter(o=>normalize(o.textContent)!=='select one');
+      if(!items().length)e.click();
+      for(let i=0;i<20&&!items().length;i++)await pause(100);
+      return items();
+    }
+    const close = e => e.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
     async function scan() {
       handles.clear();
       const formRoots=[...document.querySelectorAll('form')].filter(e=>visible(e)&&!e.parentElement.closest('form'));
@@ -262,6 +277,26 @@
         value:(e.querySelector('dd,[data-value]')?.textContent||(e.tagName==='DT'?e.nextElementSibling?.textContent:'')||'').trim(),
         group:e.getAttribute('data-group')||'',row:Number(e.getAttribute('data-row')||0)
       })),errors:(/\bVPS\|[0-9a-f-]{36}\b/i.test(document.body.innerText)||/something went wrong[\s\S]*please refresh the page and then try again/i.test(document.body.innerText)?1:0)+[...document.querySelectorAll('[role=alert],.field-error-msg,.form-error,[data-automation-id=inputError]')].filter(e=>visible(e)&&e.textContent.trim()).length,status,live:live(),settled:performance.now()-lastChange>350&&timers.size<=1,proposals:proposals.size,events,problems:[...problems.values()],actions:[...actions].filter(([,a])=>a.element.isConnected&&visible(a.element)&&!a.element.disabled).map(([id,a])=>({id,kind:a.kind})),url};},
+      async options(selector){
+        const e=handles.get(selector), items=await listbox(e);
+        if(items.length)close(e);
+        return items.map(o=>o.textContent.trim());
+      },
+      // The adapter fills Workday dropdowns only from profile guesses; select the approved options it left unset.
+      // ponytail: up to ~3 s per dropdown inside the bridge's 8 s command limit; batch per dropdown if a page has many unopenable ones.
+      async choose(){
+        let chosen=0;
+        for(const e of handles.values()){
+          const p=policies.get(e), shown=()=>normalize(e.innerText||e.textContent);
+          if(!p||p.omit||p.value==null||p.value===''||!e.isConnected||!e.matches('button[aria-haspopup=listbox]')||shown()===normalize(p.value))continue;
+          if(shown()&&shown()!=='select one'&&!p.replace)continue;
+          const exact=(await listbox(e)).filter(o=>normalize(o.innerText||o.textContent)===normalize(p.value));
+          if(exact.length!==1){close(e);continue;}
+          exact[0].click();chosen++;lastChange=performance.now();
+          for(let i=0;i<10&&shown()!==normalize(p.value);i++)await pause(100);
+        }
+        return chosen;
+      },
       openLink(id){
         const links=[...document.querySelectorAll(`[data-automation-id="${id}"]`)].filter(visible);
         if(config.adapter!=='workday'||!live()||!['signInLink','createAccountLink','adventureButton','applyManually'].includes(id)||links.length!==1)return false;
@@ -357,6 +392,8 @@
       else if(message.command==='open_create_account')result.opened=active.openLink('createAccountLink');
       else if(message.command==='open_application')result.opened=await active.openApplication();
       else if(message.command==='auth_page')result=active.authPage();
+      else if(message.command==='options')result.options=await active.options(message.payload.selector);
+      else if(message.command==='choose')result.chosen=await active.choose();
       else if(message.command==='authenticate')await active.authenticate(message.payload.credential);
       respond({...result,token:message.token,document:message.document});
     }catch {respond({error:'Local adapter command failed. Reopen or inspect the application.',token:message.token,document:message.document});}})();

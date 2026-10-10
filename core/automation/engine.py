@@ -132,6 +132,8 @@ class ApplicationEngine:
                     credential['state'] = 'verified'
                 await bridge.command('start')
                 settled = await self.wait_for_section(run, profile)
+                if settled and not (self._pause or self._cancel) and (await bridge.command('choose')).get('chosen'):
+                    settled = await self.wait_for_section(run, profile)
                 if not settled or self._pause or self._cancel:
                     return run
                 fields = [FormField(**f) for f in (await bridge.command('scan'))['fields']]
@@ -148,6 +150,7 @@ class ApplicationEngine:
                     continue
                 run.authentication_attempted = False
                 if not self.verify(run, profile, fields, config):
+                    await self.list_options(run, fields)
                     return run
                 problems = settled['problems']
                 if problems:
@@ -282,6 +285,14 @@ class ApplicationEngine:
             await asyncio.sleep(.1)
         self.intervene(run, 'The adapter did not finish within its bounded wait. Inspect the form and resume.')
         return None
+
+    async def list_options(self, run, fields):
+        # Workday dropdowns render their options only while open; list them so the answer can be an exact choice.
+        for request in run.interventions:
+            field = next((f for f in fields if f.key == request.field_key and f.kind == 'combobox' and not f.options), None)
+            if field and not request.options:
+                request.options = (await self.bridge.command('options', {'selector': field.selector})).get('options', [])
+        self.checkpoint(run)
 
     def verify(self, run, profile, fields, config):
         answers = self.store.answers()

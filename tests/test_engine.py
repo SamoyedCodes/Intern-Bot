@@ -335,6 +335,45 @@ async def test_workday_language_dropdown_and_fluency_checkbox(context, store):
     assert await page.locator('input[type=checkbox]').is_checked()
 
 
+WORKDAY_SPEAKING = '''<div data-automation-id="myExperiencePage"><h2>My Experience</h2>
+<div role="group" aria-labelledby="Languages-section"><h3 id="Languages-section">Languages</h3>
+<button type="button" aria-label="Add Language" onclick="addLanguage()">Add Language</button></div>
+<button type="button" data-automation-id="bottom-navigation-next-button">Next</button></div>
+<script>
+const choices={language:['English','French'],speaking:['Select One','1 - Slight','2 - Fair','3 - Fluent']};
+function addLanguage(){
+    const row=document.createElement('div'); row.setAttribute('role','group');row.setAttribute('aria-labelledby','Languages-1-panel');
+    row.innerHTML='<label id="language-label">Language</label><button type="button" name="language" data-automation-id="language" aria-labelledby="language-label" aria-haspopup="listbox" aria-controls="language-choices" onclick="toggle(this)">Select One</button>'
+        +'<label id="speaking-label">Speaking</label><button type="button" data-automation-id="languageProficiency-0" aria-labelledby="speaking-label" aria-haspopup="listbox" aria-required="true" aria-controls="speaking-choices" onclick="toggle(this)">Select One</button>';
+    document.querySelector('[aria-labelledby="Languages-section"]').append(row);
+}
+function toggle(button){
+    const id=button.getAttribute('aria-controls'), open=document.getElementById(id);
+    if(open){open.parentElement.remove();return;}
+    const popup=document.createElement('div');popup.dataset.automationWidget='wd-popup';popup.dataset.automationActivepopup='true';
+    popup.innerHTML=`<ul id="${id}" role="listbox">`+choices[id.split('-')[0]].map(c=>`<li role="option"${c==='Select One'?' id="select-one"':''}>${c}</li>`).join('')+'</ul>';
+    popup.querySelectorAll('li').forEach(e=>e.onclick=()=>{button.textContent=e.textContent;popup.remove()});
+    button.onkeydown=event=>{if(event.key==='Escape')popup.remove()};
+    document.body.append(popup);
+}
+</script>'''
+
+
+# 'Fluent' is outside the adapter's proficiency scale, so it clicks "Select One"; '' leaves the dropdown untouched.
+@pytest.mark.parametrize('proficiency', ['Fluent', ''])
+async def test_workday_dropdown_lists_options_and_selects_the_approved_choice(context, store, proficiency):
+    page = await open_fixture(context, 'workday', WORKDAY_SPEAKING)
+    profile = ApplicantProfile(language_proficiency=[Language(language='English', proficiency=proficiency)])
+    run = await apply(store, page, ApplicationRun(job_url=page.url, auto_advance=False), profile)
+    request = next(i for i in run.interventions if i.question == 'Speaking')
+    assert request.options == ['1 - Slight', '2 - Fair', '3 - Fluent']
+    store.save_answer(ApprovedAnswer(question='Speaking', value='2 - Fair', scope_key=run.id))
+    run = await apply(store, page, run, profile)
+    assert all(f.disposition == 'verified' for f in run.fields.values()), run.interventions
+    assert not any(i.question for i in run.interventions), run.interventions
+    assert await page.locator('[data-automation-id="languageProficiency-0"]').inner_text() == '2 - Fair'
+
+
 async def test_greenhouse_boolean_question_selects_the_profile_fact(context, store):
     question = '<div id="custom_fields"><div class="field"><label>Do you require sponsorship?<select><option value="">Select One</option><option>Yes</option><option>No</option></select></label></div></div>'
     page = await open_fixture(context, 'greenhouse', greenhouse(extra=question))
