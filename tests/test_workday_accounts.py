@@ -30,6 +30,32 @@ async def test_a_saved_login_signs_in_once_and_never_leaves_the_keychain(context
     assert 'fixture-only-secret' not in json.dumps(await context.service_workers[0].evaluate('chrome.storage.session.get(null)'))
 
 
+@pytest.mark.parametrize('saved_login, attempted', [(True, False), (False, False), (True, True)])
+async def test_login_appearing_after_prepare_uses_authentication_flow(context, store, saved_login, attempted):
+    page = await open_fixture(context, 'workday', SIGN_IN_PAGE)
+    run = ApplicationRun(job_url=page.url, authentication_attempted=attempted)
+    bridge = ExtensionBridge(page, run.id)
+    command, first_prepare = bridge.command, True
+
+    async def delayed_fields(name, payload=None, binding=None):
+        nonlocal first_prepare
+        result = await command(name, payload, binding)
+        if name == 'prepare' and first_prepare:
+            first_prepare = False
+            result['fields'] = []  # The sign-in controls appear after the first scan.
+        return result
+
+    bridge.command = delayed_fields
+    credential = {'username': LOGIN, 'password': PASSWORD} if saved_login else None
+    engine = ApplicationEngine(store)
+    await engine.start(run, ApplicantProfile(), bridge, credential)
+    assert run.interventions and all(i.kind == 'verification' for i in run.interventions)
+    assert await page.evaluate('window.logins || 0') == int(saved_login and not attempted)
+    await engine.resume(run, ApplicantProfile(), bridge, credential)
+    assert await page.evaluate('window.logins || 0') == int(saved_login and not attempted)
+    assert PASSWORD.encode() not in store.path.read_bytes()
+
+
 async def test_a_new_account_is_created_once_then_waits_for_verification_before_one_sign_in(context, store, vault):
     page = await open_fixture(context, 'workday', account_pages('signin', 'signin'))
     url = page.url

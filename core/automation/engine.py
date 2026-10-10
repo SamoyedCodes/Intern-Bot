@@ -117,7 +117,6 @@ class ApplicationEngine:
                     # This run's Create Account click led straight into the application: the tenant needed no email verification.
                     self.store._vault().set_account_state(run.job_url, 'verified')
                     credential['state'] = 'verified'
-                run.authentication_attempted = False
                 await bridge.command('start')
                 settled = await self.wait_for_section(run, profile)
                 if not settled or self._pause or self._cancel:
@@ -130,6 +129,11 @@ class ApplicationEngine:
                     self.intervene(run, 'The form changed during section verification. Inspect it and resume.', 'validation')
                     return run
                 settled = check
+                if any(f.kind == 'password' for f in confirmed):
+                    # A delayed sign-in form must go through the guarded credential flow.
+                    await bridge.stop()
+                    continue
+                run.authentication_attempted = False
                 if not self.verify(run, profile, fields, config):
                     return run
                 problems = settled['problems']
