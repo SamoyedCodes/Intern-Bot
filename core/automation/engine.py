@@ -150,7 +150,7 @@ class ApplicationEngine:
                     continue
                 run.authentication_attempted = False
                 if not self.verify(run, profile, fields, config):
-                    await self.list_options(run, fields)
+                    await self.list_options(run, profile, fields)
                     return run
                 problems = settled['problems']
                 if problems:
@@ -286,12 +286,15 @@ class ApplicationEngine:
         self.intervene(run, 'The adapter did not finish within its bounded wait. Inspect the form and resume.')
         return None
 
-    async def list_options(self, run, fields):
+    async def list_options(self, run, profile, fields):
         # Workday dropdowns render their options only while open; list them so the answer can be an exact choice.
+        # Prompts show results only for a search: the approved answer, else whatever is typed in them.
+        answers = self.store.answers()
         for request in run.interventions:
             field = next((f for f in fields if f.key == request.field_key and f.kind == 'combobox' and not f.options), None)
             if field and not request.options:
-                request.options = (await self.bridge.command('options', {'selector': field.selector})).get('options', [])
+                query = resolve(field, profile, run, answers).value
+                request.options = (await self.bridge.command('options', {'selector': field.selector, 'query': '' if query is None else str(query)})).get('options', [])
         self.checkpoint(run)
 
     def verify(self, run, profile, fields, config):
