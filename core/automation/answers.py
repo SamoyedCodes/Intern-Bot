@@ -115,18 +115,23 @@ def resolve(field, profile: ApplicantProfile, run: ApplicationRun, answers) -> R
             if profile.phone_country_code and profile.phone_number:
                 if field.split_phone:
                     return Resolution(profile.phone_number, "profile:phone_number")
-                return Resolution(profile.phone_country_code, "profile:phone_country_code")
-            phone = re.fullmatch(r"(\+\d{1,3})[\s-]+([\d\s()-]+)", profile.phone.strip())
-            if not phone:
-                return Resolution(reason="Separate the international calling code from the phone number with a space in the profile.")
-            if field.split_phone:
-                return Resolution(re.sub(r"\D", "", phone[2]), "profile:phone")
-            options = [o for o in field.options if o.endswith(f"({phone[1]})")]
+                code, ref = profile.phone_country_code, "profile:phone_country_code"
+            else:
+                phone = re.fullmatch(r"(\+\d{1,3})[\s-]+([\d\s()-]+)", profile.phone.strip())
+                if not phone:
+                    return Resolution(reason="Separate the international calling code from the phone number with a space in the profile.")
+                if field.split_phone:
+                    return Resolution(re.sub(r"\D", "", phone[2]), "profile:phone")
+                code, ref = phone[1], "profile:phone"
+            # Calling-code pickers label each option "Country (+code)".
+            options = [o for o in field.options if o.endswith(f"({code})")]
             if len(options) == 1:
-                return Resolution(options[0], "profile:phone")
+                return Resolution(options[0], ref)
             if profile.country:
-                return Resolution(f"{profile.country} ({phone[1]})", "profile:phone")
+                return Resolution(f"{profile.country} ({code})", ref)
             return Resolution(reason="Select the country calling code explicitly.")
+        if normalized(field.label) == "i have a preferred name":
+            return Resolution(profile.has_preferred_name, "profile:preferred_name")
         if normalized(field.label) in {"full name", "name"} and profile.first_name and profile.last_name:
             return Resolution(" ".join(part for part in (profile.first_name, profile.middle_name, profile.last_name, profile.name_suffix) if part), "profile:full_name")
         attr = ALIASES.get(normalized(field.label))

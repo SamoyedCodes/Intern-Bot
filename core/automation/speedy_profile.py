@@ -34,7 +34,7 @@ def translate(profile, run, answers):
     translated = {
         'profileName': run.profile_name,
         'nameData': dict(prefix=profile.name_prefix,firstName=profile.first_name,middleName=profile.middle_name,
-                         lastName=profile.last_name,suffix=profile.name_suffix,preferredName=bool(profile.preferred_name),
+                         lastName=profile.last_name,suffix=profile.name_suffix,preferredName=profile.has_preferred_name,
                          preferredFirstName=profile.preferred_name,preferredMiddleName=profile.preferred_middle_name,
                          preferredLastName=profile.preferred_last_name),
         'addressData': dict(line1=profile.address_line1,line2=profile.address_line2,city=profile.city,state=profile.region,

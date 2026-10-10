@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import re
 import time
 
 from core.automation.answers import resolve
@@ -21,6 +22,7 @@ class ApplicationEngine:
     # Bounded polls (~0.1s and 0.25s apart); tests shrink them to fail fast.
     SECTION_POLLS = 210
     RECEIPT_POLLS = 20
+    AUTH_POLLS = 40
 
     def __init__(self, store, emit=None):
         configure_privacy()
@@ -113,6 +115,17 @@ class ApplicationEngine:
                     else:
                         self.intervene(run, SIGN_IN_HANDOFF, 'verification')
                     return run
+                opened = match['adapter']['id'] == 'workday' and not fields and (await bridge.command('open_application')).get('opened')
+                if opened:
+                    # The job posting or its Start Your Application dialog. Apply Manually skips Workday's resume parser;
+                    # its route can take seconds to load, while Apply opens the dialog in place.
+                    url = bridge.page.url
+                    for _ in range(40 if opened == 'applyManually' else 2):
+                        await asyncio.sleep(.25)
+                        if bridge.page.url != url:
+                            break
+                    last_advanced_stage = run.stage
+                    continue
                 if run.authentication_attempted and fields and credential and credential.get('state') == 'pending_verification':
                     # This run's Create Account click led straight into the application: the tenant needed no email verification.
                     self.store._vault().set_account_state(run.job_url, 'verified')
@@ -240,7 +253,11 @@ class ApplicationEngine:
         if self._pause or self._cancel:
             return False
         await bridge.command('authenticate', {'credential': {'username': credential['username'], 'password': credential['password']}})
-        await asyncio.sleep(.5)
+        # Workday takes seconds to sign in; a form still showing just after the click is not yet a failure.
+        for _ in range(self.AUTH_POLLS):
+            await asyncio.sleep(.25)
+            if self._pause or self._cancel or (await bridge.command('auth_page'))['page'] != expected or (await bridge.command('snapshot'))['errors']:
+                break
         return True
 
     async def authorize(self, run, profile, fields):
@@ -287,6 +304,9 @@ class ApplicationEngine:
             elif field.kind == 'radio':
                 offered = any(f.kind == 'radio' and f.label == field.label and f.group == field.group and f.row == field.row and normalized(f.option) == normalized(str(resolution.value)) for f in fields)
                 matched = offered and field.value == (normalized(field.option) == normalized(str(resolution.value))) and not field.invalid
+            elif resolution.ref in ('profile:phone', 'profile:phone_number'):
+                # Employers reformat phone numbers ("98765411" becomes "9876 5411").
+                matched = re.sub(r'\D', '', str(field.value)) == re.sub(r'\D', '', str(resolution.value)) and not field.invalid
             else:
                 matched = (field.value == resolution.value if isinstance(resolution.value, bool) else normalized(str(field.value)) == normalized(str(resolution.value))) and not field.invalid
             if not matched:

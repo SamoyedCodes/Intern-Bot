@@ -7,6 +7,7 @@ from playwright.async_api import Error as PlaywrightError
 
 from core.automation.engine import ApplicationEngine
 from core.automation.extension_bridge import ExtensionBridge
+from core.automation.fields import FormField
 from core.automation.models import ApplicantProfile, ApplicationRun, ApprovedAnswer, Education, Experience, FieldAssessment, Language
 from tests.support import FIXTURES, URLS, greenhouse, open_fixture, prepare, profile_for, resume_upload, until
 
@@ -123,6 +124,19 @@ async def employer_page(context, frames):
     await page.route('**/*', route)
     await page.goto('https://careers.example.test/apply')
     return page
+
+
+async def test_only_employer_requests_hold_a_section_open(context):
+    page = await open_fixture(context, 'workday')
+    bridge = ExtensionBridge(page, 'run')
+    hung = []
+    await page.route(lambda url: url.endswith(('/li/track', '/wday/save')), lambda route: hung.append(route))  # Held open, like a stuck beacon.
+    await page.evaluate("() => { for (const url of ['https://www.linkedin.com/li/track', '/wday/save']) fetch(url, {method: 'POST'}).catch(() => {}) }")
+    await until(lambda: len(hung) == 2)
+    assert [r.url.rsplit('/', 2)[-2:] for r in bridge.pending] == [['wday', 'save']]
+    for route in hung:
+        await route.abort()
+    await page.close()
 
 
 async def test_only_the_application_frame_receives_the_profile(context, store):
@@ -376,3 +390,19 @@ async def test_changed_cover_letter_bytes_invalidate_saved_verification(store, t
     assert run.documents_digest != before
     assert run.fields == {} and run.completed_sections == []
     assert store.get_run(run.id).documents_digest == run.documents_digest
+
+
+async def test_an_approved_radio_is_clicked_so_the_site_registers_it(context, store, monkeypatch):
+    monkeypatch.setattr(ApplicationEngine, 'SECTION_POLLS', 20)  # The rest of the Workday page never appears.
+    radios = ''.join(f'<div><div><input type=radio name=previous id={o} onclick="window.picked=`{o}`"></div><label for={o}>{o}</label></div>' for o in ('Yes', 'No'))
+    page = await open_fixture(context, 'workday', f'<div data-automation-id=applyFlowMyInfoPage><fieldset><legend>Have you worked with us before?</legend>{radios}</fieldset></div>')
+    run = ApplicationRun(job_url=page.url)
+    store.save_answer(ApprovedAnswer(question='Have you worked with us before?', value='No', scope_key=run.id, profile_name=run.profile_name))
+    await ApplicationEngine(store).start(run, ApplicantProfile(), ExtensionBridge(page, run.id))
+    assert await page.evaluate('window.picked') == 'No'
+
+
+def test_a_reformatted_phone_number_still_verifies(store):
+    run = ApplicationRun(job_url='https://example.wd1.myworkdayjobs.com/job')
+    field = FormField('phone', 'Phone Number', '', 'text', value='9876 5411')
+    assert ApplicationEngine(store).verify(run, ApplicantProfile(phone_country_code='+65', phone_number='98765411'), [field], {'files': {}})

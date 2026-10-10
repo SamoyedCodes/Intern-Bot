@@ -83,3 +83,15 @@ def test_missing_facts_are_never_guessed(run):
 def test_date_components_never_invent_a_missing_day(run, label, expected):
     field = FormField('date', label, '', 'spinbutton', group='experience')
     assert resolve(field, PROFILE, run, []).value == expected
+
+
+@pytest.mark.parametrize('preferred, expected', [('', False), ('ada', False), ('Addie', True)])
+def test_preferred_name_checkbox_follows_the_profile(run, preferred, expected):
+    field = FormField('p', 'I have a preferred name', '', 'checkbox')
+    assert resolve(field, PROFILE.model_copy(update={'preferred_name': preferred}), run, []).value is expected
+
+
+@pytest.mark.parametrize('phone', [dict(phone_country_code='+65', phone_number='98765411'), dict(phone='+65 9876 5411')])
+def test_country_phone_code_uses_the_pickers_label(run, phone):
+    field = FormField('c', 'Country Phone Code', '', 'text')
+    assert resolve(field, PROFILE.model_copy(update=phone), run, []).value == 'Singapore (+65)'

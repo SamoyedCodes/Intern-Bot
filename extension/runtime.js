@@ -40,7 +40,9 @@
     const dom = e => e instanceof Node || e instanceof CSSStyleDeclaration || e instanceof DOMTokenList || (typeof DOMStringMap!=='undefined' && e instanceof DOMStringMap) || e === window || e === location;
     const visible = e => e instanceof Element && !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
     const readable = e => e instanceof HTMLSelectElement ? (e.value ? e.selectedOptions[0]?.textContent || '' : '') : ['checkbox','radio'].includes(e.type) ? e.checked : e.value ?? e.textContent;
-    const matches = (e, p) => e.type === 'radio' ? e.checked === (normalize(e.labels?.[0]?.textContent || e.value) === normalize(p.value)) : e.type === 'checkbox' ? e.checked === p.value : normalize(readable(e)) === normalize(p.value);
+    // Employers reformat phone numbers ("98765411" becomes "9876 5411").
+    const phone = p => /^profile:phone(_number)?$/.test(p.ref || ''), digits = v => String(v ?? '').replace(/\D/g, '');
+    const matches = (e, p) => e.type === 'radio' ? e.checked === (normalize(e.labels?.[0]?.textContent || e.value) === normalize(p.value)) : e.type === 'checkbox' ? e.checked === p.value : phone(p) ? digits(readable(e)) === digits(p.value) : normalize(readable(e)) === normalize(p.value);
     function assign(e, key, value) {
       if (!dom(e)) { e[key] = value; return value; }
       if (!live()) return value;
@@ -67,7 +69,9 @@
       else if (e.type === 'checkbox') {if(typeof desired!=='boolean'){report('answer','Approve a Boolean answer for this checkbox.',p.key);return value;}key='checked';}
       const proto = e instanceof HTMLInputElement ? HTMLInputElement.prototype : e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : null;
       const setter = proto && Object.getOwnPropertyDescriptor(proto,key)?.set;
-      if (setter) setter.call(e, desired); else e[key] = desired;
+      // React (Workday) only notices checkbox and radio changes made by a click; a radio cannot be clicked off.
+      if (key === 'checked') {if (e.checked !== desired && (desired || e.type === 'checkbox')) e.click();}
+      else if (setter) setter.call(e, desired); else e[key] = desired;
       denied.delete(e); lastChange = performance.now();
       return value;
     }
@@ -258,10 +262,18 @@
         value:(e.querySelector('dd,[data-value]')?.textContent||(e.tagName==='DT'?e.nextElementSibling?.textContent:'')||'').trim(),
         group:e.getAttribute('data-group')||'',row:Number(e.getAttribute('data-row')||0)
       })),errors:(/\bVPS\|[0-9a-f-]{36}\b/i.test(document.body.innerText)||/something went wrong[\s\S]*please refresh the page and then try again/i.test(document.body.innerText)?1:0)+[...document.querySelectorAll('[role=alert],.field-error-msg,.form-error,[data-automation-id=inputError]')].filter(e=>visible(e)&&e.textContent.trim()).length,status,live:live(),settled:performance.now()-lastChange>350&&timers.size<=1,proposals:proposals.size,events,problems:[...problems.values()],actions:[...actions].filter(([,a])=>a.element.isConnected&&visible(a.element)&&!a.element.disabled).map(([id,a])=>({id,kind:a.kind})),url};},
-      openAuthLink(id){
+      openLink(id){
         const links=[...document.querySelectorAll(`[data-automation-id="${id}"]`)].filter(visible);
-        if(config.adapter!=='workday'||!live()||!['signInLink','createAccountLink'].includes(id)||links.length!==1)return false;
+        if(config.adapter!=='workday'||!live()||!['signInLink','createAccountLink','adventureButton','applyManually'].includes(id)||links.length!==1)return false;
         links[0].click();return true;
+      },
+      async openApplication(){
+        // The posting renders after the document loads. Apply stays visible behind its Start Your Application dialog, so Apply Manually goes first.
+        for(let attempt=0;attempt<50&&live();attempt++){
+          for(const id of ['applyManually','adventureButton'])if(this.openLink(id))return id;
+          await new Promise(resolve=>native.setTimeout(resolve,100));
+        }
+        return '';
       },
       // Which Workday authentication form is shown, and which scanned controls receive the saved login.
       authPage(){
@@ -287,6 +299,8 @@
         const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
         for(const [element,value]of [[emails[0],credential.username],...passwords.map(e=>[e,credential.password])]){setter.call(element,value);element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));}
         const buttonId=buttons[0].getAttribute('data-automation-id');
+        // Workday silently drops a sign-in submitted within 500ms of the form appearing (its spam-bot timer), and the bot may have just opened it.
+        const earliest=performance.now()+1000;
         // Workday may enable or replace the submit control after processing input events.
         for(let attempt=0;attempt<60;attempt++){
           await new Promise(resolve=>native.setTimeout(resolve,50));
@@ -300,7 +314,7 @@
             const overlays=[...button.parentElement.querySelectorAll('[role=button]')].filter(e=>visible(e)&&/^(sign in|create account)$/.test(normalize(e.getAttribute('aria-label')||e.textContent)));
             if(overlays.length!==1)throw Error('Ambiguous authentication button');button=overlays[0];
           }
-          if(!button.isConnected||!visible(button)||button.disabled||button.getAttribute('aria-disabled')==='true')continue;
+          if(performance.now()<earliest||!button.isConnected||!visible(button)||button.disabled||button.getAttribute('aria-disabled')==='true')continue;
           stop();button.click();return;
         }
         throw Error('Authentication button did not become ready');
@@ -339,8 +353,9 @@
       else if(message.command==='snapshot')result=active.snapshot();
       else if(message.command==='stop')active.R.stop();
       else if(message.command==='action')await active.action(message.payload.id,message.payload.fields,message.payload.summary);
-      else if(message.command==='open_sign_in')result.opened=active.openAuthLink('signInLink');
-      else if(message.command==='open_create_account')result.opened=active.openAuthLink('createAccountLink');
+      else if(message.command==='open_sign_in')result.opened=active.openLink('signInLink');
+      else if(message.command==='open_create_account')result.opened=active.openLink('createAccountLink');
+      else if(message.command==='open_application')result.opened=await active.openApplication();
       else if(message.command==='auth_page')result=active.authPage();
       else if(message.command==='authenticate')await active.authenticate(message.payload.credential);
       respond({...result,token:message.token,document:message.document});

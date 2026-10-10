@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from core.automation.engine import ApplicationEngine
+from core.automation.engine import SIGN_IN_HANDOFF, ApplicationEngine
 from core.automation.extension_bridge import ExtensionBridge
 from core.automation.models import ApplicantProfile, ApplicationRun, ApprovedAnswer, employer_key
 from tests.support import account_pages, open_fixture, prepare
@@ -56,6 +56,52 @@ async def test_authentication_waits_for_workday_overlay_button(context, store):
     bridge, _, _, _, _ = await prepare(page, store, 'workday')
     await bridge.command('authenticate', {'credential': {'username': LOGIN, 'password': PASSWORD}})
     assert await page.evaluate('window.logins || 0') == 1
+
+
+POSTING = '''<div id=root></div><script>
+const clicks = [], pages = {
+  posting: '<h2>Intern</h2><a data-automation-id=adventureButton onclick="clicks.push(`apply`);show(`dialog`)">Apply</a>',
+  dialog: '<h2>Intern</h2><a data-automation-id=adventureButton>Apply</a><div role=dialog><h2>Start Your Application</h2><a data-automation-id=autofillWithResume>Autofill with Resume</a><a data-automation-id=applyManually onclick="clicks.push(`manual`);setTimeout(()=>{history.pushState({},``,location.pathname+`/apply/applyManually`);show(`signin`)},1000)">Apply Manually</a></div>',
+  signin: SIGN_IN,
+};
+function show(name) { document.getElementById('root').innerHTML = pages[name]; }
+setTimeout(() => show('posting'), 500);  // Workday renders the posting after the document loads.
+</script>'''.replace('SIGN_IN', json.dumps(SIGN_IN_PAGE))
+
+
+async def test_a_job_posting_opens_the_manual_application_once(context, store):
+    page = await open_fixture(context, 'workday', POSTING)
+    run = ApplicationRun(job_url=page.url)
+    for _ in range(2):
+        await ApplicationEngine(store).start(run, ApplicantProfile(), ExtensionBridge(page, run.id))
+        assert run.interventions[-1].message == SIGN_IN_HANDOFF
+    assert await page.evaluate('clicks') == ['apply', 'manual']
+
+
+async def test_a_slow_sign_in_continues_into_the_application(context, store, monkeypatch):
+    monkeypatch.setattr(ApplicationEngine, 'AUTH_POLLS', 40)
+    monkeypatch.setattr(ApplicationEngine, 'SECTION_POLLS', 20)  # The plain follow-up form is not a section any adapter completes.
+    html = account_pages('signin', 'signin').replace('window.logins=(window.logins||0)+1', 'window.logins=(window.logins||0)+1,setTimeout(()=>show(`form`),1500)')
+    page = await open_fixture(context, 'workday', html)
+    run = ApplicationRun(job_url=page.url)
+    await ApplicationEngine(store).start(run, ApplicantProfile(), ExtensionBridge(page, run.id), {'username': LOGIN, 'password': PASSWORD})
+    assert await page.evaluate('window.logins') == 1
+    assert run.interventions and all(i.kind != 'verification' for i in run.interventions), run.interventions
+
+
+async def test_sign_in_waits_out_workdays_spam_bot_timer(context, store):
+    # Workday drops a sign-in submitted within 500ms of its form appearing, and the bot opens that form itself.
+    html = account_pages('create', 'create').replace('function show(name){', 'function show(name){window.shown=performance.now();').replace(
+        'window.logins=(window.logins||0)+1', 'performance.now()-window.shown>=500&&(window.logins=(window.logins||0)+1)')
+    page = await open_fixture(context, 'workday', html)
+    run = ApplicationRun(job_url=page.url)
+    await ApplicationEngine(store).start(run, ApplicantProfile(), ExtensionBridge(page, run.id), {'username': LOGIN, 'password': PASSWORD})
+    assert await page.evaluate('window.logins || 0') == 1, run.interventions
+
+
+@pytest.fixture(autouse=True)
+def static_sign_in_pages(monkeypatch):
+    monkeypatch.setattr(ApplicationEngine, 'AUTH_POLLS', 2)  # Most fixtures keep showing their form after the click.
 
 
 def approve_terms(store, run):
