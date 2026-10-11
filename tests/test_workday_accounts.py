@@ -78,6 +78,17 @@ async def test_a_job_posting_opens_the_manual_application_once(context, store):
     assert await page.evaluate('clicks') == ['apply', 'manual']
 
 
+async def test_a_saved_draft_continues_its_application(context, store):
+    # Signed in with a draft, Workday swaps Apply for Continue Application.
+    html = POSTING.replace('''posting: '<h2>Intern</h2><a data-automation-id=adventureButton onclick="clicks.push(`apply`);show(`dialog`)">Apply</a>',''',
+        '''posting: '<h2>Intern</h2><a data-automation-id=continueButton onclick="clicks.push(`continue`);setTimeout(()=>{history.pushState({},``,location.pathname+`/apply`);show(`signin`)},1000)">Continue Application</a>',''')
+    page = await open_fixture(context, 'workday', html)
+    run = ApplicationRun(job_url=page.url)
+    await ApplicationEngine(store).start(run, ApplicantProfile(), ExtensionBridge(page, run.id))
+    assert run.interventions[-1].message == SIGN_IN_HANDOFF
+    assert await page.evaluate('clicks') == ['continue']
+
+
 async def test_a_slow_sign_in_continues_into_the_application(context, store, monkeypatch):
     monkeypatch.setattr(ApplicationEngine, 'AUTH_POLLS', 40)
     monkeypatch.setattr(ApplicationEngine, 'SECTION_POLLS', 20)  # The plain follow-up form is not a section any adapter completes.
