@@ -356,6 +356,8 @@ class RunDetailsDialog(QDialog):
         self.choices.addItems(request.options if request else [])
         self.choices.setCurrentIndex(-1)
         required = bool(request and request.required)
+        # A Yes or No kept from the previous question would hide the answer box and save a boolean for a dropdown.
+        self.kind.setCurrentIndex(0)
         # Required questions can't be omitted, so the option is unavailable rather than an error after saving.
         self.kind.model().item(3).setEnabled(not required)
         if required and self.kind.currentIndex() == 3:
@@ -414,7 +416,6 @@ class RunDetailsDialog(QDialog):
         if remaining:
             self.questions.setCurrentText(remaining[0])
             self.answer.clear()
-            self.kind.setCurrentIndex(0)
             self.notice.notify(f"Answer saved. Next: {remaining[0]}", "success")
         else:
             self.notice.notify("Answer saved. Resume the application when you're ready.", "success")

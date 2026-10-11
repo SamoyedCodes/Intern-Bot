@@ -56,6 +56,20 @@ def test_answers_are_saved_from_run_details_and_removed_from_the_bank(window, mo
     assert window.store.answers() == []
 
 
+def test_each_question_starts_as_a_text_answer(window):
+    questions = ('Have you worked with us before?', 'Degree')
+    run = ApplicationRun(company='Example', job_url=URL, profile_snapshot=ApplicantProfile(), status='needs_input',
+                         interventions=[InterventionRequest(kind='answer', message='', question=q, options=['Bachelor Degree'] if q == 'Degree' else []) for q in questions])
+    details = RunDetailsDialog(window.store, run)
+    details.kind.setCurrentIndex(1)
+    details.questions.setCurrentIndex(1)  # Picked from the list, not reached by saving.
+    assert details.kind.currentIndex() == 0
+    details.questions.setCurrentIndex(0)
+    details.kind.setCurrentIndex(1)
+    details.save_answer()
+    assert details.questions.currentText() == 'Degree' and details.kind.currentIndex() == 0
+
+
 def test_restart_turns_an_interrupted_run_into_a_handoff(window):
     view = window.tasks_view
     run = ApplicationRun(company='Example', job_url=URL, status='running')
