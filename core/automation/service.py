@@ -71,6 +71,12 @@ class AutomationService(QObject):
                     else:
                         await route.continue_()
                 await page.route("**/*", guard)
+                # Workday's "Something went wrong" page shows only a correlation ID; keep the failing call itself.
+                def failed(response):
+                    from urllib.parse import urlsplit
+                    if response.status >= 400 and response.request.resource_type in {"document", "xhr", "fetch"} and urlsplit(response.url).hostname == host:
+                        self.store.record_event(run.id, "http_error", run.stage, f"{response.status} {response.request.method} {urlsplit(response.url).path}")
+                page.on("response", failed)
                 adapter = ExtensionBridge(page, run.id)
                 self.sessions[run.id] = (manager, adapter)
                 await page.goto(run.job_url, wait_until="domcontentloaded")
