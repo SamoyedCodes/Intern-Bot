@@ -106,6 +106,9 @@
         return;
       }
       if (e.matches?.('[role=option],option,[data-automation-id=promptOption],[data-automation-id=menuItem]')) {
+        // An option belongs to the dropdown that controls its list, not to whichever picker was clicked last (a replayed proposal can move that).
+        const list = e.closest('[role=listbox]'), owner = list?.id && document.querySelector(`[aria-controls="${CSS.escape(list.id)}"]`);
+        if (owner) picker = owner;
         const p = picker && policies.get(picker);
         if(picker && !p){proposals.set(picker,{key:'option',value:e});return;}
         if(!p || normalize(e.innerText || e.textContent)!==normalize(p.value)){
