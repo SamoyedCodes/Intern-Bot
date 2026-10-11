@@ -337,13 +337,14 @@
       },
       openLink(id){
         const links=[...document.querySelectorAll(`[data-automation-id="${id}"]`)].filter(visible);
-        if(config.adapter!=='workday'||!live()||!['signInLink','createAccountLink','adventureButton','applyManually'].includes(id)||links.length!==1)return false;
+        if(config.adapter!=='workday'||!live()||!['signInLink','createAccountLink','adventureButton','applyManually','continueButton'].includes(id)||links.length!==1)return false;
         links[0].click();return true;
       },
       async openApplication(){
         // The posting renders after the document loads. Apply stays visible behind its Start Your Application dialog, so Apply Manually goes first.
+        // A signed-in candidate with a saved draft gets Continue Application instead of Apply.
         for(let attempt=0;attempt<50&&live();attempt++){
-          for(const id of ['applyManually','adventureButton'])if(this.openLink(id))return id;
+          for(const id of ['applyManually','continueButton','adventureButton'])if(this.openLink(id))return id;
           await new Promise(resolve=>native.setTimeout(resolve,100));
         }
         return '';

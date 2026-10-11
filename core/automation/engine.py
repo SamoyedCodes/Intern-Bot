@@ -118,9 +118,9 @@ class ApplicationEngine:
                 opened = match['adapter']['id'] == 'workday' and not fields and (await bridge.command('open_application')).get('opened')
                 if opened:
                     # The job posting or its Start Your Application dialog. Apply Manually skips Workday's resume parser;
-                    # its route can take seconds to load, while Apply opens the dialog in place.
+                    # its route (and Continue Application's) can take seconds to load, while Apply opens the dialog in place.
                     url = bridge.page.url
-                    for _ in range(40 if opened == 'applyManually' else 2):
+                    for _ in range(2 if opened == 'adventureButton' else 40):
                         await asyncio.sleep(.25)
                         if bridge.page.url != url:
                             break
