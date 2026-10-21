@@ -3,8 +3,8 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-from PySide6.QtCore import QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence
+from PySide6.QtCore import QPointF, QRectF, QTimer, QUrl, Qt, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QGuiApplication, QKeySequence, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QScrollArea,
@@ -16,7 +16,7 @@ from core.automation.models import ApplicantProfile, ApplicationRun, Interventio
 from core.automation.service import AutomationService
 from core.storage.local_store import LocalStore
 from core.tracker import PIPELINE, activity, export_csv, import_csv
-from gui.theme import form_layout, MessageBar, button, card, dot_icon, label, more_button, restyle, shortcut
+from gui.theme import TOKENS, form_layout, MessageBar, button, card, dot_icon, label, more_button, restyle, shortcut
 from gui.views.application_dialogs import ProfileDialog, RunDetailsDialog
 
 GROUPS = ("All", "Needs you", "In progress", "Applied", "Closed")
@@ -75,6 +75,8 @@ def ago(iso):
 
 
 def stage_text(run):
+    if 0 <= run.step < len(run.steps):
+        return f"{run.steps[run.step]} · step {run.step + 1} of {len(run.steps)}"
     if run.stage == "start":
         return "Not started"
     stage = "Application form" if run.stage.startswith("form_") else run.stage.replace("_", " ")
@@ -84,6 +86,57 @@ def stage_text(run):
 def duration(seconds):
     minutes, seconds = divmod(int(seconds), 60)
     return f"{minutes} min {seconds} s" if minutes else f"{seconds} s"
+
+
+class Stepper(QWidget):
+    """The site's own steps as dots on a line: done, current (ringed, bold) and still to come."""
+
+    def __init__(self):
+        super().__init__()
+        self.steps, self.current = [], -1
+        font = QFont(self.font())
+        font.setPixelSize(11)
+        self.setFont(font)
+        self.setFixedHeight(22 + 3 * self.fontMetrics().height())
+
+    def set_steps(self, steps, current):
+        self.steps, self.current = steps, current
+        self.setToolTip("\n".join(f"{i + 1}. {name}" for i, name in enumerate(steps)))
+        self.update()
+
+    def paintEvent(self, _):
+        if not self.steps:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        width, y = self.width() / len(self.steps), 9
+        accent, muted = QColor(TOKENS["accent"]), QColor(TOKENS["border"])
+        painter.setPen(QPen(muted, 2))
+        painter.drawLine(QPointF(width / 2, y), QPointF(self.width() - width / 2, y))
+        if self.current > 0:
+            painter.setPen(QPen(accent, 2))
+            painter.drawLine(QPointF(width / 2, y), QPointF(width / 2 + self.current * width, y))
+        # Narrow panels shrink the labels until every word fits its column; only then are words elided.
+        font, words = QFont(self.font()), [word for name in self.steps for word in name.split()] or [""]
+        font.setBold(True)
+        for size in (11, 10, 9):
+            font.setPixelSize(size)
+            if max(map(QFontMetrics(font).horizontalAdvance, words)) <= width - 4:
+                break
+        for i, name in enumerate(self.steps):
+            center = QPointF(width / 2 + i * width, y)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(accent if i <= self.current else muted)
+            radius = 8 if i == self.current else 5
+            painter.drawEllipse(center, radius, radius)
+            if i == self.current:
+                painter.setBrush(QColor(TOKENS["surface"]))
+                painter.drawEllipse(center, 3, 3)
+            font.setBold(i == self.current)
+            painter.setFont(font)
+            painter.setPen(QColor(TOKENS["text" if i == self.current else "text3"]))
+            name = " ".join(QFontMetrics(font).elidedText(word, Qt.ElideRight, int(width) - 4) for word in name.split())
+            painter.drawText(QRectF(i * width + 2, y + 13, width - 4, self.height() - y - 13), Qt.AlignHCenter | Qt.AlignTop | Qt.TextWordWrap, name)
 
 
 class Item(QTableWidgetItem):
@@ -364,8 +417,9 @@ class TasksView(QWidget):
         self.d_stage = QLabel()
         self.d_bar = QProgressBar()
         self.d_bar.setTextVisible(False)
+        self.d_steps = Stepper()
         self.d_progress = label(role="caption")
-        for widget in (self.d_stage, self.d_bar, self.d_progress):
+        for widget in (self.d_stage, self.d_steps, self.d_bar, self.d_progress):
             body.addWidget(widget)
 
         body.addSpacing(4)
@@ -540,12 +594,14 @@ class TasksView(QWidget):
             total = len(run.fields)
             verified = sum(f.disposition == "verified" for f in run.fields.values())
             self.d_stage.setText(stage_text(run))
-            self.d_bar.setVisible(bool(total))
+            self.d_steps.set_steps(run.steps, run.step)
+            self.d_steps.setVisible(bool(run.steps))
+            self.d_bar.setVisible(bool(total) and not run.steps)
             self.d_bar.setRange(0, max(total, 1))
             self.d_bar.setValue(verified)
             details = [f"{verified} of {total} fields verified" if total else "No fields checked yet"]
-            if run.completed_sections:
-                details.append("Done: " + ", ".join(run.completed_sections))
+            if run.completed_sections and not run.steps:
+                details.append(f"{len(run.completed_sections)} sections done")
             if run.elapsed_seconds:
                 details.append(duration(run.elapsed_seconds) + " active")
             self.d_progress.setText(" · ".join(details))

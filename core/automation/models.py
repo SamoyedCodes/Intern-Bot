@@ -214,6 +214,8 @@ class ApplicationRun(BaseModel):
     fields: dict[str, FieldAssessment] = Field(default_factory=dict)
     interventions: list[InterventionRequest] = Field(default_factory=list)
     completed_sections: list[str] = Field(default_factory=list)
+    steps: list[str] = Field(default_factory=list)  # the site's own step names, when it shows a step list
+    step: int = -1
     updated_at: str = Field(default_factory=now)
     elapsed_seconds: float = 0
     intervention_count: int = 0
