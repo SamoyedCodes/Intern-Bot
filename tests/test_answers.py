@@ -102,3 +102,17 @@ def test_preferred_name_checkbox_follows_the_profile(run, preferred, expected):
 def test_country_phone_code_uses_the_pickers_label(run, phone):
     field = FormField('c', 'Country Phone Code', '', 'text')
     assert resolve(field, PROFILE.model_copy(update=phone), run, []).value == 'Singapore (+65)'
+
+
+def test_each_language_row_uses_its_own_answer_and_profile_facts(run):
+    profile = PROFILE.model_copy(update={'language_proficiency': [Language(language='English', fluent=True), Language(language='Chinese (Mandarin)', fluent=False)]})
+    said = lambda question, value: ApprovedAnswer(question=question, value=value, scope_key=run.id)
+    rows = lambda label, kind='select-one': [FormField('k', label, '', kind, group='language_proficiency', row=r) for r in (0, 1)]
+    # Bare-label answers were given for the first row; later rows keep their own profile facts.
+    first = [said('Language', 'English (UK)'), said('I am fluent in this language.', True), said('Speaking', '3 - Fluent')]
+    assert [resolve(f, profile, run, first).value for f in rows('Language')] == ['English (UK)', 'Chinese (Mandarin)']
+    assert [resolve(f, profile, run, first).value for f in rows('I am fluent in this language.', 'checkbox')] == [True, False]
+    assert [resolve(f, profile, run, first).value for f in rows('Speaking')] == ['3 - Fluent', None]
+    # A row's own answer names the row.
+    own = first + [said('Speaking — Chinese (Mandarin)', '2 - Fair')]
+    assert [resolve(f, profile, run, own).value for f in rows('Speaking')] == ['3 - Fluent', '2 - Fair']

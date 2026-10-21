@@ -45,7 +45,7 @@ ALIASES = {
     "veteran status": "veteran_status", "disability status": "disability_status",
 }
 ROW_ALIASES = {
-    "language_proficiency": {"language": "language", "proficiency": "proficiency", "fluent": "fluent", "native language": "fluent", "i am fluent in this language": "fluent"},
+    "language_proficiency": {"language": "language", "proficiency": "proficiency", "fluent": "fluent", "native language": "fluent", "i am fluent in this language": "fluent", "i am fluent in this language.": "fluent"},
     "education": {"school": "school", "school or university": "school", "degree": "degree",
                   "field of study": "major", "major": "major", "gpa": "gpa", "currently attending": "current", "from": "start_date", "to": "end_date",
                   "start date": "start_date", "end date": "end_date"},
@@ -86,25 +86,52 @@ def applicable(answers, profile: ApplicantProfile, run: ApplicationRun):
     return usable
 
 
+ROW_NAMES = {"language_proficiency": "language", "education": "school", "experience": "employer"}
+
+
+def question_for(field, profile: ApplicantProfile):
+    """A row question names its row ("Speaking — English"), so each language, school or employer keeps its own answer."""
+    entries = getattr(profile, field.group) if field.group in ROW_NAMES else []
+    name = getattr(entries[field.row], ROW_NAMES[field.group]) if field.row < len(entries) else ""
+    return f"{field.label} — {name}" if name else field.label
+
+
+def approved(field, matches):
+    """The most specific approved answer among matches, or None when nothing matched."""
+    if not matches:
+        return None
+    priority = {"application": 0, "employer": 1, "global": 2}
+    best = min(priority[a.scope] for a in matches)
+    matches = [a for a in matches if priority[a.scope] == best]
+    if len({(str(a.value), a.omit) for a in matches}) != 1:
+        return Resolution(reason="Conflicting approved answers; edit the answer bank.")
+    a = matches[-1]
+    if a.omit and field.required:
+        return Resolution(reason="A required field cannot be omitted.")
+    return Resolution(field_value(field, a.value), "answer:" + a.id, a.omit)
+
+
 def resolve(field, profile: ApplicantProfile, run: ApplicationRun, answers) -> Resolution:
-    matches = [a for a in applicable(answers, profile, run) if asks(a, field.label)]
-    if matches:
-        priority = {"application": 0, "employer": 1, "global": 2}
-        best = min(priority[a.scope] for a in matches)
-        matches = [a for a in matches if priority[a.scope] == best]
-        if len({(str(a.value), a.omit) for a in matches}) != 1:
-            return Resolution(reason="Conflicting approved answers; edit the answer bank.")
-        a = matches[-1]
-        if a.omit and field.required:
-            return Resolution(reason="A required field cannot be omitted.")
-        return Resolution(field_value(field, a.value), "answer:" + a.id, a.omit)
+    usable = applicable(answers, profile, run)
+    if not field.group:
+        return approved(field, [a for a in usable if asks(a, field.label)]) or profile_fact(field, profile)
+    if field.row >= len(getattr(profile, field.group, [])):
+        return Resolution(reason="The browser contains an extra row; reconcile it with your profile.")
+    # An answer to a bare row label ("Speaking") was given for the first row, where the question used to be asked;
+    # other rows have their own named answer ("Speaking — Chinese (Mandarin)") or their own profile facts.
+    named = question_for(field, profile)
+    for question in dict.fromkeys(q for q in (named, field.label if field.row == 0 else None) if q):
+        found = approved(field, [a for a in usable if asks(a, question)])
+        if found:
+            return found
+    return profile_fact(field, profile)
+
+
+def profile_fact(field, profile: ApplicantProfile) -> Resolution:
     attr = None
     source = profile
     if field.group:
-        entries = getattr(profile, field.group, [])
-        if field.row >= len(entries):
-            return Resolution(reason="The browser contains an extra row; reconcile it with your profile.")
-        source = entries[field.row]
+        source = getattr(profile, field.group)[field.row]
         label = normalized(field.label)
         component = re.fullmatch(r"(from|to|start date|end date) (month|day|year)", label)
         if component:

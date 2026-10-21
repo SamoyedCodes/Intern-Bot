@@ -5,9 +5,9 @@ import json
 import re
 import time
 
-from core.automation.answers import UNANSWERED, applicable, resolve
+from core.automation.answers import UNANSWERED, applicable, question_for, resolve
 from core.automation.assistant import PROVIDERS, match_questions
-from core.automation.models import FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url
+from core.automation.models import ApplicantProfile, FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url
 from pathlib import Path
 from core.automation.speedy_profile import translate
 from core.automation.privacy import configure_privacy
@@ -51,7 +51,8 @@ class ApplicationEngine:
         run.intervention_count += 1
         request = InterventionRequest(kind=kind, message=message)
         if field:
-            request.field_key, request.question = field.key, field.label
+            # Row questions name their row, so the answer you give fills only that language, school or employer.
+            request.field_key, request.question = field.key, question_for(field, run.profile_snapshot or ApplicantProfile())
             request.required, request.options, request.field_kind = field.required, field.options, field.kind
         run.interventions.append(request)
         self.store.record_event(run.id, kind, run.stage, message)
