@@ -9,6 +9,7 @@ from PySide6.QtCore import QObject, Signal
 from core.automation.engine import ApplicationEngine
 from core.automation.extension_bridge import ExtensionBridge
 from core.automation.models import canonical_url, site_key
+from core.automation.request_engine import RequestEngine
 from core.browser.playwright_mgr import AsyncPlaywrightManager
 
 
@@ -41,7 +42,7 @@ class AutomationService(QObject):
         return True
 
     async def _run(self, run, profile, credential, inspect_only=False):
-        engine = ApplicationEngine(self.store, self.progress.emit)
+        engine = (RequestEngine if run.mode == "request" else ApplicationEngine)(self.store, self.progress.emit)
         self.engines[run.id] = engine
         try:
             session = self.sessions.get(run.id)

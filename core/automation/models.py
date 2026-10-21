@@ -198,6 +198,8 @@ class ApplicationRun(BaseModel):
     role: str = "Internship"
     profile_name: str = "Default"
     browser: Literal["chromium", "chrome", "firefox"] = "chromium"
+    # classic fills the form in the browser; request answers Workday's questions through its candidate API.
+    mode: Literal["classic", "request"] = "classic"
     auto_advance: bool = True
     reuse_answers: bool = True
     auto_submit: bool = False
