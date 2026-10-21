@@ -104,6 +104,8 @@ class ApplicationEngine:
                 fields = [FormField(**f) for f in result['fields']]
                 section = match['url'] + '|' + (result.get('section') or '|'.join(f.key for f in fields))
                 run.stage = match['adapter']['name'] + ':' + hashlib.sha256(section.encode()).hexdigest()[:10]
+                if result.get('steps'):
+                    run.steps, run.step = result['steps'], result['step']
                 if run.stage == last_advanced_stage:
                     self.intervene(run, 'The previous continuation did not reach a distinguishable section. Inspect the draft before continuing again.')
                     return run

@@ -489,3 +489,11 @@ def test_a_reformatted_phone_number_still_verifies(store):
     run = ApplicationRun(job_url='https://example.wd1.myworkdayjobs.com/job')
     field = FormField('phone', 'Phone Number', '', 'text', value='9876 5411')
     assert ApplicationEngine(store).verify(run, ApplicantProfile(phone_country_code='+65', phone_number='98765411'), [field], {'files': {}})
+
+
+async def test_the_sites_own_step_list_is_recorded_for_the_progress_stepper(context, store):
+    steps = ''.join(f'<li data-automation-id={state}><label>{prefix}step {i} of 3</label><div>{name}</div></li>' for i, (state, prefix, name) in enumerate(
+        [('progressBarCompletedStep', 'completed ', 'My Information'), ('progressBarActiveStep', 'current ', 'My Experience'), ('progressBarInactiveStep', '', 'Review')], 1))
+    page = await open_fixture(context, 'greenhouse', greenhouse(extra=f'<ol data-automation-id=progressBar>{steps}</ol>'))
+    run = await apply(store, page, ApplicationRun(job_url=page.url))
+    assert (run.steps, run.step) == (['My Information', 'My Experience', 'Review'], 1)
