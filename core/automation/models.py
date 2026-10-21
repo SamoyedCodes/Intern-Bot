@@ -153,6 +153,8 @@ class ApplicantProfile(BaseModel):
 class ApprovedAnswer(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     question: str
+    # Other wordings employers used for the same question; each takes this answer.
+    variants: list[str] = Field(default_factory=list)
     profile_name: str = "Default"
     value: str | bool = ""
     scope: Literal["application", "employer", "global"] = "application"
@@ -185,6 +187,7 @@ class InterventionRequest(BaseModel):
     question: str = ""
     required: bool = False
     options: list[str] = Field(default_factory=list)
+    field_kind: str = ""  # the form control's kind (text, combobox, file…), so the answer dialog offers the same type
 
 
 class ApplicationRun(BaseModel):

@@ -27,6 +27,13 @@ def test_application_answer_beats_global_and_false_is_an_answer(run):
     assert resolve(QUESTION, PROFILE, run, [shared, answer(run, False)]).value is False
 
 
+def test_a_recorded_wording_takes_the_same_answer(run):
+    saved = answer(run, 'Jan - May 2027', variants=['When is your intended period of internship?'])
+    reworded = FormField('k', 'When is your intended period of internship? *', '', 'text')
+    assert resolve(reworded, PROFILE, run, [saved]).value == 'Jan - May 2027'
+    assert resolve(FormField('k', 'Internship start date', '', 'text'), PROFILE, run, [saved]).value is None
+
+
 def test_conflicting_answers_in_one_scope_resolve_to_nothing(run):
     assert resolve(QUESTION, PROFILE, run, [answer(run, False), answer(run, True)]).value is None
 

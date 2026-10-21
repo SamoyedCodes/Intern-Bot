@@ -1,4 +1,6 @@
 """Structured profile editing, guided answer approval and the approved-answer bank."""
+from difflib import SequenceMatcher
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QHeaderView, QLineEdit, QListWidget,
@@ -6,6 +8,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
+from core.automation.answers import applicable, asks
 from core.automation.models import ApplicantProfile, ApprovedAnswer, Education, Experience, Language, employer_key, normalized, site_key
 from gui.theme import form_layout, MessageBar, button, card, dot_icon, label, restyle, shortcut
 
@@ -49,6 +52,10 @@ LABELS = {
 COLUMNS = {"job_title": "Job title", "start_date": "Start", "end_date": "End", "gpa": "GPA"}
 RESULTS = {"verified": ("Verified", "success"), "needs_input": ("Needs input", "warning"),
            "blocked": ("Blocked", "danger"), "intentionally_omitted": ("Left blank", "neutral")}
+
+
+def shown(answer):
+    return "Leave blank" if answer.omit else {True: "Yes", False: "No"}.get(answer.value, str(answer.value))
 
 
 def bool_combo(value=None):
@@ -274,8 +281,12 @@ class RunDetailsDialog(QDialog):
         self.questions.addItems(self.pending)
         self.questions.setToolTip("Use the form's exact wording. Approvals match the normalized question text.")
         self.form.addRow("Question", self.questions)
+        # A reworded question can reuse an answer you already gave instead of a new one.
+        self.same = QComboBox()
+        self.same.setToolTip("Closest saved answers first. This wording is added to the chosen answer.")
+        self.form.addRow("Same as", self.same)
         self.kind = QComboBox()
-        self.kind.addItems(["Text answer", "Yes", "No", "Leave blank (optional questions only)"])
+        self.kind.addItems(["Text answer", "Yes", "No", "Leave blank (optional questions only)", "One of the form's options", "File"])
         self.form.addRow("Answer type", self.kind)
         # Type to filter long lists; only picking an actual option fills the answer.
         self.choices = QComboBox()
@@ -284,8 +295,14 @@ class RunDetailsDialog(QDialog):
         self.choices.lineEdit().setPlaceholderText("Type to filter the form's options")
         self.choices.completer().setFilterMode(Qt.MatchContains)
         self.choices.completer().setCompletionMode(QCompleter.PopupCompletion)
-        self.choices.activated.connect(lambda: self.answer.setPlainText(self.choices.currentText()))
         self.form.addRow("Form choices", self.choices)
+        self.file = QLineEdit()
+        self.file.setReadOnly(True)
+        self.file.setPlaceholderText("The document to upload")
+        self.file_box = QHBoxLayout()
+        self.file_box.addWidget(self.file, 1)
+        self.file_box.addWidget(button("Choose…", self.pick_file, "ghost"))
+        self.form.addRow("File", self.file_box)
         self.answer = QPlainTextEdit()
         self.answer.setFixedHeight(90)
         self.answer.setPlaceholderText("The exact answer to fill in")
@@ -295,7 +312,8 @@ class RunDetailsDialog(QDialog):
         self.answer_box.addWidget(button("Draft with AI…", self.draft_answer, "ghost"), 0, Qt.AlignLeft)
         self.form.addRow("Answer", self.answer_box)
         self.scope = QComboBox()
-        self.scope.addItems(["Only this application", f"All applications to {name}", "Any application asking exactly this question"])
+        self.scope.addItems(["Only this application", f"All applications to {name}", "Every application asking this question"])
+        self.scope.setCurrentIndex(2)
         self.form.addRow("Remember for", self.scope)
         box.addLayout(self.form)
         save_row = QHBoxLayout()
@@ -343,6 +361,7 @@ class RunDetailsDialog(QDialog):
         layout.addWidget(buttons)
         self.questions.currentTextChanged.connect(self.question_changed)
         self.kind.currentIndexChanged.connect(self.kind_changed)
+        self.same.currentIndexChanged.connect(self.kind_changed)
         self.question_changed()
         self.update_progress()
 
@@ -355,19 +374,41 @@ class RunDetailsDialog(QDialog):
         self.choices.clear()
         self.choices.addItems(request.options if request else [])
         self.choices.setCurrentIndex(-1)
+        question = normalized(self.questions.currentText())
+        known = [a for a in applicable(self.store.answers(), self.run.profile_snapshot or ApplicantProfile(), self.run) if not asks(a, question)]
+        known.sort(key=lambda a: -SequenceMatcher(None, question, normalized(a.question)).ratio())
+        self.same.blockSignals(True)
+        self.same.clear()
+        self.same.addItem("Nothing saved — a new answer", "")
+        for answer in known:
+            self.same.addItem(f"{answer.question} → {shown(answer)}", answer.id)
+        self.same.blockSignals(False)
         required = bool(request and request.required)
-        # A Yes or No kept from the previous question would hide the answer box and save a boolean for a dropdown.
-        self.kind.setCurrentIndex(0)
+        control = request.field_kind if request else ""
+        options = self.choices.count() > 0
+        self.file.clear()
         # Required questions can't be omitted, so the option is unavailable rather than an error after saving.
         self.kind.model().item(3).setEnabled(not required)
-        if required and self.kind.currentIndex() == 3:
-            self.kind.setCurrentIndex(0)
+        self.kind.model().item(4).setEnabled(options)
+        self.kind.model().item(5).setEnabled(control == "file")
+        # Start with the form control's own type; one kept from the previous question would save a boolean for a dropdown.
+        self.kind.setCurrentIndex(5 if control == "file" else 4 if options else 1 if control == "checkbox" else 0)
         self.kind_changed()
 
     def kind_changed(self):
-        text = self.kind.currentIndex() == 0
-        self.form.setRowVisible(self.answer_box, text)
-        self.form.setRowVisible(self.choices, text and self.choices.count() > 0)
+        new = not self.same.currentData()
+        index = self.kind.currentIndex()
+        self.form.setRowVisible(self.same, self.same.count() > 1)
+        for row in (self.kind, self.scope):
+            self.form.setRowVisible(row, new)
+        self.form.setRowVisible(self.answer_box, new and index == 0)
+        self.form.setRowVisible(self.choices, new and index == 4)
+        self.form.setRowVisible(self.file_box, new and index == 5)
+
+    def pick_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Choose file", "", "Documents (*.pdf *.doc *.docx *.txt *.rtf)")
+        if path:
+            self.file.setText(path)
 
     def update_progress(self):
         done = sum(normalized(q) in self.answered for q in self.pending)
@@ -393,23 +434,36 @@ class RunDetailsDialog(QDialog):
         if not question:
             self.notice.notify("Enter the exact question first.", "warning")
             return
+        if self.same.currentData():
+            answer = next(a for a in self.store.answers() if a.id == self.same.currentData())
+            answer.variants.append(question)
+            self.store.save_answer(answer)
+            self.saved(question)
+            return
         omit = self.kind.currentIndex() == 3
         if omit and any(i.required and i.question == question for i in self.run.interventions):
             self.notice.notify("Required questions can't be left blank.", "warning")
             return
-        value = self.answer.toPlainText().strip() if self.kind.currentIndex() == 0 else self.kind.currentIndex() == 1
+        index = self.kind.currentIndex()
+        value = {0: self.answer.toPlainText().strip(), 4: self.choices.currentText().strip(), 5: self.file.text()}.get(index, index == 1)
         if not omit and value == "":
-            self.notice.notify("Enter an answer, or choose Yes, No or Leave blank.", "warning")
+            self.notice.notify("Enter, pick or choose an answer first.", "warning")
+            return
+        if index == 4 and self.choices.findText(value) < 0:
+            self.notice.notify("Pick one of the form's options, or switch to a text answer.", "warning")
             return
         scope = ["application", "employer", "global"][self.scope.currentIndex()]
         key = self.run.id if scope == "application" else employer_key(self.run.job_url) if scope == "employer" else ""
         country = self.run.profile_snapshot.country if self.run.profile_snapshot else ""
         answer = ApprovedAnswer(question=question, profile_name=self.run.profile_name, value=value, scope=scope, scope_key=key, country=country, omit=omit)
         # Editing the same scoped answer replaces it instead of creating a conflict.
-        existing = [a for a in self.store.answers() if normalized(a.question) == normalized(question) and a.profile_name == self.run.profile_name and a.scope == scope and a.scope_key == key and a.country == country]
+        existing = [a for a in self.store.answers() if asks(a, question) and a.profile_name == self.run.profile_name and a.scope == scope and a.scope_key == key and a.country == country]
         if existing:
-            answer.id = existing[-1].id
+            answer.id, answer.question, answer.variants = existing[-1].id, existing[-1].question, existing[-1].variants
         self.store.save_answer(answer)
+        self.saved(question)
+
+    def saved(self, question):
         self.answered.add(normalized(question))
         self.update_progress()
         remaining = [q for q in self.pending if normalized(q) not in self.answered]
@@ -433,7 +487,7 @@ class AnswersView(QWidget):
         titles = QVBoxLayout()
         titles.setSpacing(2)
         titles.addWidget(label("Answers", "pageTitle"))
-        titles.addWidget(label("Answers you've approved. They're reused only for the exact question, within their scope, profile and country.", "muted"))
+        titles.addWidget(label("Answers you've approved. Expand one to see every wording employers used for it; each is filled with the same answer.", "muted"))
         header.addLayout(titles, 1)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search questions and answers")
@@ -445,16 +499,18 @@ class AnswersView(QWidget):
         layout.addLayout(header)
         self.notice = MessageBar()
         layout.addWidget(self.notice)
-        self.table = table(["Question", "Answer", "Applies to", "Profile", "Country"], 36)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setWordWrap(False)
-        header_view = self.table.horizontalHeader()
-        header_view.setSectionResizeMode(QHeaderView.Interactive)
+        # Each answer is a row; the wordings it was matched to are collapsible children.
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Question", "Answer", "Applies to", "Profile", "Country"])
+        self.tree.setUniformRowHeights(True)
+        self.tree.setWordWrap(False)
+        header_view = self.tree.header()
+        header_view.setStretchLastSection(False)
         header_view.setSectionResizeMode(0, QHeaderView.Stretch)
         for column, width in ((1, 160), (2, 240), (3, 110), (4, 100)):
-            self.table.setColumnWidth(column, width)
-        self.table.itemSelectionChanged.connect(self.update_actions)
-        layout.addWidget(self.table, 1)
+            self.tree.setColumnWidth(column, width)
+        self.tree.itemSelectionChanged.connect(self.update_actions)
+        layout.addWidget(self.tree, 1)
         self.empty = label("Answers you approve while resolving an application's questions appear here.", "muted")
         self.empty.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.empty, 1)
@@ -464,7 +520,7 @@ class AnswersView(QWidget):
         row.addWidget(self.remove_btn)
         layout.addLayout(row)
         for keys in ("Delete", "Backspace"):
-            shortcut(keys, self.table, self.remove, Qt.WidgetShortcut)
+            shortcut(keys, self.tree, self.remove, Qt.WidgetShortcut)
         self.refresh()
 
     def showEvent(self, event):
@@ -475,30 +531,49 @@ class AnswersView(QWidget):
         self.answers = self.store.answers()
         companies = {run.id: run.company or site_key(run.job_url) for run in self.store.runs()}
         query = self.search.text().strip().casefold()
-        rows = [a for a in self.answers if query in f"{a.question} {a.value}".casefold()]
-        self.table.setRowCount(len(rows))
-        for row, answer in enumerate(rows):
+        self.tree.clear()
+        for answer in self.answers:
+            if query not in " ".join([answer.question, *answer.variants, shown(answer)]).casefold():
+                continue
             applies = {"application": f"Only the {companies.get(answer.scope_key, 'deleted')} application",
                        "employer": f"All applications at {answer.scope_key}", "global": "Any application"}[answer.scope]
-            value = "Leave blank" if answer.omit else {True: "Yes", False: "No"}.get(answer.value, str(answer.value))
-            for col, text in enumerate([answer.question, value, applies, answer.profile_name, answer.country or "—"]):
-                item = QTableWidgetItem(text)
-                item.setToolTip(text)
-                item.setData(Qt.UserRole, answer.id)
-                self.table.setItem(row, col, item)
-        self.table.setVisible(bool(self.answers))
+            count = len(answer.variants)
+            question = answer.question + (f"  ·  {count} more wording{'s' if count > 1 else ''}" if count else "")
+            item = QTreeWidgetItem(self.tree, [question, shown(answer), applies, answer.profile_name, answer.country or "—"])
+            item.setData(0, Qt.UserRole, answer.id)
+            for column in range(5):
+                item.setToolTip(column, item.text(column))
+            for variant in answer.variants:
+                child = QTreeWidgetItem(item, [variant])
+                child.setData(0, Qt.UserRole, answer.id)
+                child.setData(0, Qt.UserRole + 1, variant)
+                child.setToolTip(0, f"Also asked as “{variant}”")
+            # Searching for a wording opens its answer so the match is visible.
+            item.setExpanded(bool(query) and any(query in v.casefold() for v in answer.variants))
+        self.tree.setVisible(bool(self.answers))
         self.empty.setVisible(not self.answers)
         self.update_actions()
 
     def update_actions(self):
-        self.remove_btn.setEnabled(bool(self.table.selectedItems()))
+        item = self.tree.currentItem() if self.tree.selectedItems() else None
+        self.remove_btn.setEnabled(bool(item))
+        self.remove_btn.setText("Remove wording…" if item and item.data(0, Qt.UserRole + 1) else "Delete answer…")
 
     def remove(self):
-        items = self.table.selectedItems()
-        if not items:
+        if not self.tree.selectedItems():
             return
-        answer = next(a for a in self.answers if a.id == items[0].data(Qt.UserRole))
-        if QMessageBox.question(self, "Delete approved answer?", f"Delete your answer to “{answer.question}”? Intern-Bot will ask again the next time this question appears.") != QMessageBox.Yes:
+        item = self.tree.currentItem()
+        answer = next(a for a in self.answers if a.id == item.data(0, Qt.UserRole))
+        wording = item.data(0, Qt.UserRole + 1)
+        if wording:
+            if QMessageBox.question(self, "Remove this wording?", f"Stop answering “{wording}” with your answer to “{answer.question}”? Intern-Bot will ask again when a form uses this wording.") != QMessageBox.Yes:
+                return
+            answer.variants.remove(wording)
+            self.store.save_answer(answer)
+            self.refresh()
+            self.notice.notify("Wording removed.", "success")
+            return
+        if QMessageBox.question(self, "Delete approved answer?", f"Delete your answer to “{answer.question}”{' and its other wordings' if answer.variants else ''}? Intern-Bot will ask again the next time this question appears.") != QMessageBox.Yes:
             return
         self.store.delete_answer(answer.id)
         self.refresh()
