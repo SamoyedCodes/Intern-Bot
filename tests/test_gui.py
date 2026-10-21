@@ -8,7 +8,7 @@ import time
 import pytest
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QMessageBox, QPushButton
 
 import core.automation.service as service_module
 import gui.views.tasks_view as tasks_module
@@ -237,6 +237,19 @@ def test_new_application_uses_saved_settings_and_the_active_profile(window):
     run = dialog.application()
     assert run.browser == 'chromium' and not run.auto_submit and not run.auto_advance
     assert run.profile_name == 'Engineering' and run.profile_snapshot.skills == 'Python'
+
+
+def test_request_mode_is_chosen_per_application_for_workday_only(window):
+    dialog = TaskDialog(window.tasks_view)
+    dialog.url.setText('https://jobs.lever.co/example/1')
+    dialog.auto_submit.setChecked(True)
+    dialog.mode.setCurrentIndex(dialog.mode.findData('request'))
+    assert not dialog.auto_submit.isEnabled() and not dialog.auto_submit.isChecked()
+    dialog.validate()
+    assert 'Workday' in dialog.error.text() and dialog.result() != QDialog.Accepted
+    dialog.url.setText('https://example.wd1.myworkdayjobs.com/en-US/Careers/job/Singapore/Intern_R123')
+    dialog.validate()
+    assert dialog.result() == QDialog.Accepted and dialog.application().mode == 'request'
 
 
 def test_tracker_saves_stage_and_notes(window):

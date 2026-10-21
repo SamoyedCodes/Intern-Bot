@@ -175,6 +175,11 @@ class TaskDialog(QDialog):
         self.profile.addItems(self.store.profiles())
         self.profile.setCurrentText(self.store.get("active_profile", "Default"))
         form.addRow("Profile", self.profile)
+        self.mode = QComboBox()
+        self.mode.addItem("Classic · fills the form in the browser", "classic")
+        self.mode.addItem("Request · answers Workday's questions through its API (beta)", "request")
+        self.mode.currentIndexChanged.connect(self.mode_changed)
+        form.addRow("Mode", self.mode)
         layout.addLayout(form)
         layout.addSpacing(4)
         layout.addWidget(label("Advanced", "overline"))
@@ -212,11 +217,21 @@ class TaskDialog(QDialog):
         self.detected.setText(message)
         restyle(self.detected, tone=tone)
 
+    def mode_changed(self):
+        # Request mode stops at a handoff; submitting stays in the browser.
+        request = self.mode.currentData() == "request"
+        self.auto_submit.setEnabled(not request)
+        if request:
+            self.auto_submit.setChecked(False)
+
     def validate(self, start=False):
         try:
             canonical_url(self.url.text().strip(), supported_only=False)
         except ValueError as exc:
             self.error.setText(str(exc))
+            return
+        if self.mode.currentData() == "request" and ats_name(self.url.text().strip()) != "Workday":
+            self.error.setText("Request mode works with Workday postings only. Choose Classic for this site.")
             return
         if self.auto_submit.isChecked() and QMessageBox.question(self, "Authorize this application", "Allow Intern-Bot to submit this specific application using the selected profile and approved answers? It will stop if anything cannot be verified.") != QMessageBox.Yes:
             return
@@ -227,7 +242,7 @@ class TaskDialog(QDialog):
         return ApplicationRun(job_url=canonical_url(self.url.text().strip(), supported_only=False),
                               company=self.company.text().strip(), role=self.role.text().strip() or "Internship",
                               profile_name=self.profile.currentText(), profile_snapshot=self.store.profiles()[self.profile.currentText()],
-                              auto_submit=self.auto_submit.isChecked(), **{**self.store.get("automation_options", {}), "browser": "chromium"})
+                              auto_submit=self.auto_submit.isChecked(), mode=self.mode.currentData(), **{**self.store.get("automation_options", {}), "browser": "chromium"})
 
 
 class TasksView(QWidget):
@@ -587,7 +602,7 @@ class TasksView(QWidget):
             self.d_role.setText(run.role)
             self.d_dot.setPixmap(dot_icon(tone).pixmap(16, 16))
             self.d_status.setText(text)
-            self.d_platform.setText("· " + (ats_name(run.job_url) or "Unrecognized site"))
+            self.d_platform.setText("· " + (ats_name(run.job_url) or "Unrecognized site") + (" · Request mode" if run.mode == "request" else ""))
             messages = [request.message for request in run.interventions]
             self.callout.setText("\n".join(messages))
             self.callout.setVisible(bool(messages))
@@ -729,7 +744,8 @@ class TasksView(QWidget):
                     run.authentication_attempted = False
                     self.store.save_run(run)
                 credential = vault.credential(run.job_url)
-                if not credential and self.store.get("auto_create_workday_accounts", False):
+                # Request mode only signs in; it never creates accounts.
+                if not credential and run.mode == "classic" and self.store.get("auto_create_workday_accounts", False):
                     # Saved before the browser sees it, so a generated password can never be lost.
                     username, password = generate_login(site_key(run.job_url), profile.email, self.store.get("catchall_domain", ""), self.store.get("catchall_format", ""))
                     vault.save_credential(run.job_url, username, password, "new")
