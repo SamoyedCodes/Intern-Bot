@@ -423,7 +423,8 @@
       let result={};
       if(message.command==='scan'||message.command==='prepare'){
         result.fields=await active.scan();
-        result.section=[...document.querySelectorAll('h1,h2,[aria-current=step],[data-automation-id=pageHeader]')].filter(e=>e.getClientRects().length).map(e=>e.textContent.trim()).join('|');
+        // Workday keeps one URL and job-title heading across steps; only its active progress step tells them apart.
+        result.section=[...document.querySelectorAll('h1,h2,[aria-current=step],[data-automation-id=pageHeader],[data-automation-id=progressBarActiveStep]')].filter(e=>e.getClientRects().length).map(e=>e.textContent.trim()).join('|');
         // The site's own step list (Workday's progress bar, or any aria-current=step list) for the progress stepper.
         const step=document.querySelector('[data-automation-id=progressBarActiveStep],[aria-current=step]'),items=step?[...(step.closest('ol,ul')?.children||[step])]:[];
         result.steps=items.map(e=>e.textContent.replace(/^.*?step\s+\d+\s+of\s+\d+/i,'').trim());
