@@ -12,7 +12,8 @@ from PySide6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox, QPush
 
 import core.automation.service as service_module
 import gui.views.tasks_view as tasks_module
-from core.automation.models import ApplicantProfile, ApplicationRun, InterventionRequest
+from core.automation.models import ApplicantProfile, ApplicationRun, ApprovedAnswer, InterventionRequest
+from core.automation.speedy_profile import translate
 from core.browser.playwright_mgr import AsyncPlaywrightManager
 from gui.views.application_dialogs import RunDetailsDialog
 from gui.views.assistant_dialog import AssistantDialog
@@ -51,23 +52,54 @@ def test_answers_are_saved_from_run_details_and_removed_from_the_bank(window, mo
     monkeypatch.setattr(QMessageBox, 'question', lambda *args, **kwargs: QMessageBox.Yes)
     bank = window.answers_view
     bank.refresh()
-    bank.table.setCurrentCell(0, 0)
+    bank.tree.setCurrentItem(bank.tree.topLevelItem(0))
     bank.remove()
     assert window.store.answers() == []
 
 
-def test_each_question_starts_as_a_text_answer(window):
-    questions = ('Have you worked with us before?', 'Degree')
+def test_a_reworded_question_joins_a_saved_answer_and_the_wording_can_be_removed(window, monkeypatch):
     run = ApplicationRun(company='Example', job_url=URL, profile_snapshot=ApplicantProfile(), status='needs_input',
-                         interventions=[InterventionRequest(kind='answer', message='', question=q, options=['Bachelor Degree'] if q == 'Degree' else []) for q in questions])
+                         interventions=[InterventionRequest(kind='answer', message='', question='Internship period')])
+    window.store.save_answer(ApprovedAnswer(question='When is your intended period of internship?', value='Jan - May 2027', scope='global'))
+    details = RunDetailsDialog(window.store, run)
+    assert details.scope.currentIndex() == 2  # New answers are remembered for every application.
+    details.same.setCurrentIndex(1)
+    details.save_answer()
+    assert window.store.answers()[0].variants == ['Internship period'] and len(window.store.answers()) == 1
+    bank = window.answers_view
+    bank.refresh()
+    answer = bank.tree.topLevelItem(0)
+    assert answer.childCount() == 1 and answer.child(0).text(0) == 'Internship period'
+    monkeypatch.setattr(QMessageBox, 'question', lambda *args, **kwargs: QMessageBox.Yes)
+    bank.tree.setCurrentItem(answer.child(0))
+    assert bank.remove_btn.text() == 'Remove wording…'
+    bank.remove()
+    assert window.store.answers()[0].variants == []
+
+
+def test_each_question_starts_with_its_form_control_type(window, tmp_path):
+    resume = tmp_path / 'resume.pdf'
+    resume.write_bytes(b'%PDF')
+    run = ApplicationRun(company='Example', job_url=URL, profile_snapshot=ApplicantProfile(), status='needs_input', interventions=[
+        InterventionRequest(kind='answer', message='', question='Have you worked with us before?', field_kind='text'),
+        InterventionRequest(kind='answer', message='', question='Degree', options=['Bachelor Degree'], field_kind='combobox'),
+        InterventionRequest(kind='answer', message='', question='Resume', field_kind='file')])
     details = RunDetailsDialog(window.store, run)
     details.kind.setCurrentIndex(1)
-    details.questions.setCurrentIndex(1)  # Picked from the list, not reached by saving.
-    assert details.kind.currentIndex() == 0
-    details.questions.setCurrentIndex(0)
-    details.kind.setCurrentIndex(1)
+    details.questions.setCurrentIndex(2)  # Picked from the list, not reached by saving.
+    assert details.kind.currentText() == 'File'
+    details.file.setText(str(resume))
     details.save_answer()
-    assert details.questions.currentText() == 'Degree' and details.kind.currentIndex() == 0
+    assert details.questions.currentText() == 'Have you worked with us before?' and details.kind.currentText() == 'Text answer'
+    details.questions.setCurrentIndex(1)
+    assert details.kind.currentText() == "One of the form's options"
+    details.choices.setCurrentText('Master')
+    details.save_answer()
+    assert len(window.store.answers()) == 1  # Only the form's own options are accepted.
+    details.choices.setCurrentIndex(0)
+    details.save_answer()
+    assert {a.question: a.value for a in window.store.answers()} == {'Resume': str(resume), 'Degree': 'Bachelor Degree'}
+    assert str(resume) in translate(ApplicantProfile(), run, window.store.answers())['files']
 
 
 def test_restart_turns_an_interrupted_run_into_a_handoff(window):

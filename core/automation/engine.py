@@ -5,7 +5,8 @@ import json
 import re
 import time
 
-from core.automation.answers import resolve
+from core.automation.answers import UNANSWERED, applicable, resolve
+from core.automation.assistant import PROVIDERS, match_questions
 from core.automation.models import FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url
 from pathlib import Path
 from core.automation.speedy_profile import translate
@@ -29,6 +30,7 @@ class ApplicationEngine:
         self.store, self.emit = store, emit or (lambda run: None)
         self._pause = self._cancel = False
         self.bridge = None
+        self.asked = set()  # Normalized labels already sent for AI matching during this run.
 
     def pause(self):
         self._pause = True
@@ -50,7 +52,7 @@ class ApplicationEngine:
         request = InterventionRequest(kind=kind, message=message)
         if field:
             request.field_key, request.question = field.key, field.label
-            request.required, request.options = field.required, field.options
+            request.required, request.options, request.field_kind = field.required, field.options, field.kind
         run.interventions.append(request)
         self.store.record_event(run.id, kind, run.stage, message)
         self.checkpoint(run)
@@ -266,6 +268,7 @@ class ApplicationEngine:
         return True
 
     async def authorize(self, run, profile, fields):
+        await self.match_rewordings(run, profile, fields)
         answers = self.store.answers()
         policies = {}
         for field in fields:
@@ -273,6 +276,33 @@ class ApplicationEngine:
             policies[field.selector] = dict(key=field.key, label=field.label, value=resolution.value, omit=resolution.omit, ref=resolution.ref,
                                            replace=resolution.ref.startswith('answer:'))
         await self.bridge.command('authorize', {'policies': policies})
+
+    async def match_rewordings(self, run, profile, fields):
+        """Record unanswered labels the optional AI provider identifies as rewordings of an approved answer."""
+        answers = self.store.answers()
+        known = applicable(answers, profile, run)
+        labels = list(dict.fromkeys(f.label for f in fields if f.kind not in {'file', 'password'} and normalized(f.label) not in self.asked
+                                    and resolve(f, profile, run, answers).reason == UNANSWERED))
+        if not labels or not known or not self.store.get('automation_options', {}).get('ai_match', True):
+            return
+        self.asked.update(map(normalized, labels))
+        provider = self.store.get('ai_provider', 'gemini')
+        try:
+            key = self.store._vault().get(f'{provider}-api-key')
+            if not key:
+                return
+            run.ai_requests += 1
+            model = self.store.get(f'{provider}_model', PROVIDERS[provider]['model'])
+            matches = await asyncio.to_thread(match_questions, key, model, labels, [a.question for a in known], provider)
+        except Exception as exc:
+            # Matching is a convenience: unmatched questions are still asked as usual.
+            self.store.record_event(run.id, 'ai_match_failed', run.stage, str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
+            return
+        for label, index in matches.items():
+            answer = known[index]
+            answer.variants.append(label)
+            self.store.save_answer(answer)
+            self.store.record_event(run.id, 'answer_matched', run.stage, f'AI matched “{label}” to your answer for “{answer.question}”.')
 
     async def wait_for_section(self, run, profile):
         for _ in range(self.SECTION_POLLS):

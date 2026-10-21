@@ -3,7 +3,7 @@ import json
 import pytest
 
 from core.automation import assistant
-from core.automation.assistant import NoRedirect, career_facts, generate_text
+from core.automation.assistant import NoRedirect, career_facts, generate_text, match_questions
 from core.automation.models import ApplicantProfile
 
 
@@ -99,3 +99,17 @@ def test_invalid_requests_never_reach_the_network(network, key, model, mode, con
     with pytest.raises(ValueError):
         generate_text(key, model, mode, context, provider)
     assert network['requests'] == []
+
+
+def test_matching_sends_only_wording_and_keeps_valid_pairs(network):
+    network['payload'] = reply(text='```json\n{"1": 2, "2": null, "3": 9, "x": 1}\n```')
+    questions = ['Internship period?', 'Hobbies?', 'Third?']
+    assert match_questions('key', 'gemini-2.5-flash', questions, ['Degree', 'When can you start?']) == {'Internship period?': 1}
+    sent = json.loads(network['requests'][0].data)['contents'][0]['parts'][0]['text']
+    assert '1. Internship period?' in sent and '2. When can you start?' in sent
+
+
+def test_an_unparseable_match_reply_matches_nothing(network):
+    network['payload'] = reply(text='No matches.')
+    with pytest.raises(ValueError, match='not a question mapping'):
+        match_questions('key', 'gemini-2.5-flash', ['Q?'], ['Saved?'])

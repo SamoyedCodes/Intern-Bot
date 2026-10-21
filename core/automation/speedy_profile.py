@@ -5,7 +5,7 @@ import mimetypes
 import re
 from pathlib import Path
 
-from core.automation.answers import resolve
+from core.automation.answers import applicable, resolve
 from core.automation.models import normalized
 from core.automation.fields import FormField
 
@@ -26,7 +26,9 @@ def translate(profile, run, answers):
     phone = re.fullmatch(r'(\+\d{1,3})[\s-]+([\d\s()-]+)', profile.phone.strip())
     def boolean(value):
         return {'yes': True, 'no': False, 'i choose not to disclose': 'undisclosed'}.get(normalized(value))
-    files = {p: file_payload(p) for p in (profile.resume_path, profile.cover_letter_path) if p}
+    # Approved file answers (an absolute path to a document) are uploaded the same way as the profile's documents.
+    uploads = [a.value for a in applicable(answers, profile, run) if isinstance(a.value, str) and Path(a.value).is_absolute() and Path(a.value).is_file()]
+    files = {p: file_payload(p) for p in (profile.resume_path, profile.cover_letter_path, *uploads) if p}
     languages = [dict(language=l.language, proficiency=l.proficiency, fluent=l.fluent) for l in profile.language_proficiency]
     for language in re.split(r'[,;\n]', profile.languages):
         if language.strip() and not any(normalized(l['language']) == normalized(language) for l in languages):
@@ -58,7 +60,7 @@ def translate(profile, run, answers):
     }
     approved = {}
     for answer in answers:
-        field = FormField('',answer.question,'','text')
-        resolution = resolve(field,profile,run,answers)
-        approved[normalized(answer.question)] = dict(value=resolution.value,omit=resolution.omit,ref=resolution.ref)
+        for question in (answer.question, *answer.variants):
+            resolution = resolve(FormField('',question,'','text'),profile,run,answers)
+            approved[normalized(question)] = dict(value=resolution.value,omit=resolution.omit,ref=resolution.ref)
     return dict(profile=translated,files=files,answers=approved)

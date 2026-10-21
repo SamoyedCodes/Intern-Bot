@@ -62,20 +62,32 @@ def field_value(field, value):
     return value
 
 
-def resolve(field, profile: ApplicantProfile, run: ApplicationRun, answers) -> Resolution:
-    matches = []
+UNANSWERED = "Approve an answer or update the profile; no value will be guessed."
+
+
+def asks(answer, label):
+    """Whether this label is the answer's question or one of its recorded wordings."""
+    return normalized(label) in {normalized(q) for q in (answer.question, *answer.variants)}
+
+
+def applicable(answers, profile: ApplicantProfile, run: ApplicationRun):
+    """Approved answers within this run's profile, scope and country, whatever they ask."""
+    usable = []
     for answer in answers:
         if answer.profile_name != run.profile_name:
             continue
         if not run.reuse_answers and answer.scope != "application":
             continue
-        if normalized(answer.question) != normalized(field.label):
-            continue
         if answer.country and normalized(answer.country) != normalized(profile.country):
             continue
         key = run.id if answer.scope == "application" else employer_key(run.job_url) if answer.scope == "employer" else ""
         if answer.scope_key == key:
-            matches.append(answer)
+            usable.append(answer)
+    return usable
+
+
+def resolve(field, profile: ApplicantProfile, run: ApplicationRun, answers) -> Resolution:
+    matches = [a for a in applicable(answers, profile, run) if asks(a, field.label)]
     if matches:
         priority = {"application": 0, "employer": 1, "global": 2}
         best = min(priority[a.scope] for a in matches)
@@ -146,4 +158,4 @@ def resolve(field, profile: ApplicantProfile, run: ApplicationRun, answers) -> R
         if value is not None and value != "":
             prefix = f"{field.group}.{field.row}." if field.group else ""
             return Resolution(field_value(field, value), "profile:" + prefix + attr)
-    return Resolution(reason="Approve an answer or update the profile; no value will be guessed.")
+    return Resolution(reason=UNANSWERED)

@@ -29,7 +29,7 @@ SAFETY_FACTS = [
     "Final submission is yours by default. Automatic submission needs your authorization for each application and stops if anything can't be verified.",
     "Applications run in a separate, visible Chromium window. Employers may ask you to sign in again.",
     "Profiles, answers and history stay in a local database on this Mac. Employer logins and API keys are kept only in the system keychain.",
-    "Browser observations are never sent to AI.",
+    "AI never receives your answers, profile values or pages. Matching a reworded question sends only question wording.",
     "Preview: adapters are tested against fictional forms. Live employer acceptance testing is still pending.",
 ]
 
@@ -65,14 +65,14 @@ class SettingsView(QWidget):
         self.reuse_answers = QCheckBox("Reuse answers you've approved")
         self.reuse_answers.setChecked(options.get("reuse_answers", True))
         box.addWidget(self.reuse_answers)
-        box.addWidget(label("Only exact question matches within an answer's scope, profile and country are reused.", "caption"))
+        box.addWidget(label("Reused for the question and every wording matched to it, within the answer's scope, profile and country.", "caption"))
         for checkbox in (self.auto_advance, self.reuse_answers):
             checkbox.toggled.connect(self.save_options)
         layout.addWidget(frame)
 
         frame, box = card()
         box.addWidget(label("AI assistance (optional)", "section"))
-        box.addWidget(label("AI drafts answers and compares profiles only when you ask. Every request shows its full context and needs your consent.", "muted"))
+        box.addWidget(label("AI drafts answers and compares profiles only when you ask, after you review the full context. With a key saved, it can also match reworded questions to your answers.", "muted"))
         form = form_layout(10)
         self.provider = QComboBox()
         for key, spec in PROVIDERS.items():
@@ -92,6 +92,11 @@ class SettingsView(QWidget):
         self.key_status = label(role="caption")
         form.addRow("", self.key_status)
         box.addLayout(form)
+        self.ai_match = QCheckBox("Match reworded questions to answers you've approved")
+        self.ai_match.setChecked(options.get("ai_match", True))
+        self.ai_match.toggled.connect(self.save_options)
+        box.addWidget(self.ai_match)
+        box.addWidget(label("When a form asks a saved question in new words, its wording and your saved questions are sent, never the answers. Matches appear under Answers, where you can remove them.", "caption"))
         layout.addWidget(frame)
         self.show_provider()
         self.provider.currentIndexChanged.connect(self.change_provider)
@@ -130,7 +135,8 @@ class SettingsView(QWidget):
 
     def save_options(self):
         self.store.put("automation_options", {"browser": "chromium",
-                       "auto_advance": self.auto_advance.isChecked(), "reuse_answers": self.reuse_answers.isChecked()})
+                       "auto_advance": self.auto_advance.isChecked(), "reuse_answers": self.reuse_answers.isChecked(),
+                       "ai_match": self.ai_match.isChecked()})
         self.notice.notify("Saved. New applications use these defaults.", "success")
 
     def save_model(self):

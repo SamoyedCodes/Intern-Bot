@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 from playwright.async_api import Error as PlaywrightError
 
+import core.automation.engine as engine_module
+from core.automation.answers import resolve
 from core.automation.engine import ApplicationEngine
 from core.automation.extension_bridge import ExtensionBridge
 from core.automation.fields import FormField
@@ -475,12 +477,14 @@ async def test_changed_cover_letter_bytes_invalidate_saved_verification(store, t
     assert store.get_run(run.id).documents_digest == run.documents_digest
 
 
-async def test_an_approved_radio_is_clicked_so_the_site_registers_it(context, store, monkeypatch):
+@pytest.mark.parametrize('question, variants', [('Have you worked with us before?', []),
+                                               ('Have you previously worked for this company?', ['Have you worked with us before?'])])
+async def test_an_approved_radio_is_clicked_so_the_site_registers_it(context, store, monkeypatch, question, variants):
     monkeypatch.setattr(ApplicationEngine, 'SECTION_POLLS', 20)  # The rest of the Workday page never appears.
     radios = ''.join(f'<div><div><input type=radio name=previous id={o} onclick="window.picked=`{o}`"></div><label for={o}>{o}</label></div>' for o in ('Yes', 'No'))
     page = await open_fixture(context, 'workday', f'<div data-automation-id=applyFlowMyInfoPage><fieldset><legend>Have you worked with us before?</legend>{radios}</fieldset></div>')
     run = ApplicationRun(job_url=page.url)
-    store.save_answer(ApprovedAnswer(question='Have you worked with us before?', value='No', scope_key=run.id, profile_name=run.profile_name))
+    store.save_answer(ApprovedAnswer(question=question, variants=variants, value='No', scope_key=run.id, profile_name=run.profile_name))
     await ApplicationEngine(store).start(run, ApplicantProfile(), ExtensionBridge(page, run.id))
     assert await page.evaluate('window.picked') == 'No'
 
@@ -489,6 +493,23 @@ def test_a_reformatted_phone_number_still_verifies(store):
     run = ApplicationRun(job_url='https://example.wd1.myworkdayjobs.com/job')
     field = FormField('phone', 'Phone Number', '', 'text', value='9876 5411')
     assert ApplicationEngine(store).verify(run, ApplicantProfile(phone_country_code='+65', phone_number='98765411'), [field], {'files': {}})
+
+
+@pytest.mark.parametrize('key, enabled, asked', [('key', True, True), ('', True, False), ('key', False, False)])
+async def test_ai_records_a_rewording_once_and_it_resolves(store, monkeypatch, key, enabled, asked):
+    run = ApplicationRun(job_url='https://example.wd1.myworkdayjobs.com/job')
+    store.save_answer(ApprovedAnswer(question='When is your intended period of internship?', value='Jan - May 2027', scope='global'))
+    store.put('automation_options', {'ai_match': enabled})
+    store._vault().set('gemini-api-key', key)
+    sent = []
+    monkeypatch.setattr(engine_module, 'match_questions', lambda key, model, questions, known, provider: sent.append((questions, known)) or {'Internship period': 0})
+    fields = [FormField('a', 'Internship period', '', 'text'), FormField('b', 'Hobbies', '', 'text'), FormField('c', 'First name', '', 'text')]
+    profile = ApplicantProfile(first_name='Ada')
+    engine = ApplicationEngine(store)
+    for _ in range(2):  # The second pass must not ask again.
+        await engine.match_rewordings(run, profile, fields)
+    assert sent == ([(['Internship period', 'Hobbies'], ['When is your intended period of internship?'])] if asked else [])
+    assert (resolve(fields[0], profile, run, store.answers()).value == 'Jan - May 2027') is asked
 
 
 async def test_the_sites_own_step_list_is_recorded_for_the_progress_stepper(context, store):
