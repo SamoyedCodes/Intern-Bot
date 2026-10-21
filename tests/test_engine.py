@@ -367,9 +367,9 @@ async def test_workday_dropdown_lists_options_and_selects_the_approved_choice(co
     page = await open_fixture(context, 'workday', WORKDAY_SPEAKING)
     profile = ApplicantProfile(language_proficiency=[Language(language='English', proficiency=proficiency)])
     run = await apply(store, page, ApplicationRun(job_url=page.url, auto_advance=False), profile)
-    request = next(i for i in run.interventions if i.question == 'Speaking')
+    request = next(i for i in run.interventions if i.question == 'Speaking — English')  # Named for its row.
     assert request.options == ['1 - Slight', '2 - Fair', '3 - Fluent']
-    store.save_answer(ApprovedAnswer(question='Speaking', value='2 - Fair', scope_key=run.id))
+    store.save_answer(ApprovedAnswer(question='Speaking — English', value='2 - Fair', scope_key=run.id))
     run = await apply(store, page, run, profile)
     assert all(f.disposition == 'verified' for f in run.fields.values()), run.interventions
     assert not any(i.question for i in run.interventions), run.interventions
@@ -534,3 +534,10 @@ async def test_an_unlisted_degree_or_open_search_popup_does_not_stop_the_workday
     profile = ApplicantProfile(resume_path=str(resume), education=[Education(school='Example University', degree='Bachelor of Science (Honours)', major='Data Science')])
     await apply(store, page, ApplicationRun(job_url=page.url, auto_advance=False), profile)
     assert await page.locator('input[type=file]').evaluate('e => e.files[0]?.name') == 'resume.pdf'
+
+
+def test_a_row_question_is_asked_for_its_own_row(store):
+    run = ApplicationRun(job_url='https://example.wd1.myworkdayjobs.com/job', profile_snapshot=ApplicantProfile(language_proficiency=[Language(language='English'), Language(language='Chinese (Mandarin)')]))
+    speaking = FormField('speaking', 'Speaking', '', 'select-one', group='language_proficiency', row=1)
+    assert not ApplicationEngine(store).verify(run, run.profile_snapshot, [speaking], {'files': {}})
+    assert run.interventions[0].question == 'Speaking — Chinese (Mandarin)'
