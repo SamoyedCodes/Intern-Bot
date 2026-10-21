@@ -29,6 +29,8 @@ const replacements={
  aL:'async function aL(questions) { return R.resolveQuestions(questions); }',
  yL:'function yL() {}',
  SI:'function SI(base64, name) { return R.file(base64, name); }',
+ // Choice lists come from vendor lookups (Workday degrees) that have no entry for free-text profile values; skip instead of throwing.
+ zI:'async function zI(choices, attempt) { for (const choice of choices || []) { const result = await attempt(choice); if (result) return result; } return null; }',
  DV:'async function DV(file) { return R.upload(file, document.querySelector(`[data-automation-id=resumeUpload] input[type=file], [aria-labelledby=\"Resume/CV-section\"] input[type=file], [data-automation-id=quickApplyPage] input[type=file], [data-fkit-id=\"resumeAttachments--attachments\"] input[type=file]`)); }',
  CI:'function CI(file, selector, xpath=false, root=document) { return R.upload(file, xpath ? J(selector,root) : root.querySelector(selector)); }',
 };
