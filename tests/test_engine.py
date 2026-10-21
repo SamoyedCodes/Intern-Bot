@@ -518,3 +518,19 @@ async def test_the_sites_own_step_list_is_recorded_for_the_progress_stepper(cont
     page = await open_fixture(context, 'greenhouse', greenhouse(extra=f'<ol data-automation-id=progressBar>{steps}</ol>'))
     run = await apply(store, page, ApplicationRun(job_url=page.url))
     assert (run.steps, run.step) == (['My Information', 'My Experience', 'Review'], 1)
+
+
+async def test_an_unlisted_degree_or_open_search_popup_does_not_stop_the_workday_resume_upload(context, store, tmp_path, monkeypatch):
+    monkeypatch.setattr(ApplicationEngine, 'SECTION_POLLS', 100)  # Outlasts the popup wait's 5 s deadline.
+    resume = tmp_path / 'resume.pdf'
+    resume.write_bytes(b'%PDF fictional resume')
+    page = await open_fixture(context, 'workday', '''<div data-automation-id="myExperiencePage"><h2>My Experience</h2>
+<div role="group" aria-labelledby="Education-section"><h3 id="Education-section">Education</h3>
+<div role="group" aria-labelledby="Education-1-panel"><label>School or University<input data-automation-id="school"></label>
+<div data-automation-id="formField-fieldOfStudy"><label>Field of Study<input data-uxi-widget-type="selectinput" data-uxi-multiselect-id="m1"
+ onclick="if(!document.querySelector('[data-associated-widget=m1]'))document.body.insertAdjacentHTML('beforeend','<div data-associated-widget=m1><div data-automation-id=activeListContainer><div role=presentation>All</div></div></div>')"></label></div></div></div>
+<div role="group" aria-labelledby="Resume/CV-section"><h3 id="Resume/CV-section">Resume/CV</h3><label>Resume<input type=file></label></div></div>''')
+    # Workday's degree lookup only knows its own labels, such as "Bachelor's"; Keppel's search popup stays open after a search.
+    profile = ApplicantProfile(resume_path=str(resume), education=[Education(school='Example University', degree='Bachelor of Science (Honours)', major='Data Science')])
+    await apply(store, page, ApplicationRun(job_url=page.url, auto_advance=False), profile)
+    assert await page.locator('input[type=file]').evaluate('e => e.files[0]?.name') == 'resume.pdf'

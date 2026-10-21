@@ -127,8 +127,10 @@
     }
     const R = {
       environment, stop, live,
-      waitFor(predicate, root, options) {
-        return new Promise(resolve=>{if(!live())return;if(predicate()){resolve(true);return;}const observer=new environment.MutationObserver(()=>{if(predicate()){observer.disconnect();resolve(true);}});observer.observe(root,options);});
+      // Vendor waits have no deadline. Workday's search popup stays open with its results, so without one the rest of the section (the resume upload) never runs.
+      waitFor(predicate, root, options, timeout=5000) {
+        return new Promise(resolve=>{if(!live())return;if(predicate()){resolve(true);return;}const observer=new environment.MutationObserver(()=>{if(predicate()){observer.disconnect();resolve(true);}});observer.observe(root,options);
+          environment.setTimeout(()=>{observer.disconnect();resolve(false);},timeout);});
       },
       emit(type, data={}) {if(live())events.push({sequence:++sequence,type,...data});if(events.length>100)events.shift();},
       update(e,key,op,rhs){if(dom(e)){report('browser','Unverified compound DOM mutation blocked.');return e[key];}if(op==='??=')return e[key]??(e[key]=rhs());if(op==='||=')return e[key]||(e[key]=rhs());if(op==='&&=')return e[key]&&(e[key]=rhs());if(op==='+=')return e[key]+=rhs();throw Error('Unsupported compound assignment');},
