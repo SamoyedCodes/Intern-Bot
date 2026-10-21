@@ -80,7 +80,11 @@ class ApplicationEngine:
                 await self.confirm_submission(run)
                 return run
             last_advanced_stage = None
-            for _ in range(60):
+            stalls = 0
+            def stage_of(match, result, fields):
+                section = match['url'] + '|' + (result.get('section') or '|'.join(f.key for f in fields))
+                return match['adapter']['name'] + ':' + hashlib.sha256(section.encode()).hexdigest()[:10]
+            for _ in range(100):
                 if self._pause or self._cancel:
                     break
                 canonical_url(bridge.page.url)
@@ -104,13 +108,18 @@ class ApplicationEngine:
                 if self._pause or self._cancel:
                     return run
                 fields = [FormField(**f) for f in result['fields']]
-                section = match['url'] + '|' + (result.get('section') or '|'.join(f.key for f in fields))
-                run.stage = match['adapter']['name'] + ':' + hashlib.sha256(section.encode()).hexdigest()[:10]
+                run.stage = stage_of(match, result, fields)
                 if result.get('steps'):
                     run.steps, run.step = result['steps'], result['step']
                 if run.stage == last_advanced_stage:
+                    # Workday saves a step before showing the next one; give the click a few seconds to land.
+                    if stalls < 8:
+                        stalls += 1
+                        await asyncio.sleep(.5)
+                        continue
                     self.intervene(run, 'The previous continuation did not reach a distinguishable section. Inspect the draft before continuing again.')
                     return run
+                stalls = 0
                 await self.authorize(run, profile, fields)
                 if any(f.kind == 'password' for f in fields):
                     if match['adapter']['id'] == 'workday' and credential:
@@ -140,7 +149,8 @@ class ApplicationEngine:
                     settled = await self.wait_for_section(run, profile)
                 if not settled or self._pause or self._cancel:
                     return run
-                fields = [FormField(**f) for f in (await bridge.command('scan'))['fields']]
+                scanned = await bridge.command('scan')
+                fields = [FormField(**f) for f in scanned['fields']]
                 await asyncio.sleep(.35)
                 check = await bridge.command('snapshot')
                 confirmed = [FormField(**f) for f in (await bridge.command('scan'))['fields']]
@@ -148,6 +158,10 @@ class ApplicationEngine:
                     self.intervene(run, 'The form changed during section verification. Inspect it and resume.', 'validation')
                     return run
                 settled = check
+                # The section named before filling may have been a page still loading or one being left; record what was filled.
+                run.stage = stage_of(match, scanned, fields)
+                if scanned.get('steps'):
+                    run.steps, run.step = scanned['steps'], scanned['step']
                 if any(f.kind == 'password' for f in confirmed):
                     # A delayed sign-in form must go through the guarded credential flow.
                     await bridge.stop()
