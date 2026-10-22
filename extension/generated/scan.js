@@ -64,7 +64,7 @@ globalThis.scanInternFields = (rootSelector) => {
       split_phone: e.id === 'phoneNumber--phoneNumber' && !!root.querySelector('[id="phoneNumber--countryPhoneCode"]'),
       required: dateRequired || !!e.required || e.getAttribute('aria-required') === 'true' || /[*✱✳]/.test(label),
       disabled: !!e.disabled || e.getAttribute('aria-disabled') === 'true',
-      invalid: e.getAttribute('aria-invalid') === 'true' || !!(e.validity && !e.validity.valid) || (uploaded && (!receipt.querySelector('[data-automation-id="file-upload-successful"]') || uploadContainer.querySelectorAll('[data-automation-id="file-upload-item"]').length !== 1)),
+      invalid: [...(e.closest('fieldset,[data-automation-id="formField"]')?.querySelectorAll('[data-automation-id="inputAlert"]') || [])].some(a=>visible(a)&&text(a)) || e.getAttribute('aria-invalid') === 'true' || !!(e.validity && !e.validity.valid) || (uploaded && (!receipt.querySelector('[data-automation-id="file-upload-successful"]') || uploadContainer.querySelectorAll('[data-automation-id="file-upload-item"]').length !== 1)),
       readonly: !!e.readOnly};
   });
 }

@@ -40,3 +40,19 @@ def test_only_answers_scoped_to_this_run_and_profile_are_transported():
 def test_language_list_splits_into_entries():
     config = translate(ApplicantProfile(languages='English; French'), ApplicationRun(job_url='https://jobs.lever.co/example/1'), [])
     assert [entry['language'] for entry in config['profile']['languageData']] == ['English', 'French']
+
+
+def test_structured_languages_do_not_create_unresolvable_legacy_rows():
+    from core.automation.answers import question_for, resolve
+    from core.automation.fields import FormField
+    run = ApplicationRun(job_url='https://example.wd1.myworkdayjobs.com/job')
+    for profile, names in [
+        (ApplicantProfile(languages='English; Mandarin', language_proficiency=[Language(language='English'), Language(language='Chinese (Mandarin)')]), ['English', 'Chinese (Mandarin)']),
+        (ApplicantProfile(languages='English; French'), ['English', 'French']),
+    ]:
+        config = translate(profile, run, [])
+        assert [row['language'] for row in config['profile']['languageData']] == names
+        for index, name in enumerate(names):
+            field = FormField('language', 'Language', '', 'combobox', group='language_proficiency', row=index)
+            assert resolve(field, profile, run, []).value == name
+            assert question_for(field, profile) == 'Language — ' + name

@@ -4,10 +4,12 @@
   const native = {MutationObserver};
   for (const name of ['setTimeout','clearTimeout','setInterval','clearInterval','requestAnimationFrame','cancelAnimationFrame']) native[name]=window[name].bind(window);
   let active;
+  // Workday clears the file input after upload; bind its digest to that exact receipt for this document.
+  const verifiedUploads = new WeakMap();
   function runtime(config, token, documentId) {
     const timers = new Set(), intervals = new Set(), frames = new Set(), observers = new Set();
-    const abort = new AbortController(), policies = new WeakMap(), proposals = new Map(), denied = new WeakSet(), files = new Map();
-    const handles = new Map(), rowActions = new Set();
+    const abort = new AbortController(), policies = new WeakMap(), proposals = new Map(), denied = new WeakSet();
+    const handles = new Map(), rowActions = new Set(), uploading = new WeakSet();
     const events = [], problems = new Map(), actions = new Map();
     const url = location.href;
     let running = true, status = 'prepared', lastChange = performance.now(), started = false, sequence = 0, picker;
@@ -39,6 +41,12 @@
     };
     const dom = e => e instanceof Node || e instanceof CSSStyleDeclaration || e instanceof DOMTokenList || (typeof DOMStringMap!=='undefined' && e instanceof DOMStringMap) || e === window || e === location;
     const visible = e => e instanceof Element && !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+    const isError = e => {
+      const upload=e.closest('[data-automation-id=file-upload-item]');
+      const uploaded=upload?.querySelector('[data-automation-id=file-upload-item-name]')?.textContent.trim();
+      const notice=e.matches('[data-automation-id=ariaLiveMessage]')&&uploaded&&normalize(e.textContent)===normalize(`${uploaded} successfully uploaded`);
+      return visible(e)&&e.textContent.trim()&&!notice;
+    };
     const readable = e => e instanceof HTMLSelectElement ? (e.value ? e.selectedOptions[0]?.textContent || '' : '') : ['checkbox','radio'].includes(e.type) ? e.checked : e.value ?? e.textContent;
     // Employers reformat phone numbers ("98765411" becomes "9876 5411").
     const phone = p => /^profile:phone(_number)?$/.test(p.ref || ''), digits = v => String(v ?? '').replace(/\D/g, '');
@@ -71,7 +79,10 @@
       const setter = proto && Object.getOwnPropertyDescriptor(proto,key)?.set;
       // React (Workday) only notices checkbox and radio changes made by a click; a radio cannot be clicked off.
       if (key === 'checked') {if (e.checked !== desired && (desired || e.type === 'checkbox')) e.click();}
-      else if (setter) setter.call(e, desired); else e[key] = desired;
+      else if (setter) {
+        if(e.matches('[role=spinbutton]')&&e.closest('[data-automation-id=dateInputWrapper]'))e.focus();
+        setter.call(e, desired);
+      } else e[key] = desired;
       denied.delete(e); lastChange = performance.now();
       return value;
     }
@@ -159,7 +170,14 @@
         if(key==='dispatchEvent') {
           if(denied.has(e))return false;
           if(args[0].type==='submit'){action(e,'submit');return false;}
-          if(['Enter',' '].includes(args[0].key)){report('browser','A keyboard activation needs manual review.');return false;}
+          if(['Enter',' '].includes(args[0].key)){
+            const event=args[0], p=policies.get(e);
+            if(config.adapter==='workday'&&event.key==='Enter'&&event.cancelable&&prompt(e)&&p&&!p.omit&&p.value!=null&&
+              (normalize(e.value)===normalize(p.value)||selections(e).includes(normalize(p.value)))){
+              event.preventDefault();return e.dispatchEvent(event);
+            }
+            report('browser','A keyboard activation needs manual review.',p?.key||'');return false;
+          }
           if(/^(click|mousedown|mouseup)$/.test(args[0].type)){action(e);return false;}
           return e.dispatchEvent(...args);
         }
@@ -186,7 +204,7 @@
       }
     };
     async function upload(file, e) {
-      if(!e || !live())return false;
+      if(!e || !live() || uploading.has(e))return false;
       const p=policies.get(e);
       if(!p){proposals.set(e,{key:'files',value:file});return false;}
       const descriptor=config.files?.[p.value];
@@ -199,11 +217,23 @@
         const digest=await crypto.subtle.digest('SHA-256',await e.files[0].arrayBuffer());
         if(!live())return false;
         if(e.files.length!==1||hex(digest)!==descriptor.digest){report('conflict','An existing upload differs from the selected file.',p.key);return false;}
-        files.set(e,descriptor.digest);return true;
+        return true;
       }
-      const receipt=e.closest('[data-automation-id=resumeUpload],[aria-labelledby="Resume/CV-section"]')?.querySelector('[data-automation-id=file-upload-item]');
-      if(receipt){report('conflict','The existing uploaded document must be checked manually.',p.key);return false;}
-      const transfer=new DataTransfer();transfer.items.add(chosen);e.files=transfer.files;files.set(e,descriptor.digest);
+      const container=e.closest('[data-automation-id=resumeUpload],[aria-labelledby="Resume/CV-section"]');
+      const receipt=container?.querySelector('[data-automation-id=file-upload-item]'), proof=container&&verifiedUploads.get(container);
+      if(receipt){
+        if(proof?.receipt===receipt&&proof.digest===descriptor.digest)return true;
+        const remove=receipt.querySelector('button[data-automation-id=delete-file]');
+        if(!p.replace||!remove){report('conflict','The existing uploaded document must be checked manually, or approve the selected file as its replacement.',p.key);return false;}
+        uploading.add(e);
+        try {
+          remove.click();
+          for(let i=0;i<20&&receipt.isConnected&&live();i++)await pause(100);
+          if(!live()||receipt.isConnected||!e.isConnected||container.querySelector('[data-automation-id=file-upload-item]'))return false;
+        } finally {uploading.delete(e);}
+      }
+      if(container)verifiedUploads.set(container,{digest:descriptor.digest,name:descriptor.fileName,receipt:null});
+      const transfer=new DataTransfer();transfer.items.add(chosen);e.files=transfer.files;
       e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));lastChange=performance.now();return true;
     }
     const hex = buffer => [...new Uint8Array(buffer)].map(b=>b.toString(16).padStart(2,'0')).join('');
@@ -246,6 +276,36 @@
       for(let i=0;i<10&&!chosen();i++)await pause(100);
       return chosen();
     }
+    function alignRows(fields){
+      if(config.adapter!=='workday')return fields;
+      for(const [group,data,labels,property] of [['experience','jobData',['company','employer'],'company'],['education','educationData',['school or university','school'],'school']]){
+        const rows=config.profile[data]||[], groups=new Map(), mapping=new Map(), used=new Set();
+        for(const field of fields.filter(f=>f.group===group)){
+          if(!groups.has(field.row))groups.set(field.row,[]);
+          groups.get(field.row).push(field);
+        }
+        for(const [index,values] of groups){
+          const identity=values.find(f=>labels.includes(normalize(f.label)));
+          if(!identity||!identity.value)continue;
+          let candidates=rows.map((row,i)=>({row,i})).filter(({row})=>normalize(row[property])===normalize(identity.value));
+          const title=values.find(f=>normalize(f.label)==='job title');
+          if(candidates.length>1&&title?.value)candidates=candidates.filter(({row})=>normalize(row.jobTitle)===normalize(title.value));
+          const match=candidates.length===1&&!used.has(candidates[0].i)?candidates[0].i:rows.length+index;
+          mapping.set(index,match);used.add(match);
+        }
+        for(const [index,values] of groups){
+          if(!mapping.has(index)){
+            const remaining=rows.findIndex((_,i)=>!used.has(i));
+            mapping.set(index,remaining<0?rows.length+index:remaining);used.add(mapping.get(index));
+          }
+          for(const field of values){
+            if(field.key)field.key=field.key.replace(`${group}:${field.row}:`,`${group}:${mapping.get(index)}:`);
+            field.row=mapping.get(index);
+          }
+        }
+      }
+      return fields;
+    }
     async function scan() {
       handles.clear();
       const formRoots=[...document.querySelectorAll('form')].filter(e=>visible(e)&&!e.parentElement.closest('form'));
@@ -258,11 +318,19 @@
         const element=root.querySelector(f.selector), selector=`control:${handles.size}`;
         handles.set(selector,element);f.selector=selector;
         if(index)f.key=`shadow:${root.host.id||index}:`+f.key;
-        f.file_digest=files.get(element)||'';
+        f.file_digest='';
         return f;
       }));
       for(const field of fields.filter(f=>f.kind==='file')){
         const e=handles.get(field.selector), selected=e.files?.[0];
+        const uploadContainer=e.closest('[data-automation-id=resumeUpload],[aria-labelledby="Resume/CV-section"]');
+        const proof=uploadContainer&&verifiedUploads.get(uploadContainer), receipts=uploadContainer?.querySelectorAll('[data-automation-id=file-upload-item]');
+        const receipt=receipts?.length===1?receipts[0]:null;
+        if(proof?.receipt&&proof.receipt!==receipt){field.invalid=true;continue;}
+        if(proof&&receipt&&!field.invalid&&receipt.querySelector('[data-automation-id=file-upload-item-name]')?.textContent.trim()===proof.name){
+          if(!proof.receipt)proof.receipt=receipt;
+          if(proof.receipt===receipt)field.file_digest=proof.digest;
+        }
         if(selected){
           const digest=hex(await crypto.subtle.digest('SHA-256',await selected.arrayBuffer()));
           field.file_digest=e.files.length===1?digest:'';
@@ -272,7 +340,42 @@
           field.invalid=field.invalid||!accepted;
         }
       }
-      return fields;
+      return alignRows(fields);
+    }
+    function reviewSummary(){
+      const root=document.querySelector('[data-automation-id=applyFlowReviewPage]');
+      if(!root)return [...document.querySelectorAll('[data-automation-id="reviewField"],dl>dt')].filter(visible).map(e=>({
+        label:(e.querySelector('label,dt')?.textContent||(e.tagName==='DT'?e.textContent:'')).trim(),
+        value:(e.querySelector('dd,[data-value]')?.textContent||(e.tagName==='DT'?e.nextElementSibling?.textContent:'')||'').trim(),
+        group:e.getAttribute('data-group')||'',row:Number(e.getAttribute('data-row')||0)
+      }));
+      const result=[], seen=new Set();
+      const add=(label,value,node)=>{
+        if(!node||!visible(node)||seen.has(node))return;
+        seen.add(node);
+        const container=node.closest('[aria-labelledby="Work-Experience-section"],[aria-labelledby="Education-section"],[aria-labelledby="Languages-section"]');
+        const group={'Work-Experience-section':'experience','Education-section':'education','Languages-section':'language_proficiency'}[container?.getAttribute('aria-labelledby')]||'';
+        const rows=container?[...container.querySelectorAll('[role=group][aria-labelledby$="-panel"]')]:[];
+        if(group==='education'&&normalize(label)==='to (actual or expected)')label='To';
+        result.push({label,value:normalize(value)==='no response'?'':value,group,row:Math.max(0,rows.findIndex(r=>r.contains(node))),layout:'workday'});
+      };
+      for(const label of root.querySelectorAll('label[for]')){
+        const value=label.parentElement.querySelector(`#${CSS.escape(label.htmlFor)}`);
+        if(value)add(label.innerText,value.innerText.trim(),value);
+      }
+      for(const label of root.querySelectorAll('[id^="rich-label"]')){
+        const value=label.nextElementSibling;
+        if(value)add(label.innerText,value.querySelector('ul')?[...value.querySelectorAll('li')].map(e=>e.innerText.trim()).join('; '):value.innerText.trim(),value);
+      }
+      for(const id of ['Legal-Name-section','Address-section','Email-Address-section','Phone-section']){
+        const section=root.querySelector(`[aria-labelledby="${id}"]`), value=section?.querySelector('span[id]');
+        if(value)add(section.querySelector('h4').innerText,value.innerText.trim(),value);
+      }
+      const skills=root.querySelector('[data-automation-id=skills]');
+      if(skills)add('Skills',[...skills.querySelectorAll('li')].map(e=>e.innerText.trim()).join('; '),skills);
+      const resume=root.querySelector('[aria-labelledby="Resume/CV-section"]');
+      if(resume)add('Resume/CV',[...resume.querySelectorAll('[data-automation-id=file-upload-item-name]')].map(e=>e.innerText.trim()).join('; '),resume);
+      return alignRows(result);
     }
     const observer=new native.MutationObserver(records=>{if(records.some(r=>r.type==='childList'||r.attributeName!=='data-intern-control'))lastChange=performance.now();});
     observer.observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-invalid','disabled','hidden','aria-busy']});observers.add(observer);
@@ -292,7 +395,8 @@
         for(const [e,proposal]of proposals){if(!e.isConnected){proposals.delete(e);continue;}if(!policies.has(e))continue;proposals.delete(e);if(proposal.key==='option'){picker=e;action(proposal.value);continue;}assign(e,proposal.key,proposal.value);if(!denied.has(e)&&e.type!=='file'){e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));e.blur();}}
         for(const [selector,p]of Object.entries(policiesBySelector)){
           const e=handles.get(selector);
-          if(e && (p.ref?.startsWith('answer:') || p.ref==='profile:cover_letter' || p.ref==='profile:cover_letter_path')){
+          if(e && (p.ref?.startsWith('answer:') || p.ref==='profile:cover_letter' || p.ref==='profile:cover_letter_path' ||
+            config.adapter==='workday' && !authControls().passwords.length && p.ref?.startsWith('profile:') && e.matches('input:not([type=file]),textarea,select') && !prompt(e))){
             if(e.type==='file')void upload(null,e);
             else if(!matches(e,p)){assign(e,'value',p.value);if(!denied.has(e)){e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));e.blur();}}
           }
@@ -306,11 +410,7 @@
         const ctx={addEventListener:(target,...args)=>R.call(target,'addEventListener',args),onInvalidated:fn=>abort.signal.addEventListener('abort',fn,{once:true})};
         Promise.resolve(adapter.script({getProfile:async()=>config.profile,setMessage:message=>{if(live())status=message||status;},autofillSettings:{autoClickNextPage:true,autoSubmit:true,saveApplications:false,saveResponses:false},accountSettings:{accountEmail:"",accountPassword:""},ctx})).catch(fail);
       },
-      snapshot(){return {summary:[...document.querySelectorAll('[data-automation-id="reviewField"],dl>dt')].filter(visible).map(e=>({
-        label:(e.querySelector('label,dt')?.textContent||(e.tagName==='DT'?e.textContent:'')).trim(),
-        value:(e.querySelector('dd,[data-value]')?.textContent||(e.tagName==='DT'?e.nextElementSibling?.textContent:'')||'').trim(),
-        group:e.getAttribute('data-group')||'',row:Number(e.getAttribute('data-row')||0)
-      })),errors:(/\bVPS\|[0-9a-f-]{36}\b/i.test(document.body.innerText)||/something went wrong[\s\S]*please refresh the page and then try again/i.test(document.body.innerText)?1:0)+[...document.querySelectorAll('[role=alert],.field-error-msg,.form-error,[data-automation-id=inputError]')].filter(e=>visible(e)&&e.textContent.trim()).length,status,live:live(),settled:performance.now()-lastChange>350&&timers.size<=1,proposals:proposals.size,events,problems:[...problems.values()],actions:[...actions].filter(([,a])=>a.element.isConnected&&visible(a.element)&&!a.element.disabled).map(([id,a])=>({id,kind:a.kind})),url};},
+      snapshot(){return {summary:reviewSummary(),errors:(/\bVPS\|[0-9a-f-]{36}\b/i.test(document.body.innerText)||/something went wrong[\s\S]*please refresh the page and then try again/i.test(document.body.innerText)?1:0)+[...document.querySelectorAll('[role=alert],.field-error-msg,.form-error,[data-automation-id=inputError],[data-automation-id=inputAlert]')].filter(isError).length,status,live:live(),settled:performance.now()-lastChange>350&&timers.size<=1,proposals:proposals.size,events,problems:[...problems.values()],actions:[...actions].filter(([,a])=>a.element.isConnected&&visible(a.element)&&!a.element.disabled).map(([id,a])=>({id,kind:a.kind})),url};},
       async options(selector,query){
         const e=handles.get(selector);
         if(prompt(e)){

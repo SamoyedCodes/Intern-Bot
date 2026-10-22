@@ -1,5 +1,6 @@
 """Direct Playwright service-worker commands, scoped to one run and document."""
 import asyncio
+import re
 from urllib.parse import urlsplit
 
 
@@ -17,6 +18,10 @@ class ExtensionBridge:
     def _request_started(self, request):
         # Only the employer's own traffic signals form activity; third-party trackers (LinkedIn's beacons) can stay pending forever.
         hosts = {urlsplit(url).hostname for url in (self.page.url, (self.binding or {}).get('url') or self.page.url)}
+        url = urlsplit(request.url)
+        # Workday's fire-and-forget terms-display timestamp does not update or validate application fields.
+        if request.method == 'POST' and (url.hostname or '').endswith('.myworkdayjobs.com') and re.fullmatch(r'/wday/calypso/cxs/jobapplication/[^/]+/jobapplication/[^/]+/termslockmoment', url.path):
+            return
         if request.resource_type in {'document', 'script', 'xhr', 'fetch'} and urlsplit(request.url).hostname in hosts:
             self.pending.add(request)
 
