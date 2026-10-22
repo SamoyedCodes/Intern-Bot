@@ -177,8 +177,7 @@ class TaskDialog(QDialog):
         form.addRow("Profile", self.profile)
         self.mode = QComboBox()
         self.mode.addItem("Classic · fills the form in the browser", "classic")
-        self.mode.addItem("Request · answers Workday's questions through its API (beta)", "request")
-        self.mode.currentIndexChanged.connect(self.mode_changed)
+        self.mode.addItem("Request · Workday API questions, then browser completion (beta)", "request")
         form.addRow("Mode", self.mode)
         layout.addLayout(form)
         layout.addSpacing(4)
@@ -216,13 +215,6 @@ class TaskDialog(QDialog):
                 tone, message = "danger", str(exc)
         self.detected.setText(message)
         restyle(self.detected, tone=tone)
-
-    def mode_changed(self):
-        # Request mode stops at a handoff; submitting stays in the browser.
-        request = self.mode.currentData() == "request"
-        self.auto_submit.setEnabled(not request)
-        if request:
-            self.auto_submit.setChecked(False)
 
     def validate(self, start=False):
         try:
