@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import re
 
-from core.automation.models import ApplicantProfile, ApplicationRun, employer_key, normalized
+from core.automation.models import ApplicantProfile, ApplicationRun, Language, employer_key, normalized
 
 
 @dataclass
@@ -89,9 +89,16 @@ def applicable(answers, profile: ApplicantProfile, run: ApplicationRun):
 ROW_NAMES = {"language_proficiency": "language", "education": "school", "experience": "employer"}
 
 
+def profile_rows(profile, group):
+    rows = getattr(profile, group, [])
+    if group == 'language_proficiency' and not rows:
+        return [Language(language=name.strip()) for name in re.split(r'[,;\n]', profile.languages) if name.strip()]
+    return rows
+
+
 def question_for(field, profile: ApplicantProfile):
     """A row question names its row ("Speaking — English"), so each language, school or employer keeps its own answer."""
-    entries = getattr(profile, field.group) if field.group in ROW_NAMES else []
+    entries = profile_rows(profile, field.group) if field.group in ROW_NAMES else []
     name = getattr(entries[field.row], ROW_NAMES[field.group]) if field.row < len(entries) else ""
     return f"{field.label} — {name}" if name else field.label
 
@@ -115,7 +122,7 @@ def resolve(field, profile: ApplicantProfile, run: ApplicationRun, answers) -> R
     usable = applicable(answers, profile, run)
     if not field.group:
         return approved(field, [a for a in usable if asks(a, field.label)]) or profile_fact(field, profile)
-    if field.row >= len(getattr(profile, field.group, [])):
+    if field.row >= len(profile_rows(profile, field.group)):
         return Resolution(reason="The browser contains an extra row; reconcile it with your profile.")
     # An answer to a bare row label ("Speaking") was given for the first row, where the question used to be asked;
     # other rows have their own named answer ("Speaking — Chinese (Mandarin)") or their own profile facts.
@@ -131,7 +138,7 @@ def profile_fact(field, profile: ApplicantProfile) -> Resolution:
     attr = None
     source = profile
     if field.group:
-        source = getattr(profile, field.group)[field.row]
+        source = profile_rows(profile, field.group)[field.row]
         label = normalized(field.label)
         component = re.fullmatch(r"(from|to|start date|end date) (month|day|year)", label)
         if component:

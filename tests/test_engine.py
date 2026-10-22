@@ -132,9 +132,9 @@ async def test_only_employer_requests_hold_a_section_open(context):
     page = await open_fixture(context, 'workday')
     bridge = ExtensionBridge(page, 'run')
     hung = []
-    await page.route(lambda url: url.endswith(('/li/track', '/wday/save')), lambda route: hung.append(route))  # Held open, like a stuck beacon.
-    await page.evaluate("() => { for (const url of ['https://www.linkedin.com/li/track', '/wday/save']) fetch(url, {method: 'POST'}).catch(() => {}) }")
-    await until(lambda: len(hung) == 2)
+    await page.route(lambda url: url.endswith(('/li/track', '/wday/save', '/termslockmoment')), lambda route: hung.append(route))  # Held open, like a stuck beacon.
+    await page.evaluate("() => { for (const url of ['https://www.linkedin.com/li/track', '/wday/save', '/wday/calypso/cxs/jobapplication/test/jobapplication/draft/termslockmoment']) fetch(url, {method: 'POST'}).catch(() => {}) }")
+    await until(lambda: len(hung) == 3)
     assert [r.url.rsplit('/', 2)[-2:] for r in bridge.pending] == [['wday', 'save']]
     for route in hung:
         await route.abort()
@@ -230,10 +230,8 @@ async def test_conditional_fields_rerenders_and_a_late_enabled_submit(context, s
     store.save_answer(ApprovedAnswer(question='Choice', value=True, scope_key=run.id))
     store.save_answer(ApprovedAnswer(question='Extra fact', value='Explicit fact', scope_key=run.id))
     engine = ApplicationEngine(store)
-    # Checking Choice reveals Extra fact mid-verification, so the first pass hands off instead of trusting a moving form.
+    # Checking Choice reveals Extra fact; retry verification only after the new field settles.
     await engine.start(run, profile_for('greenhouse'), ExtensionBridge(page, run.id))
-    assert run.status == 'needs_input' and [i.kind for i in run.interventions] == ['validation'], run.interventions
-    await engine.resume(run, profile_for('greenhouse'), ExtensionBridge(page, run.id))
     assert run.status == 'ready_for_review', run.interventions
     assert await page.locator('#conditional').input_value() == 'Explicit fact'
     # A re-rendered control loses its value; resuming fills the replacement.
@@ -528,12 +526,15 @@ async def test_an_unlisted_degree_or_open_search_popup_does_not_stop_the_workday
 <div role="group" aria-labelledby="Education-section"><h3 id="Education-section">Education</h3>
 <div role="group" aria-labelledby="Education-1-panel"><label>School or University<input data-automation-id="school"></label>
 <div data-automation-id="formField-fieldOfStudy"><label>Field of Study<input data-uxi-widget-type="selectinput" data-uxi-multiselect-id="m1"
+ onkeydown="if(event.key==='Enter'){window.searched=true;window.searchPrevented=event.defaultPrevented}"
  onclick="if(!document.querySelector('[data-associated-widget=m1]'))document.body.insertAdjacentHTML('beforeend','<div data-associated-widget=m1><div data-automation-id=activeListContainer><div role=presentation>All</div></div></div>')"></label></div></div></div>
 <div role="group" aria-labelledby="Resume/CV-section"><h3 id="Resume/CV-section">Resume/CV</h3><label>Resume<input type=file></label></div></div>''')
     # Workday's degree lookup only knows its own labels, such as "Bachelor's"; Keppel's search popup stays open after a search.
     profile = ApplicantProfile(resume_path=str(resume), education=[Education(school='Example University', degree='Bachelor of Science (Honours)', major='Data Science')])
-    await apply(store, page, ApplicationRun(job_url=page.url, auto_advance=False), profile)
+    run = await apply(store, page, ApplicationRun(job_url=page.url, auto_advance=False), profile)
     assert await page.locator('input[type=file]').evaluate('e => e.files[0]?.name') == 'resume.pdf'
+    assert await page.evaluate('window.searched && window.searchPrevented')
+    assert not any('keyboard activation' in i.message for i in run.interventions)
 
 
 def test_a_row_question_is_asked_for_its_own_row(store):
@@ -541,3 +542,157 @@ def test_a_row_question_is_asked_for_its_own_row(store):
     speaking = FormField('speaking', 'Speaking', '', 'select-one', group='language_proficiency', row=1)
     assert not ApplicationEngine(store).verify(run, run.profile_snapshot, [speaking], {'files': {}})
     assert run.interventions[0].question == 'Speaking — Chinese (Mandarin)'
+
+
+@pytest.mark.parametrize('existing', ['', 'Existing employer'])
+async def test_workday_native_profile_fields_do_not_wait_for_a_stalled_picker(context, store, existing):
+    from core.automation.models import Experience
+    html = f'''<div data-automation-id="myExperiencePage"><div data-intern-group="experience"><div data-intern-row>
+    <label>Company<input value="{existing}"></label><label>Job Title<input></label>
+    <label>I currently work here<input type="checkbox"></label></div></div>
+    <button type="button" aria-haspopup="listbox">Unavailable picker</button></div>'''
+    profile = ApplicantProfile(experience=[Experience(employer='Fictional Co', job_title='Engineer', current=True)])
+    page = await open_fixture(context, 'workday', html)
+    bridge, _, _, _, _ = await prepare(page, store, 'workday', profile)
+    # No adapter start: an unrelated pending picker cannot hold these known native facts hostage.
+    assert await page.get_by_label('Company', exact=True).input_value() == (existing or 'Fictional Co')
+    assert await page.get_by_label('Job Title', exact=True).input_value() == ('' if existing else 'Engineer')
+    assert await page.get_by_label('I currently work here', exact=True).is_checked() == (not existing)
+    fields = (await bridge.command('scan'))['fields']
+    assert {f['row'] for f in fields if f['group']=='experience'} == ({1} if existing else {0})
+
+
+@pytest.mark.parametrize('reprepare', [False, True])
+async def test_workday_cleared_file_input_keeps_digest_only_for_the_original_receipt(context, store, tmp_path, reprepare):
+    import hashlib
+    resume = tmp_path / 'resume.pdf'
+    resume.write_bytes(b'fixture resume bytes')
+    html = '''<div data-automation-id="myExperiencePage"><div role="group" aria-labelledby="Resume/CV-section">
+    <h4 id="Resume/CV-section">Resume/CV</h4><input type=file onchange="this.files=new DataTransfer().files;window.finishUpload=()=>this.insertAdjacentHTML('afterend',`<div data-automation-id='file-upload-item'><span data-automation-id='file-upload-item-name'>resume.pdf</span><div data-automation-id='ariaLiveMessage' role='alert'>resume.pdf successfully uploaded</div><span data-automation-id='file-upload-successful'>Successfully Uploaded!</span></div>`)"></div></div>'''
+    page = await open_fixture(context, 'workday', html)
+    profile = ApplicantProfile(resume_path=str(resume))
+    bridge, _, _, _, config = await prepare(page, store, 'workday', profile)
+    await bridge.command('start')
+    await page.wait_for_function('typeof window.finishUpload === "function"')
+    [pending] = (await bridge.command('scan'))['fields']
+    assert pending['file_digest'] == ''
+    await page.evaluate('window.finishUpload()')
+    await page.locator('[data-automation-id=file-upload-successful]').wait_for()
+    [field] = (await bridge.command('scan'))['fields']
+    digest = hashlib.sha256(resume.read_bytes()).hexdigest()
+    assert field['file_digest'] == digest and not field['invalid']
+    assert (await bridge.command('snapshot'))['errors'] == 0
+    # Review pages may announce an upload without displaying the editing receipt's success icon.
+    await page.locator('[data-automation-id=file-upload-successful]').evaluate('e=>{window.uploadSuccess=e;e.remove()}')
+    assert (await bridge.command('snapshot'))['errors'] == 0
+    await page.locator('[data-automation-id=file-upload-item]').evaluate('e=>e.append(window.uploadSuccess)')
+    assert await page.locator('input[type=file]').evaluate('e=>e.files.length') == 0
+    # A new runtime on resume must preserve proof for the unchanged accepted receipt.
+    if reprepare:
+        [field] = (await bridge.command('prepare', config))['fields']
+        assert field['file_digest'] == digest
+    # A replacement attachment with the same name is not the file we uploaded.
+    await page.locator('[data-automation-id=file-upload-item]').evaluate('e=>e.replaceWith(e.cloneNode(true))')
+    [field] = (await bridge.command('scan'))['fields']
+    assert field['file_digest'] == ''
+
+
+async def test_workday_route_normalization_rebinds_before_continuing(context, store):
+    html = (FIXTURES / 'workday.html').read_text().replace('>Next</button>', '>Submit</button>')
+    page = await open_fixture(context, 'workday', html)
+    run = ApplicationRun(job_url=page.url)
+    bridge = ExtensionBridge(page, run.id)
+    changed = False
+    async def normalize(name):
+        nonlocal changed
+        if name == 'start' and not changed:
+            changed = True
+            await page.evaluate("history.replaceState({}, '', location.pathname + '/apply')")
+    commands = record_commands(bridge, before=normalize)
+    await ApplicationEngine(store).start(run, profile_for('workday'), bridge)
+    assert run.status == 'ready_for_review', run.interventions
+    assert commands.count('prepare') == 2
+    assert not run.submission_attempted
+
+
+@pytest.mark.parametrize('keeps_changing', [False, True])
+async def test_verification_retries_transient_changes_but_bounds_unstable_forms(context, store, keeps_changing):
+    page = await open_fixture(context, 'greenhouse', greenhouse())
+    run = ApplicationRun(job_url=page.url)
+    bridge = ExtensionBridge(page, run.id)
+    scans = 0
+    async def change_during_readback(name):
+        nonlocal scans
+        if name == 'scan':
+            scans += 1
+            if scans == 2 or (keeps_changing and scans % 2 == 0):
+                await page.locator('input').first.evaluate('e=>e.required=!e.required')
+    commands = record_commands(bridge, before=change_during_readback)
+    await ApplicationEngine(store).start(run, profile_for('greenhouse'), bridge)
+    assert run.status == ('needs_input' if keeps_changing else 'ready_for_review'), run.interventions
+    assert commands.count('prepare') == (4 if keeps_changing else 2)
+    assert not run.submission_attempted
+    if keeps_changing:
+        assert any(i.kind == 'validation' for i in run.interventions)
+
+
+async def test_workday_date_parts_commit_on_blur_and_expose_group_validation(context, store):
+    html = '''<div data-automation-id="myExperiencePage"><div data-intern-group="experience"><div data-intern-row>
+    <fieldset><legend>From*</legend><div data-automation-id="dateInputWrapper">
+    <label>Month<input role="spinbutton" onblur="window.savedMonth=this.value"></label>
+    <label>Year<input role="spinbutton" onblur="window.savedYear=this.value"></label>
+    </div></fieldset></div></div></div>'''
+    page = await open_fixture(context, 'workday', html)
+    profile = ApplicantProfile(experience=[Experience(start_date='2026-05')])
+    bridge, engine, run, _, config = await prepare(page, store, 'workday', profile)
+    assert await page.evaluate('[window.savedMonth,window.savedYear]') == ['5', '2026']
+    await page.locator('fieldset').evaluate('e=>e.insertAdjacentHTML("beforeend",`<p data-automation-id="inputAlert">The field From is required and must have a value.</p>`)')
+    fields = [FormField(**f) for f in (await bridge.command('scan'))['fields']]
+    assert all(f.invalid for f in fields)
+    assert (await bridge.command('snapshot'))['errors']
+    assert not engine.verify(run, profile, fields, config)
+
+
+@pytest.mark.parametrize('replace,stop', [(False,False),(True,False),(True,True)])
+async def test_workday_saved_resume_is_replaced_only_by_an_explicit_file_answer(context, store, tmp_path, replace, stop):
+    import hashlib
+    resume = tmp_path / 'new.pdf'
+    resume.write_bytes(b'new fixture resume')
+    html = '''<div data-automation-id=myExperiencePage><div aria-labelledby="Resume/CV-section" role=group>
+    <input type=file onchange="this.insertAdjacentHTML('afterend',`<div data-automation-id='file-upload-item'><span data-automation-id='file-upload-item-name'>new.pdf</span><span data-automation-id='file-upload-successful'>Successfully Uploaded!</span></div>`);this.files=new DataTransfer().files">
+    <div data-automation-id=file-upload-item><span data-automation-id=file-upload-item-name>old.pdf</span><span data-automation-id=file-upload-successful>Successfully Uploaded!</span>
+    <button type=button data-automation-id=delete-file onclick="window.deletes=(window.deletes||0)+1;setTimeout(()=>this.parentElement.remove(),100)">Delete old.pdf</button></div>
+    </div></div>'''
+    page = await open_fixture(context, 'workday', html)
+    if replace:
+        store.save_answer(ApprovedAnswer(question='Resume', value=str(resume), scope='global'))
+    bridge, _, _, _, _ = await prepare(page, store, 'workday', ApplicantProfile(resume_path=str(resume)))
+    await bridge.command('start')
+    if stop:
+        await page.wait_for_function('window.deletes===1')
+        await bridge.stop()
+    await page.wait_for_timeout(350)
+    [field] = (await bridge.command('scan'))['fields']
+    assert await page.evaluate('window.deletes||0') == int(replace)
+    if stop:
+        assert field['value'] == '' and field['file_digest'] == ''
+        return
+    assert field['value'] == ('new.pdf' if replace else 'old.pdf')
+    assert field['file_digest'] == (hashlib.sha256(resume.read_bytes()).hexdigest() if replace else '')
+
+
+async def test_workday_reordered_saved_jobs_keep_their_own_profile_policies(context, store):
+    html = '''<div data-automation-id=myExperiencePage><div data-intern-group=experience>
+    <div data-intern-row><label>Company<input value="Second Co"></label><label>Job Title<input value="Tutor"></label><label>I currently work here<input type=checkbox checked></label></div>
+    <div data-intern-row><label>Company<input value="First Co"></label><label>Job Title<input value="Intern"></label><label>I currently work here<input type=checkbox></label></div>
+    </div></div>'''
+    profile = ApplicantProfile(experience=[Experience(employer='First Co', job_title='Intern', current=False), Experience(employer='Second Co', job_title='Tutor', current=True)])
+    page = await open_fixture(context, 'workday', html)
+    bridge, _, _, _, _ = await prepare(page, store, 'workday', profile)
+    fields = (await bridge.command('scan'))['fields']
+    assert [(f['row'],f['value']) for f in fields if f['label']=='Company'] == [(1,'Second Co'),(0,'First Co')]
+    assert await page.locator('input[type=checkbox]').evaluate_all('es=>es.map(e=>e.checked)') == [True,False]
+    # An unrecognized populated row must not receive another job's checkbox or dates.
+    await page.locator('input').first.fill('Unknown Co')
+    fields = (await bridge.command('scan'))['fields']
+    assert all(f['row'] >= 2 for f in fields[:3])

@@ -5,7 +5,7 @@ import mimetypes
 import re
 from pathlib import Path
 
-from core.automation.answers import applicable, resolve
+from core.automation.answers import applicable, profile_rows, resolve
 from core.automation.models import normalized
 from core.automation.fields import FormField
 
@@ -29,10 +29,8 @@ def translate(profile, run, answers):
     # Approved file answers (an absolute path to a document) are uploaded the same way as the profile's documents.
     uploads = [a.value for a in applicable(answers, profile, run) if isinstance(a.value, str) and Path(a.value).is_absolute() and Path(a.value).is_file()]
     files = {p: file_payload(p) for p in (profile.resume_path, profile.cover_letter_path, *uploads) if p}
-    languages = [dict(language=l.language, proficiency=l.proficiency, fluent=l.fluent) for l in profile.language_proficiency]
-    for language in re.split(r'[,;\n]', profile.languages):
-        if language.strip() and not any(normalized(l['language']) == normalized(language) for l in languages):
-            languages.append(dict(language=language.strip(), proficiency='', fluent=None))
+    # Structured rows and the legacy text list must resolve to the same rows the adapter creates.
+    languages = [dict(language=l.language, proficiency=l.proficiency, fluent=l.fluent) for l in profile_rows(profile, 'language_proficiency')]
     translated = {
         'profileName': run.profile_name,
         'nameData': dict(prefix=profile.name_prefix,firstName=profile.first_name,middleName=profile.middle_name,

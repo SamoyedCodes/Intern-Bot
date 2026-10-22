@@ -13,7 +13,7 @@ from core.automation.speedy_profile import translate
 from core.automation.privacy import configure_privacy
 from core.automation.fields import FormField
 
-ENGINE_VERSION = 'speedyapply-local-2.28.0-v1'
+ENGINE_VERSION = 'speedyapply-local-2.28.0-v2'
 SIGN_IN_HANDOFF = 'Complete employer sign-in or activation in Chromium, then resume. Saved credentials remain in the operating-system keychain; an existing authentication attempt will not be repeated.'
 ACTIVATION_HANDOFF = "Check {} for Workday's verification email and open its link, then click I've verified my account."
 REJECTED_ACCOUNT = "Workday didn't accept the new account. It may already exist: sign in or reset the password in Chromium, save that login under Profile → Workday logins, then resume."
@@ -82,6 +82,7 @@ class ApplicationEngine:
                 return run
             last_advanced_stage = None
             stalls = 0
+            verification_retries = 0
             def stage_of(match, result, fields):
                 section = match['url'] + '|' + (result.get('section') or '|'.join(f.key for f in fields))
                 return match['adapter']['name'] + ':' + hashlib.sha256(section.encode()).hexdigest()[:10]
@@ -146,6 +147,9 @@ class ApplicationEngine:
                     credential['state'] = 'verified'
                 await bridge.command('start')
                 settled = await self.wait_for_section(run, profile)
+                if settled and match['frame'] == 0 and settled['url'] != bridge.page.url and not (self._pause or self._cancel):
+                    # Workday normalizes /apply/applyManually to /apply after rendering the form.
+                    continue
                 if settled and not (self._pause or self._cancel) and (await bridge.command('choose')).get('chosen'):
                     settled = await self.wait_for_section(run, profile)
                 if not settled or self._pause or self._cancel:
@@ -156,8 +160,14 @@ class ApplicationEngine:
                 check = await bridge.command('snapshot')
                 confirmed = [FormField(**f) for f in (await bridge.command('scan'))['fields']]
                 if fields != confirmed or not check['settled'] or bridge.pending:
+                    if verification_retries < 3:
+                        verification_retries += 1
+                        await bridge.stop()
+                        await asyncio.sleep(.5)
+                        continue
                     self.intervene(run, 'The form changed during section verification. Inspect it and resume.', 'validation')
                     return run
+                verification_retries = 0
                 settled = check
                 # The section named before filling may have been a page still loading or one being left; record what was filled.
                 run.stage = stage_of(match, scanned, fields)
@@ -383,6 +393,13 @@ class ApplicationEngine:
 
     def verify_review(self, run, profile, summary):
         previous = [a for a in run.fields.values() if a.section != run.stage and a.disposition == "verified"]
+        if previous and summary and all(s.get('layout') == 'workday' for s in summary):
+            from core.automation.review import workday_review_error
+            evidence = [a for a in run.fields.values() if a.section != run.stage and a.disposition in {'verified', 'intentionally_omitted'}]
+            error = workday_review_error(evidence, summary, profile, run, self.store.answers())
+            if error:
+                self.intervene(run, error, 'validation')
+            return not error
         if not previous and not summary:
             if any(a.section == run.stage and a.disposition == "verified" for a in run.fields.values()):
                 return True
