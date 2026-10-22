@@ -1,4 +1,4 @@
-"""Request mode: sign in through the browser, then answer Workday's application questions through its own candidate API."""
+"""Workday questionnaires through the candidate API, then verified browser completion."""
 import asyncio
 import html
 import re
@@ -13,8 +13,6 @@ from core.automation.models import FieldAssessment, InterventionRequest, normali
 ENGINE_VERSION = 'workday-request-v1'
 NEW_ACCOUNT = "Request mode signs in with an existing Workday login. Sign in or create this employer's account in Chromium, then resume."
 NO_DRAFT = 'No Workday draft was found for this job. In Chromium, choose Apply, then Apply Manually, and resume once the first page shows.'
-HANDOFF = 'Application questions are saved in Workday and verified. Finish the other pages in Chromium (they show the saved answers) and submit there yourself.'
-NO_QUESTIONS = 'This posting has no application questions for request mode to answer. Finish the application in Chromium.'
 
 # Workday's question types, from its apply-flow code (common/questionnaire/{id}).
 DATE, MULTI, NUMBER, SINGLE, TEXT, UPLOAD = ('85fb160ed47910001589e3a427670070', 'c4d9bd57996c100025ab7d705b150045', '53d73448d8de1000063827b5cb68003f',
@@ -53,23 +51,29 @@ class RequestEngine(ApplicationEngine):
     DRAFT_POLLS = 40
 
     async def start(self, run, profile, bridge, credential=None):
+        if run.submission_attempted or await self.answer_questions(run, profile, bridge, credential):
+            return await super().start(run, profile, bridge, credential)
+        return run
+
+    async def answer_questions(self, run, profile, bridge, credential=None):
         self.bridge, self.page, self.run_id, self.job_url = bridge, bridge.page, run.id, run.job_url
         self._pause = self._cancel = False
         if run.is_submitted:
-            return run
+            return False
+        completed = False
         started = time.monotonic()
         run.interventions = []
         run.status = 'running'
         try:
-            if run.engine_version != ENGINE_VERSION or run.profile_revision != profile.revision:
-                run.fields, run.completed_sections = {}, []
+            # Evidence belongs to this read-back, not a previous attempt or answer-bank revision.
+            run.fields, run.completed_sections = {}, []
             run.engine_version, run.profile_snapshot, run.profile_revision = ENGINE_VERSION, profile.model_copy(deep=True), profile.revision
             self.checkpoint(run)
             self.job = [p for p in urlsplit(apply_url(run.job_url)).path.split('/') if p][-3]
             await self.open()
             self.tenant, self.site = await self.page.evaluate('() => [workday.tenant, workday.siteId]')
             if not await self.sign_in(run, credential) or self.stopped:
-                return run
+                return False
             # The page itself creates the draft once a signed-in candidate opens Apply Manually.
             await self.open()
             draft = None
@@ -82,7 +86,7 @@ class RequestEngine(ApplicationEngine):
             if not draft:
                 if not self.stopped:
                     self.intervene(run, NO_DRAFT)
-                return run
+                return False
             self.application = draft['applicationId']
             pages = (await self.call('GET', self.calypso('jobapplication', f'jobpostings/{quote(self.job)}/applyflowpages?applyDetail=applyManually')) or {}).get('data', [])
             run.steps = [p.get('descriptor', '') for p in pages]
@@ -93,15 +97,16 @@ class RequestEngine(ApplicationEngine):
                 run.stage = f'Workday API: {kind} questions'
                 self.checkpoint(run)
                 if not await self.questionnaire(run, profile, questionnaire, kind) or self.stopped:
-                    return run
+                    return False
                 if run.stage not in run.completed_sections:
                     run.completed_sections.append(run.stage)
             # Show the saved answers rather than the page as it was before the API calls.
             await self.open()
-            self.intervene(run, HANDOFF if found else NO_QUESTIONS)
+            completed = True
         except asyncio.CancelledError:
             run.status = 'cancelled' if self._cancel else 'needs_input'
-            raise
+            if not self.stopped:
+                raise
         except Exception as exc:
             self.intervene(run, f'Workday did not answer as request mode expects. Inspect the draft in Chromium and resume ({type(exc).__name__}).')
         finally:
@@ -113,7 +118,7 @@ class RequestEngine(ApplicationEngine):
             run.elapsed_seconds += time.monotonic() - started
             self.store.record_event(run.id, run.status, run.stage)
             self.checkpoint(run)
-        return run
+        return completed and not self.stopped
 
     resume = start
 
@@ -121,8 +126,14 @@ class RequestEngine(ApplicationEngine):
     def stopped(self):
         return self._pause or self._cancel
 
+    def check_running(self):
+        if self.stopped:
+            raise asyncio.CancelledError
+
     async def open(self):
+        self.check_running()
         await self.page.goto(apply_url(self.job_url), wait_until='domcontentloaded')
+        self.check_running()
         await self.page.wait_for_function('() => window.workday?.token && window.workday?.tenant', timeout=30000)
 
     def calypso(self, service, path, site=False):
@@ -130,10 +141,14 @@ class RequestEngine(ApplicationEngine):
 
     async def call(self, method, path, body=None, session=None):
         """One API call; returns its JSON, or raises so nothing is written on a misunderstood response."""
+        self.check_running()
         response = await self.page.evaluate(FETCH, {'method': method, 'path': path, 'body': body, 'session': session})
+        self.check_running()
         if response['status'] >= 400:
             self.store.record_event(self.run_id, 'http_error', '', f"{response['status']} {method} {urlsplit(path).path}")
             raise RuntimeError(f"HTTP {response['status']}")
+        if response['json'] is None:
+            raise ValueError('Workday returned no JSON response.')
         return response['json']
 
     async def signed_in(self):
@@ -176,15 +191,20 @@ class RequestEngine(ApplicationEngine):
             self.intervene(run, SIGN_IN_HANDOFF, 'verification')
             return False
         # One attempt per run, persisted before the click, as in classic mode.
-        run.authentication_attempted = True
-        self.checkpoint(run)
+        self.check_running()
         await email.fill(credential['username'])
+        self.check_running()
         await password.fill(credential['password'])
         # Workday drops a sign-in sent within 500ms of the form appearing, and only accepts a real click on the
         # transparent overlay it lays over the submit button.
         await page.wait_for_timeout(1000)
         overlay = page.locator('[data-automation-id="click_filter"]:visible')
-        await (overlay if await overlay.count() == 1 else page.locator('[data-automation-id="signInSubmitButton"]')).click()
+        button = overlay if await overlay.count() == 1 else page.locator('[data-automation-id="signInSubmitButton"]')
+        self.check_running()
+        run.authentication_attempted = True
+        self.checkpoint(run)
+        self.check_running()
+        await button.click()
         for _ in range(self.AUTH_POLLS):
             await asyncio.sleep(.25)
             if self.stopped:
@@ -198,6 +218,9 @@ class RequestEngine(ApplicationEngine):
 
     async def questionnaire(self, run, profile, questionnaire_id, kind):
         """Answer one questionnaire in a single POST, then verify Workday's saved answers. False hands off."""
+        run.fields = {k: v for k, v in run.fields.items() if v.section != run.stage}
+        run.completed_sections = [s for s in run.completed_sections if s != run.stage]
+        self.checkpoint(run)
         questions = {q['id']: q for q in (await self.call('GET', self.calypso('common', f'questionnaire/{questionnaire_id}')))['questions']}
         branching = {q['id'] for q in questions.values() if any(a.get('branchingQuestion') for a in q.get('possibleAnswers') or [])}
         branches = lambda values: {k: v[0] for k, v in values.items() if k in branching}
@@ -209,15 +232,16 @@ class RequestEngine(ApplicationEngine):
             required = set(definition.get('required', []))
             shown = [self.field(questions[k], k in required) for k, p in sorted(definition['properties'].items(), key=lambda item: item[1].get('order', ''))
                      if k in questions and not p.get('hidden')]
-            missing, chosen = [], {}
+            missing, chosen, omitted = [], {}, set()
             for field in shown:
+                resolution = resolve(field, profile, run, answers)
+                if resolution.omit and not field.required:
+                    omitted.add(field.selector)
+                    continue
                 if field.kind == 'file':
                     # Uploads stay with the browser; one you already made is kept below.
                     if not isinstance(saved.get(field.selector), dict) and field.required:
                         missing.append((field, f'Upload your answer to “{field.label}” in Chromium; request mode does not upload files.'))
-                    continue
-                resolution = resolve(field, profile, run, answers)
-                if resolution.omit and not field.required:
                     continue
                 value = None if resolution.value is None else self.answer(questions[field.selector], resolution.value)
                 if value is not None:
@@ -231,29 +255,34 @@ class RequestEngine(ApplicationEngine):
                 break
         if missing:
             for field, reason in missing:
+                key = run.stage + ':' + field.key
+                run.fields[key] = FieldAssessment(key=key, label=field.label, section=run.stage, required=field.required,
+                                                  kind=field.kind, disposition='needs_input', reason=reason)
                 self.intervene(run, reason, *(('browser',) if field.kind == 'file' else ('answer', field)))
             return False
-        if any(saved.get(k) != self.comparable(v) for k, v in chosen.items()):
+        if any(saved.get(k) != self.comparable(v) for k, v in chosen.items()) or any(saved.get(k) not in (None, '', []) for k in omitted):
             # The POST replaces the whole questionnaire, so uploads already made are sent back as they are.
-            kept = [{'questionItem': {'id': f.selector}, **saved[f.selector]} for f in shown if f.kind == 'file' and isinstance(saved.get(f.selector), dict)]
+            kept = [{'questionItem': {'id': f.selector}, **saved[f.selector]} for f in shown
+                    if f.kind == 'file' and f.selector not in omitted and isinstance(saved.get(f.selector), dict)]
             body = {'questionnaireAnswers': [{'questionItem': {'id': k}, **self.payload(questions[k], v)} for k, v in chosen.items()] + kept}
             response = await self.call('POST', self.calypso('jobapplication', f'jobapplication/{self.application}/questionnaireresponse?type={kind}'), body, session='')
-            if isinstance(response, list):
+            if isinstance(response, list) and response:
                 # Workday returns its validation errors as a list.
                 for error in response:
                     self.intervene(run, str(error.get('message') or error) if isinstance(error, dict) else str(error), 'validation')
                 return False
             saved = await self.saved(kind)
         ok = True
-        run.fields = {k: v for k, v in run.fields.items() if v.section != run.stage}
         for field in shown:
-            if field.selector not in chosen:
+            if field.selector not in chosen and field.selector not in omitted:
                 continue
-            matched = saved.get(field.selector) == self.comparable(chosen[field.selector])
+            blank = field.selector in omitted
+            matched = saved.get(field.selector) in (None, '', []) if blank else saved.get(field.selector) == self.comparable(chosen[field.selector])
             ok = ok and matched
             key = run.stage + ':' + field.key
             run.fields[key] = FieldAssessment(key=key, label=field.label, section=run.stage, required=field.required, kind=field.kind,
-                                              answer_ref=resolve(field, profile, run, answers).ref, disposition='verified' if matched else 'needs_input',
+                                              answer_ref=resolve(field, profile, run, answers).ref,
+                                              disposition=('intentionally_omitted' if blank else 'verified') if matched else 'needs_input',
                                               evidence='Workday API read-back' if matched else '', reason='' if matched else 'Workday did not keep the answer that was sent.')
         if not ok:
             self.intervene(run, 'Workday saved different answers than request mode sent. Inspect Application Questions in Chromium.', 'validation')
@@ -294,7 +323,10 @@ class RequestEngine(ApplicationEngine):
     async def saved(self, kind):
         """What Workday holds now, per question: chosen answer ids (sorted), the text, number or date, or the uploaded attachments."""
         saved = {}
-        for answer in await self.call('GET', self.calypso('jobapplication', f'jobapplication/{self.application}/questionnaireanswers?type={kind}'), session='') or []:
+        response = await self.call('GET', self.calypso('jobapplication', f'jobapplication/{self.application}/questionnaireanswers?type={kind}'), session='')
+        if not isinstance(response, list):
+            raise ValueError('Workday returned an unrecognized saved-answer response.')
+        for answer in response:
             question = answer['questionItem']['id']
             if answer.get('questionnaireAttachments'):
                 saved[question] = {'questionnaireAttachments': [{'id': a['id']} for a in answer['questionnaireAttachments']]}
