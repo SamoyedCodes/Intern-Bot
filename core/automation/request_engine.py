@@ -6,7 +6,7 @@ import time
 from urllib.parse import quote, urlsplit
 
 from core.automation.answers import resolve
-from core.automation.engine import ACTIVATION_HANDOFF, SIGN_IN_HANDOFF, ApplicationEngine
+from core.automation.engine import ACTIVATION_HANDOFF, ENGINE_VERSION as BROWSER_ENGINE, SIGN_IN_HANDOFF, ApplicationEngine
 from core.automation.fields import FormField
 from core.automation.models import FieldAssessment, InterventionRequest, normalized
 
@@ -51,7 +51,9 @@ class RequestEngine(ApplicationEngine):
     DRAFT_POLLS = 40
 
     async def start(self, run, profile, bridge, credential=None):
-        if run.submission_attempted or await self.answer_questions(run, profile, bridge, credential):
+        # Once the browser pages have begun, resume on the page you continued to: reopening Apply Manually would undo your Next.
+        browser_begun = run.engine_version == BROWSER_ENGINE and run.profile_revision == profile.revision
+        if run.submission_attempted or browser_begun or await self.answer_questions(run, profile, bridge, credential):
             return await super().start(run, profile, bridge, credential)
         return run
 

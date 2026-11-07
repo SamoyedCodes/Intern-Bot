@@ -260,23 +260,27 @@ async def test_stop_before_sign_in_click_does_not_consume_login_attempt(context,
     assert not tenant.posts
 
 
+# My Information, whose Next opens a Review of what was entered; Submit there shows the receipt.
+APPLICATION = '''<div id="application"><h2>My Information</h2><div data-automation-id="contactInformationPage">
+<label>First Name<input data-automation-id="legalNameSection_firstName"></label>
+<label>Last Name<input data-automation-id="legalNameSection_lastName"></label>
+<label>Email<input data-automation-id="email"></label></div>
+<button type="button" data-automation-id="bottom-navigation-next-button" onclick="review()">Next</button></div>
+<script>function review(){
+  const labels=['First Name','Last Name','Email'];
+  const summary=[...document.querySelectorAll('input')].map((e,i)=>'<dt>'+labels[i]+'</dt><dd>'+e.value+'</dd>').join('');
+  document.getElementById('application').innerHTML='<h2>Review</h2><div data-automation-id="reviewJobApplicationPage"><dl>'+summary+'</dl></div><button type="button" data-automation-id="bottom-navigation-next-button">Submit</button>';
+  document.querySelector('button').onclick=()=>{window.submissions=(window.submissions||0)+1;document.getElementById('application').innerHTML='<h1>Application submitted</h1>';};
+}</script>'''
+
+
 @pytest.mark.parametrize('auto_submit', [False, True])
 @pytest.mark.parametrize('modern_review', [False, True])
 async def test_request_mode_continues_from_api_to_browser_review_and_authorized_receipt(context, store, auto_submit, modern_review):
     from core.automation.extension_bridge import ExtensionBridge
     await context.clear_cookies()
     tenant = Tenant(signed_in=False)
-    tenant.application_html = '''<div id="application"><h2>My Information</h2><div data-automation-id="contactInformationPage">
-    <label>First Name<input data-automation-id="legalNameSection_firstName"></label>
-    <label>Last Name<input data-automation-id="legalNameSection_lastName"></label>
-    <label>Email<input data-automation-id="email"></label></div>
-    <button type="button" data-automation-id="bottom-navigation-next-button" onclick="review()">Next</button></div>
-    <script>function review(){
-      const labels=['First Name','Last Name','Email'];
-      const summary=[...document.querySelectorAll('input')].map((e,i)=>'<dt>'+labels[i]+'</dt><dd>'+e.value+'</dd>').join('');
-      document.getElementById('application').innerHTML='<h2>Review</h2><div data-automation-id="reviewJobApplicationPage"><dl>'+summary+'</dl></div><button type="button" data-automation-id="bottom-navigation-next-button">Submit</button>';
-      document.querySelector('button').onclick=()=>{window.submissions=(window.submissions||0)+1;document.getElementById('application').innerHTML='<h1>Application submitted</h1>';};
-    }</script>'''
+    tenant.application_html = APPLICATION
     if modern_review:
         tenant.application_html = tenant.application_html.replace('reviewJobApplicationPage', 'applyFlowReviewPage').replace(
             "'<dt>'+labels[i]+'</dt><dd>'+e.value+'</dd>'",
@@ -296,6 +300,25 @@ async def test_request_mode_continues_from_api_to_browser_review_and_authorized_
         await engine.resume(run, profile_for('workday'), engine.bridge)
         assert await page.evaluate('window.submissions') == 1
         assert len(tenant.posts) == 1
+
+
+async def test_resume_after_continuing_in_the_browser_verifies_the_page_reached(context, store):
+    """Automatic continuation off: you click Next in Chromium and resume, so the run must not reopen Apply Manually."""
+    from core.automation.extension_bridge import ExtensionBridge
+    await context.clear_cookies()
+    tenant = Tenant()
+    tenant.application_html = APPLICATION
+    answer(store, 'Are you legally authorized to work in Singapore?', False)
+    page = await context.new_page()
+    await page.route('**/*', tenant.handle)
+    run = ApplicationRun(job_url=URL, mode='request', auto_advance=False)
+    engine = RequestEngine(store)
+    await engine.start(run, profile_for('workday'), ExtensionBridge(page, run.id))
+    assert [i.message for i in run.interventions] == ['Section verified. Continue in the browser, then resume to fill the next section.']
+    await page.click('[data-automation-id="bottom-navigation-next-button"]')
+    await engine.resume(run, profile_for('workday'), engine.bridge)
+    assert run.status == 'ready_for_review', run.interventions
+    assert len(tenant.posts) == 1
 
 
 @pytest.mark.parametrize('response', [None, {}])
