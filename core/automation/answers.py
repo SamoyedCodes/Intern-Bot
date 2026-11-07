@@ -189,6 +189,16 @@ def profile_fact(field, profile: ApplicantProfile) -> Resolution:
             return Resolution(reason="The resume control is not a file upload. Inspect it manually.")
     if attr:
         value = getattr(source, attr)
+        if field.kind == "month" and attr in {"start_date", "end_date"} and value:
+            # A month picker reads YYYY-MM, like <input type=month>.
+            for fmt in ("%Y-%m-%d", "%Y-%m", "%b %Y", "%B %Y"):
+                try:
+                    value = datetime.strptime(value, fmt).strftime("%Y-%m")
+                    break
+                except ValueError:
+                    continue
+            else:
+                return Resolution(reason="Enter this date in the profile as YYYY-MM or YYYY-MM-DD.")
         if value is not None and value != "":
             prefix = f"{field.group}.{field.row}." if field.group else ""
             return Resolution(field_value(field, value), "profile:" + prefix + attr)

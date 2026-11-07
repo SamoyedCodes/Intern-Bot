@@ -1,0 +1,9 @@
+[
+  {
+    "id": "monee",
+    "name": "Monee",
+    "pattern": [
+      "^https://careers\\.monee\\.com/(job-detail|apply)\\?"
+    ]
+  }
+]

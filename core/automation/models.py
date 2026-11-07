@@ -33,7 +33,8 @@ def job_identity(url: str) -> str:
     return site_key(url) + ":" + path + ("?" + query if query else "") + ("#" + parsed.fragment if parsed.fragment else "")
 
 
-ADAPTER_REGISTRY = json.loads((Path(__file__).resolve().parents[2] / "extension/generated/registry.json").read_text())
+# Extracted vendor adapters, then hand-written ones (extension/adapters/).
+ADAPTER_REGISTRY = [entry for name in ("generated", "adapters") for entry in json.loads((Path(__file__).resolve().parents[2] / "extension" / name / "registry.json").read_text())]
 
 
 def ats_name(url: str) -> str:

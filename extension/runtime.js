@@ -6,6 +6,14 @@
   let active;
   // Workday clears the file input after upload; bind its digest to that exact receipt for this document.
   const verifiedUploads = new WeakMap();
+  // Native adapters (extension/adapters/*.js) mark their own upload widgets and receipts the same way.
+  const UPLOADS = '[data-automation-id=resumeUpload],[aria-labelledby="Resume/CV-section"],[data-intern-upload]';
+  const RECEIPTS = '[data-automation-id=file-upload-item],[data-intern-receipt]';
+  // A native adapter marks values the site filled in itself (Monee's resume parser); approved values may replace those.
+  const siteFilled = e => !!e.hasAttribute?.('data-intern-site-filled');
+  const receiptName = r => r.getAttribute('data-intern-receipt') || r.querySelector('[data-automation-id=file-upload-item-name]')?.textContent.trim();
+  // Hand-written adapters register factories beside the extracted vendor adapters.
+  const nativeAdapters = R => (globalThis.internAdapters || []).map(make => make(R));
   function runtime(config, token, documentId) {
     const timers = new Set(), intervals = new Set(), frames = new Set(), observers = new Set();
     const abort = new AbortController(), policies = new WeakMap(), proposals = new Map(), denied = new WeakSet();
@@ -65,7 +73,7 @@
       if (e.type === 'password') { report('verification', 'Complete employer sign-in in the browser.'); return value; }
       if (e.type === 'file' || key === 'files') { void upload(value, e); return value; }
       const existing = readable(e);
-      if (existing !== '' && existing !== false && !matches(e,p) && !p.replace) {
+      if (existing !== '' && existing !== false && !matches(e,p) && !p.replace && !siteFilled(e)) {
         report('conflict', 'Existing browser value conflicts with the profile. Resolve it before resuming.', p.key); denied.add(e); return value;
       }
       let desired = p.value;
@@ -83,7 +91,7 @@
         if(e.matches('[role=spinbutton]')&&e.closest('[data-automation-id=dateInputWrapper]'))e.focus();
         setter.call(e, desired);
       } else e[key] = desired;
-      denied.delete(e); lastChange = performance.now();
+      denied.delete(e); lastChange = performance.now(); e.removeAttribute('data-intern-site-filled');
       return value;
     }
     function classify(e) {
@@ -203,10 +211,15 @@
         });
       }
     };
+    // A native adapter's hooks: annotate (labels the scanner can't infer), custom/choose/options (its own widgets), open (link to the form).
+    const site = nativeAdapters(R).find(a => a.id === config.adapter);
+    // hold/busy: the adapter defers fills while the site rewrites the form itself (Monee parses the uploaded resume).
+    const policyOf = e => policies.get(e);
     async function upload(file, e) {
       if(!e || !live() || uploading.has(e))return false;
       const p=policies.get(e);
       if(!p){proposals.set(e,{key:'files',value:file});return false;}
+      if(p.omit||p.value==null)return false;  // Left blank on purpose, or unanswered: verification asks for it.
       const descriptor=config.files?.[p.value];
       if(!descriptor){report('profile','Choose a supported resume or cover letter file.',p.key);return false;}
       const chosen=R.file(descriptor.resumeBase64,descriptor.fileName);
@@ -219,8 +232,10 @@
         if(e.files.length!==1||hex(digest)!==descriptor.digest){report('conflict','An existing upload differs from the selected file.',p.key);return false;}
         return true;
       }
-      const container=e.closest('[data-automation-id=resumeUpload],[aria-labelledby="Resume/CV-section"]');
-      const receipt=container?.querySelector('[data-automation-id=file-upload-item]'), proof=container&&verifiedUploads.get(container);
+      const container=e.closest(UPLOADS);
+      const receipt=container?.querySelector(RECEIPTS), proof=container&&verifiedUploads.get(container);
+      // The site may still be processing this exact file (Monee uploads, then parses); sending it again would duplicate it.
+      if(!receipt&&proof?.digest===descriptor.digest&&performance.now()-proof.at<30000)return false;
       if(receipt){
         if(proof?.receipt===receipt&&proof.digest===descriptor.digest)return true;
         const remove=receipt.querySelector('button[data-automation-id=delete-file]');
@@ -232,7 +247,7 @@
           if(!live()||receipt.isConnected||!e.isConnected||container.querySelector('[data-automation-id=file-upload-item]'))return false;
         } finally {uploading.delete(e);}
       }
-      if(container)verifiedUploads.set(container,{digest:descriptor.digest,name:descriptor.fileName,receipt:null});
+      if(container)verifiedUploads.set(container,{digest:descriptor.digest,name:descriptor.fileName,receipt:null,at:performance.now()});
       const transfer=new DataTransfer();transfer.items.add(chosen);e.files=transfer.files;
       e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));lastChange=performance.now();return true;
     }
@@ -312,6 +327,7 @@
       if(formRoots.length>1)report('browser','More than one form is present. Choose a single application form before autofilling.');
       const root=formRoots.length===1?formRoots[0]:document;
       if(formRoots.length>1){stop();return [];}
+      site?.annotate?.(root);
       const roots=[root];
       for(let i=0;i<roots.length;i++)for(const element of roots[i].querySelectorAll('*'))if(element.shadowRoot)roots.push(element.shadowRoot);
       const fields=roots.flatMap((root,index)=>scanInternFields(root).map(f=>{
@@ -323,11 +339,11 @@
       }));
       for(const field of fields.filter(f=>f.kind==='file')){
         const e=handles.get(field.selector), selected=e.files?.[0];
-        const uploadContainer=e.closest('[data-automation-id=resumeUpload],[aria-labelledby="Resume/CV-section"]');
-        const proof=uploadContainer&&verifiedUploads.get(uploadContainer), receipts=uploadContainer?.querySelectorAll('[data-automation-id=file-upload-item]');
+        const uploadContainer=e.closest(UPLOADS);
+        const proof=uploadContainer&&verifiedUploads.get(uploadContainer), receipts=uploadContainer?.querySelectorAll(RECEIPTS);
         const receipt=receipts?.length===1?receipts[0]:null;
         if(proof?.receipt&&proof.receipt!==receipt){field.invalid=true;continue;}
-        if(proof&&receipt&&!field.invalid&&receipt.querySelector('[data-automation-id=file-upload-item-name]')?.textContent.trim()===proof.name){
+        if(proof&&receipt&&!field.invalid&&receiptName(receipt)===proof.name){
           if(!proof.receipt)proof.receipt=receipt;
           if(proof.receipt===receipt)field.file_digest=proof.digest;
         }
@@ -392,12 +408,15 @@
       authorize(policiesBySelector) {
         if(!live())return;
         for(const [selector,p]of Object.entries(policiesBySelector)) {const e=handles.get(selector);if(e)policies.set(e,p);}
-        for(const [e,proposal]of proposals){if(!e.isConnected){proposals.delete(e);continue;}if(!policies.has(e))continue;proposals.delete(e);if(proposal.key==='option'){picker=e;action(proposal.value);continue;}assign(e,proposal.key,proposal.value);if(!denied.has(e)&&e.type!=='file'){e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));e.blur();}}
+        for(const [e,proposal]of proposals){if(!e.isConnected){proposals.delete(e);continue;}if(!policies.has(e)||site?.hold?.(e,policyOf))continue;proposals.delete(e);if(proposal.key==='option'){picker=e;action(proposal.value);continue;}assign(e,proposal.key,proposal.value);if(!denied.has(e)&&e.type!=='file'){e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));e.blur();}}
         for(const [selector,p]of Object.entries(policiesBySelector)){
           const e=handles.get(selector);
-          if(e && (p.ref?.startsWith('answer:') || p.ref==='profile:cover_letter' || p.ref==='profile:cover_letter_path' ||
-            config.adapter==='workday' && !authControls().passwords.length && p.ref?.startsWith('profile:') && e.matches('input:not([type=file]),textarea,select') && !prompt(e))){
+          // A native adapter's own widgets are set by its choose(); a direct-fill adapter leaves every plain control to approved values.
+          if(e && !site?.custom?.(e) && (p.ref?.startsWith('answer:') || p.ref==='profile:cover_letter' || p.ref==='profile:cover_letter_path' ||
+            config.adapter==='workday' && !authControls().passwords.length && p.ref?.startsWith('profile:') && e.matches('input:not([type=file]),textarea,select') && !prompt(e) ||
+            site?.fill==='direct' && p.ref?.startsWith('profile:') && e.matches('input,textarea,select'))){
             if(e.type==='file')void upload(null,e);
+            else if(site?.hold?.(e,policyOf))proposals.set(e,{key:'value',value:p.value});
             else if(!matches(e,p)){assign(e,'value',p.value);if(!denied.has(e)){e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));e.blur();}}
           }
         }
@@ -405,14 +424,15 @@
       },
       start() {
         if(started)throw Error('Adapter already started');started=true;status='in-progress';
-        const adapter=createSpeedyAdapters(R).find(a=>a.id===config.adapter);
+        const adapter=site||createSpeedyAdapters(R).find(a=>a.id===config.adapter);
         if(!adapter)throw Error('Unknown adapter');
         const ctx={addEventListener:(target,...args)=>R.call(target,'addEventListener',args),onInvalidated:fn=>abort.signal.addEventListener('abort',fn,{once:true})};
         Promise.resolve(adapter.script({getProfile:async()=>config.profile,setMessage:message=>{if(live())status=message||status;},autofillSettings:{autoClickNextPage:true,autoSubmit:true,saveApplications:false,saveResponses:false},accountSettings:{accountEmail:"",accountPassword:""},ctx})).catch(fail);
       },
-      snapshot(){return {summary:reviewSummary(),errors:(/\bVPS\|[0-9a-f-]{36}\b/i.test(document.body.innerText)||/something went wrong[\s\S]*please refresh the page and then try again/i.test(document.body.innerText)?1:0)+[...document.querySelectorAll('[role=alert],.field-error-msg,.form-error,[data-automation-id=inputError],[data-automation-id=inputAlert]')].filter(isError).length,status,live:live(),settled:performance.now()-lastChange>350&&timers.size<=1,proposals:proposals.size,events,problems:[...problems.values()],actions:[...actions].filter(([,a])=>a.element.isConnected&&visible(a.element)&&!a.element.disabled).map(([id,a])=>({id,kind:a.kind})),url};},
+      snapshot(){return {summary:reviewSummary(),errors:(/\bVPS\|[0-9a-f-]{36}\b/i.test(document.body.innerText)||/something went wrong[\s\S]*please refresh the page and then try again/i.test(document.body.innerText)?1:0)+[...document.querySelectorAll('[role=alert],.field-error-msg,.form-error,[data-automation-id=inputError],[data-automation-id=inputAlert]')].filter(isError).length,status,live:live(),settled:performance.now()-lastChange>350&&timers.size<=1&&!site?.busy?.(policyOf),proposals:proposals.size,events,problems:[...problems.values()],actions:[...actions].filter(([,a])=>a.element.isConnected&&visible(a.element)&&!a.element.disabled).map(([id,a])=>({id,kind:a.kind})),url};},
       async options(selector,query){
         const e=handles.get(selector);
+        if(site?.custom?.(e))return site.options(e,query);
         if(prompt(e)){
           const text=e.value;
           if(!(query||text))return [];
@@ -424,12 +444,19 @@
         return items.map(o=>o.textContent.trim());
       },
       // The adapter fills Workday dropdowns only from profile guesses and cannot search prompts; select the approved options it left unset.
-      // ponytail: up to ~3 s per dropdown and ~4 s per prompt inside the bridge's 8 s command limit; batch per control if a page has many unresolved ones.
+      // ponytail: stops starting new controls after 5 s to stay inside the bridge's 8 s command limit (a Workday prompt can take ~4 s);
+      // the engine calls choose again while it still selects something. Batch per control if one control ever needs more.
       async choose(){
-        let chosen=0;
+        let chosen=0;const deadline=performance.now()+5000;
         for(const e of handles.values()){
+          if(!live()||performance.now()>deadline)break;
           const p=policies.get(e), shown=()=>normalize(e.innerText||e.textContent);
           if(!p||p.omit||p.value==null||p.value===''||!e.isConnected)continue;
+          if(site?.custom?.(e)){
+            if(site.hold?.(e,policyOf))continue;
+            if(await site.choose(e,siteFilled(e)?{...p,replace:true}:p)){chosen++;e.removeAttribute('data-intern-site-filled');}
+            continue;
+          }
           if(prompt(e)){if(await pick(e,String(p.value)))chosen++;continue;}
           if(!e.matches('button[aria-haspopup=listbox]')||shown()===normalize(p.value))continue;
           if(shown()&&shown()!=='select one'&&!p.replace)continue;
@@ -448,8 +475,12 @@
       async openApplication(){
         // The posting renders after the document loads. Apply stays visible behind its Start Your Application dialog, so Apply Manually goes first.
         // A signed-in candidate with a saved draft gets Continue Application instead of Apply.
+        // A native adapter names its own link from the posting to the form.
+        if(config.adapter!=='workday'&&!site?.open)return '';
         for(let attempt=0;attempt<50&&live();attempt++){
-          for(const id of ['applyManually','continueButton','adventureButton'])if(this.openLink(id))return id;
+          // 'ready': the form rendered after this section was scanned, so the engine scans it again.
+          if(site?.open){const links=[...document.querySelectorAll(site.open)].filter(visible);if(links.length===1){links[0].click();return 'native';}if(document.querySelector('form'))return 'ready';}
+          else for(const id of ['applyManually','continueButton','adventureButton'])if(this.openLink(id))return id;
           await new Promise(resolve=>native.setTimeout(resolve,100));
         }
         return '';
@@ -517,7 +548,7 @@
       if(message.command==='detect') {
         // Registry construction only; no adapter starts and no profile is requested.
         const inert={environment:native,call:(o,k,a,opt)=>opt&&o?.[k]==null?undefined:o[k](...a),assign:(o,k,v)=>(o[k]=v),update:(o,k,op,rhs)=>o[k]??(o[k]=rhs())};
-        const adapters=createSpeedyAdapters(inert).filter(a=>(!a.pattern||a.pattern.test(location.href))&&(!a.selector||document.querySelector(a.selector))).map(a=>({id:a.id,name:a.name}));
+        const adapters=[...createSpeedyAdapters(inert),...nativeAdapters(inert)].filter(a=>(!a.pattern||a.pattern.test(location.href))&&(!a.selector||document.querySelector(a.selector))).map(a=>({id:a.id,name:a.name}));
         respond({adapters,document:message.document});return;
       }
       if(message.command==='prepare') {active?.R.stop();active=runtime(message.payload,message.token,message.document);}

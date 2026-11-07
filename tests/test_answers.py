@@ -92,6 +92,12 @@ def test_date_components_never_invent_a_missing_day(run, label, expected):
     assert resolve(field, PROFILE, run, []).value == expected
 
 
+@pytest.mark.parametrize('start, expected', [('2025-05', '2025-05'), ('2025-05-14', '2025-05'), ('May 2025', '2025-05'), ('August 2025', '2025-08'), ('soon', None)])
+def test_month_picker_reads_any_profile_date_as_year_and_month(run, start, expected):
+    profile = PROFILE.model_copy(update={'experience': [Experience(start_date=start)]})
+    assert resolve(FormField('date', 'Start date', '', 'month', group='experience'), profile, run, []).value == expected
+
+
 @pytest.mark.parametrize('preferred, expected', [('', False), ('ada', False), ('Addie', True)])
 def test_preferred_name_checkbox_follows_the_profile(run, preferred, expected):
     field = FormField('p', 'I have a preferred name', '', 'checkbox')

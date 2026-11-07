@@ -1,5 +1,6 @@
 """ApplicationEngine against the real extension and local fixtures: verification, submission and stop guarantees."""
 import asyncio
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -508,6 +509,20 @@ async def test_ai_records_a_rewording_once_and_it_resolves(store, monkeypatch, k
         await engine.match_rewordings(run, profile, fields)
     assert sent == ([(['Internship period', 'Hobbies'], ['When is your intended period of internship?'])] if asked else [])
     assert (resolve(fields[0], profile, run, store.answers()).value == 'Jan - May 2027') is asked
+
+
+async def test_a_slow_ai_reply_is_abandoned_so_the_fill_is_not_late(store, monkeypatch):
+    run = ApplicationRun(job_url='https://example.wd1.myworkdayjobs.com/job')
+    store.save_answer(ApprovedAnswer(question='When is your intended period of internship?', value='Jan - May 2027', scope='global'))
+    store._vault().set('gemini-api-key', 'key')
+    monkeypatch.setattr(engine_module, 'match_questions', lambda *args: time.sleep(.5) or {'Internship period': 0})
+    monkeypatch.setattr(ApplicationEngine, 'AI_MATCH_SECONDS', .05)
+    field = FormField('a', 'Internship period', '', 'text')
+    started = time.monotonic()
+    await ApplicationEngine(store).match_rewordings(run, ApplicantProfile(), [field])
+    assert time.monotonic() - started < .4
+    assert resolve(field, ApplicantProfile(), run, store.answers()).value is None
+    assert 'ai_match_failed' in [e['kind'] for e in store.events(run.id)]
 
 
 async def test_the_sites_own_step_list_is_recorded_for_the_progress_stepper(context, store):

@@ -44,6 +44,8 @@ def test_job_identity_keeps_the_job_selecting_query(first, second):
     ('https://boards.greenhouse.io/example/jobs/1', 'Greenhouse'),
     ('https://jobs.lever.co/example/1', 'Lever'),
     ('https://jobs.ashbyhq.com/example/1', 'Ashby'),
+    ('https://careers.monee.com/job-detail?id=J1', 'Monee'),
+    ('https://careers.monee.com.evil.test/apply?id=J1', ''),
     ('https://careers.example.test/job/1', ''),
     ('https://boards.greenhouse.io.evil.test/example/jobs/1', ''),
     ('https://jobs.lever.co.evil.test/example/1', ''),

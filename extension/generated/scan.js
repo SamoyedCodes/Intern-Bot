@@ -4,7 +4,7 @@ globalThis.scanInternFields = (rootSelector) => {
   const visible = e => !!(e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
   const text = e => (e?.innerText || e?.textContent || '').trim();
   const labelText = e => { const copy = e.cloneNode(true); copy.querySelectorAll('input,select,textarea,button,[role=listbox],[role=status],.filename,.file-upload-success').forEach(c=>c.remove()); return text(copy).replace(/\s+/g, ' '); };
-  const controls = [...root.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]),select,textarea,[role=combobox],[role=checkbox],[role=radio],[role=spinbutton],[contenteditable=true],button[aria-haspopup=listbox],[data-automation-id="resumeUpload"]:not(:has(input[type=file])) [data-automation-id="file-upload-item"]')]
+  const controls = [...root.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]),select,textarea,[role=combobox],[role=checkbox],[role=radio],[role=spinbutton],[contenteditable=true],button[aria-haspopup=listbox],[data-intern-kind],[data-automation-id="resumeUpload"]:not(:has(input[type=file])) [data-automation-id="file-upload-item"]')]
     // Workday's utility bar includes a language listbox, not an applicant question.
     .filter(e => (visible(e) || e.type === 'file') && e.getAttribute('data-automation-id') !== 'beecatcher' && !e.closest('[role=listbox],[data-automation-id="utilityButtonBar"]'));
   const counts = new Map();
@@ -20,7 +20,8 @@ globalThis.scanInternFields = (rootSelector) => {
     const resumeUpload = (e.type === 'file' || uploaded) && uploadContainer;
     // Workday listbox aria-labels include the selection; use the stable associated label.
     const listboxLabel = e.getAttribute('aria-haspopup') === 'listbox' ? ownLabel || text(fieldset?.querySelector('legend')) : '';
-    let label = listboxLabel || labelled || e.getAttribute('aria-label') || ownLabel || text(fieldset?.querySelector('legend,label')) || (resumeUpload ? 'Resume' : '') || e.getAttribute('data-automation-id') || e.name || '';
+    // A native adapter names controls the generic rules cannot (data-intern-label/-kind/-value).
+    let label = e.getAttribute('data-intern-label') || listboxLabel || labelled || e.getAttribute('aria-label') || ownLabel || text(fieldset?.querySelector('legend,label')) || (resumeUpload ? 'Resume' : '') || e.getAttribute('data-automation-id') || e.name || '';
     if (e.type === 'checkbox' && e.closest('[data-automation-id$="-CheckboxGroup"]')) {
       const question = text(e.closest('[data-automation-id^="formField-"]')?.querySelector('legend'));
       if (question) label = question + ' — ' + label;
@@ -39,7 +40,7 @@ globalThis.scanInternFields = (rootSelector) => {
     const group = groupContainer?.getAttribute('data-intern-group') || (groupContainer?.getAttribute('aria-labelledby') === 'Languages-section' ? 'language_proficiency' : groupContainer?.getAttribute('data-automation-id') === 'workExperienceSection' || groupContainer?.getAttribute('aria-labelledby') === 'Work-Experience-section' ? 'experience' : groupContainer ? 'education' : '');
     const rows = groupContainer ? [...groupContainer.querySelectorAll('[data-intern-row],[data-automation-id="workExperience"],[data-automation-id="education"],[role="group"][aria-labelledby$="-panel"]')] : [];
     const row = Math.max(0, rows.findIndex(r => r.contains(e)));
-    const type = uploaded ? 'file' : prompt || e.getAttribute('aria-haspopup') === 'listbox' ? 'combobox' : e.getAttribute('role') || e.type || e.tagName.toLowerCase();
+    const type = e.getAttribute('data-intern-kind') || (uploaded ? 'file' : prompt || e.getAttribute('aria-haspopup') === 'listbox' ? 'combobox' : e.getAttribute('role') || e.type || e.tagName.toLowerCase());
     const radio = type === 'radio';
     if (radio && fieldset) label = text(fieldset.querySelector('legend,[data-question]')) || fieldset.getAttribute('aria-label') || label;
     const base = `${group}:${row}:${label.toLowerCase()}:${radio ? e.name : ''}`;
@@ -57,6 +58,7 @@ globalThis.scanInternFields = (rootSelector) => {
     if (type === 'checkbox' || radio) value = e.checked ?? e.getAttribute('aria-checked') === 'true';
     if (type === 'file') value = [...(e.files || [])].map(f => f.name).join(', ');
     if (uploaded) value = text(receipt.querySelector('[data-automation-id="file-upload-item-name"]'));
+    if (e.hasAttribute('data-intern-value')) value = e.getAttribute('data-intern-value');
     if (e.type === 'password') value = ''; // Never return a password to the scanner.
     const option = radio ? ownLabel || e.getAttribute('aria-label') || e.value : '';
     return {key, label: label.replace(/\s*\*\s*$/, '').trim(), selector: `[data-intern-control="${index}"]`,

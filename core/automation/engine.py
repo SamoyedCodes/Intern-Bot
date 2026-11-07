@@ -24,6 +24,8 @@ class ApplicationEngine:
     SECTION_POLLS = 210
     RECEIPT_POLLS = 20
     AUTH_POLLS = 40
+    # The page's adapter stops 20 s after it starts, so fills must not wait on a slow AI reply.
+    AI_MATCH_SECONDS = 5
 
     def __init__(self, store, emit=None):
         configure_privacy()
@@ -130,7 +132,9 @@ class ApplicationEngine:
                     else:
                         self.intervene(run, SIGN_IN_HANDOFF, 'verification')
                     return run
-                opened = match['adapter']['id'] == 'workday' and not fields and (await bridge.command('open_application')).get('opened')
+                opened = not fields and (await bridge.command('open_application')).get('opened')
+                if opened == 'ready':
+                    continue  # A native adapter's form rendered after this scan.
                 if opened:
                     # The job posting or its Start Your Application dialog. Apply Manually skips Workday's resume parser;
                     # its route (and Continue Application's) can take seconds to load, while Apply opens the dialog in place.
@@ -150,7 +154,10 @@ class ApplicationEngine:
                 if settled and match['frame'] == 0 and settled['url'] != bridge.page.url and not (self._pause or self._cancel):
                     # Workday normalizes /apply/applyManually to /apply after rendering the form.
                     continue
-                if settled and not (self._pause or self._cancel) and (await bridge.command('choose')).get('chosen'):
+                # Each choose stays inside the bridge's command limit; repeat while it still selects approved options.
+                for _ in range(5):
+                    if not settled or self._pause or self._cancel or not (await bridge.command('choose')).get('chosen'):
+                        break
                     settled = await self.wait_for_section(run, profile)
                 if not settled or self._pause or self._cancel:
                     return run
@@ -318,7 +325,10 @@ class ApplicationEngine:
                 return
             run.ai_requests += 1
             model = self.store.get(f'{provider}_model', PROVIDERS[provider]['model'])
-            matches = await asyncio.to_thread(match_questions, key, model, labels, [a.question for a in known], provider)
+            matches = await asyncio.wait_for(asyncio.to_thread(match_questions, key, model, labels, [a.question for a in known], provider), self.AI_MATCH_SECONDS)
+        except TimeoutError:
+            self.store.record_event(run.id, 'ai_match_failed', run.stage, f'The AI did not answer within {self.AI_MATCH_SECONDS} s; these questions are asked instead.')
+            return
         except Exception as exc:
             # Matching is a convenience: unmatched questions are still asked as usual.
             self.store.record_event(run.id, 'ai_match_failed', run.stage, str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
@@ -382,7 +392,8 @@ class ApplicationEngine:
                 matched = (field.value == resolution.value if isinstance(resolution.value, bool) else normalized(str(field.value)) == normalized(str(resolution.value))) and not field.invalid
             if not matched:
                 ok = False
-                reason = reason or ('Existing browser value conflicts with the profile. Resolve it before resuming.' if field.value not in ('', False) else 'The adapter did not fill this field with the approved value. Complete it manually or correct the profile.')
+                reason = reason or ('The form rejected this value. Answer it in the format the form asks for.' if field.invalid and field.value not in ('', False) and resolution.value is not None and normalized(str(field.value)) == normalized(str(resolution.value))
+                                    else 'Existing browser value conflicts with the profile. Resolve it before resuming.' if field.value not in ('', False) else 'The adapter did not fill this field with the approved value. Complete it manually or correct the profile.')
             key = run.stage + ':' + field.key
             run.fields[key] = FieldAssessment(key=key, label=field.label, section=run.stage, required=field.required, group=field.group, row=field.row, kind=field.kind,
                 answer_ref=resolution.ref, disposition='intentionally_omitted' if omitted else 'verified' if matched else 'needs_input',
