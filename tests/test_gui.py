@@ -279,6 +279,35 @@ def test_each_ai_provider_keeps_its_own_model_and_key(window):
     assert 'OpenAI' in AssistantDialog(window.store, ApplicationRun(job_url='https://jobs.lever.co/example/1')).consent.text()
 
 
+def test_a_local_server_is_the_default_and_cloud_providers_never_get_values_unless_allowed(window):
+    settings, store = window.settings_view, window.store
+    assert settings.provider.currentData() == 'compatible' and settings.ai_url.text() == 'http://localhost:1234/v1'
+    assert not settings.ai_facts.isVisibleTo(settings) and 'On this Mac' in settings.ai_privacy.text()
+    settings.ai_url.setText('http://example.com/v1')
+    settings.save_url()
+    assert store.get('compatible_url') is None  # Plain http is refused off this Mac.
+    for provider in ('anthropic', 'deepseek'):
+        settings.provider.setCurrentIndex(settings.provider.findData(provider))
+        assert not settings.ai_form.isRowVisible(settings.ai_url) and settings.ai_facts.isVisibleTo(settings)
+        assert not settings.ai_facts.isChecked() and 'never their values' in settings.ai_privacy.text()
+    assert 'China' in settings.ai_privacy.text()
+    settings.ai_facts.setChecked(True)
+    assert store.get('deepseek_facts') is True and not store.get('anthropic_facts')
+    assert settings.ai_model.text() == 'deepseek-flash'
+
+
+def test_an_ai_answer_is_confirmed_under_answers(window):
+    window.store.save_answer(ApprovedAnswer(question='Graduation year', fact='education.0.end_date.year', scope='global', origin='ai'))
+    bank = window.answers_view
+    bank.refresh()
+    item = bank.tree.topLevelItem(0)
+    assert item.text(1) == 'AI · unconfirmed · Profile: education #1 end or expected graduation date (year)'
+    bank.tree.setCurrentItem(item)
+    assert bank.confirm_btn.isEnabled()
+    bank.confirm()
+    assert window.store.answers()[0].origin == 'you' and not bank.confirm_btn.isVisibleTo(bank)
+
+
 @pytest.mark.browser
 def test_desktop_workflow_pauses_asks_and_reaches_review_without_submitting(window, tmp_path, monkeypatch):
     from playwright.async_api import Page

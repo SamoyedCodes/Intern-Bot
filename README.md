@@ -4,7 +4,7 @@
 
 Intern-Bot is a local macOS desktop app (Python and PySide6) for internship applications. It keeps your profiles and approved answers, fills application forms in a visible Chromium window, and tracks every application from saved to offer.
 
-Autofill runs all **28 site-specific SpeedyApply 2.28.0 adapters** inside a local Chromium extension that Playwright controls directly. No SpeedyApply account, server or AI is needed for normal autofill. Gemini or OpenAI assistance is optional and only runs when you ask.
+Autofill runs all **28 site-specific SpeedyApply 2.28.0 adapters** inside a local Chromium extension that Playwright controls directly. No SpeedyApply account, server or AI is needed for normal autofill. Optional AI (a local model, Claude, OpenAI, Gemini, DeepSeek or any OpenAI-compatible server) fills factual questions your profile doesn't cover by name, under the privacy rules below.
 
 > This is a private personal integration of proprietary user-supplied code, not an open-source release of SpeedyApply. See the [acceptance record](docs/speedyapply-acceptance.md) for fixture coverage, benchmarks and live-site limitations.
 
@@ -14,6 +14,7 @@ Autofill runs all **28 site-specific SpeedyApply 2.28.0 adapters** inside a loca
 - **Autofill.** Supported sites (Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Workable and 22 more, plus DOM-detected Phenom) are filled by their adapter, and every field is read back and verified.
 - **Workday Request mode.** Signs in with your saved employer login, answers application questions through Workday's API, then finishes the remaining pages in the browser with the same checks as Classic mode.
 - **Approved answers.** Each answer you approve is reused for the same question and any rewording you link to it, within its profile, scope and country.
+- **AI autofill (optional).** Unknown or reworded factual questions (graduation year, degree level, LinkedIn URL) are linked to your profile or answered from your career facts. AI answers fill the form, show as *AI · unconfirmed* under **Answers**, and block automatic submission until you confirm them.
 - **Tracking.** Pipeline stage, notes, job description and history for each application, with CSV import and export.
 - **You submit.** Automatic submission is off by default. It needs per-application authorization and stops on anything it can't verify.
 
@@ -77,7 +78,14 @@ The detail panel holds pipeline stage, notes and the job description, and saves 
 
 **Answers** lists every approved answer. Expand one to see each wording matched to it and remove a wrong wording on its own.
 
-**Settings** saves immediately and covers automatic continuation, answer reuse and AI. Pick **Gemini** or **OpenAI** (default model `gpt-6-luna`); each provider keeps its own model and keychain key. With a key saved, **Match reworded questions** (on by default) sends only the wording of unanswered questions and your saved questions, never answers or profile values. **Compare profiles with AI…** and **Draft with AI…** show the exact outgoing context and ask for consent first, and drafts need your approval before they become reusable answers.
+**Settings** saves immediately and covers automatic continuation, answer reuse and AI. Choose a provider:
+
+- **Local or OpenAI-compatible** (the default): a server on this Mac such as LM Studio (`http://localhost:1234/v1`) or Ollama (`http://localhost:11434/v1`), or any https OpenAI-compatible API (OpenRouter, Groq and similar). Enter the model name; a key is only needed if the server asks for one. Larger models answer more questions: in testing, Gemma 4 26B linked questions that Qwen 3.5 9B left unanswered.
+- **Claude** (default `claude-opus-5-5`, through the official SDK at low effort, no retries), **OpenAI** (`gpt-6-luna`), **Gemini** or **DeepSeek** (`deepseek-flash`; processed in China). Each keeps its own model and keychain key.
+
+With **Fill unknown and reworded questions with AI** on (the default once a provider is set up), each unanswered factual question is sent once. The reply can only point to one of your saved questions or a named profile field, or, when career facts are allowed, give a short answer that must be one of the form's options. Anything else is ignored and the question is asked as usual. Links to profile fields follow later profile edits and apply to every application. Answers worked out from career facts apply to that application only. **Confirm AI answer** under **Answers** makes one yours.
+
+**Compare profiles with AI…** and **Draft with AI…** show the exact outgoing context (names, emails, phone numbers and links masked) and ask for consent first. Drafts need your approval before they become reusable answers.
 
 The app follows the macOS light or dark appearance. Closing it closes the browser sessions it owns; your records stay.
 
@@ -87,7 +95,12 @@ The app follows the macOS light or dark appearance. Closing it closes the browse
 - Employer credentials and Gemini/OpenAI keys live only in the macOS keychain. There is no plaintext fallback.
 - `data/browser/<run-hash>/` holds isolated, exclusively locked Chromium sessions. Older browser directories are preserved.
 - The extension keeps run, tab and document bindings in memory-only `storage.session`. It never persists profile facts, documents, credentials or approvals.
-- Normal autofill makes no SpeedyApply, Supabase, AI, telemetry or local HTTP-server calls. Optional AI requests contain only the context shown in the consent dialog.
+- Normal autofill makes no SpeedyApply, Supabase, telemetry or local HTTP-server calls.
+- AI autofill sends only what the provider needs:
+  - **A model on this Mac:** question wording, form options, your saved question wordings, profile field names and your career facts (education, experience, skills, languages, summary). Nothing leaves the computer.
+  - **A cloud provider:** question wording, form options, saved question wordings and the *names* of profile fields that have a value, never their values. Turning on **Also let … see your career facts** per provider adds career facts with your names, email, phone, address and links masked.
+  - **Never, to any provider:** contact or identity values, documents, credentials, page content, or essay, demographic, health, legal-status, pay and consent questions (including lone checkboxes).
+  - Cloud URLs must use https. Redirects are refused, and errors never echo request content. Each request is logged by kind (provider, local or cloud, number of questions, whether facts were sent), never by content.
 
 The original XPI, exact source and notices are kept under [`third_party/speedyapply/2.28.0/`](third_party/speedyapply/2.28.0/). The loaded extension contains only the adapted dependency graph and local controls; see [extension internals](extension/README.md).
 

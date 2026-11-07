@@ -1,13 +1,14 @@
 """Section verification around the local extension's site-specific filling work."""
 import asyncio
+from dataclasses import replace
 import hashlib
 import json
 import re
 import time
 
-from core.automation.answers import UNANSWERED, applicable, question_for, resolve
-from core.automation.assistant import PROVIDERS, match_questions
-from core.automation.models import ApplicantProfile, FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url
+from core.automation.answers import UNANSWERED, applicable, linked, question_for, resolve
+from core.automation.assistant import ai_config, askable, autofill, matchable
+from core.automation.models import ApplicantProfile, ApprovedAnswer, FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url
 from pathlib import Path
 from core.automation.speedy_profile import translate
 from core.automation.privacy import configure_privacy
@@ -26,6 +27,7 @@ class ApplicationEngine:
     AUTH_POLLS = 40
     # The page's adapter stops 20 s after it starts, so fills must not wait on a slow AI reply.
     AI_MATCH_SECONDS = 5
+    AI_LOCAL_SECONDS = 30  # A local model may need to load into memory first.
 
     def __init__(self, store, emit=None):
         configure_privacy()
@@ -215,6 +217,10 @@ class ApplicationEngine:
                     run.status = 'ready_for_review'
                     self.checkpoint(run)
                     if run.auto_submit and not self._pause and not self._cancel:
+                        unconfirmed = self.unconfirmed(run)
+                        if unconfirmed:
+                            self.intervene(run, f'{unconfirmed} answer{"s" if unconfirmed > 1 else ""} filled by AI need your confirmation. Confirm them under Answers, then resume to submit.', 'validation')
+                            return run
                         run.submission_attempted = True
                         self.checkpoint(run)
                         if self._pause or self._cancel:
@@ -300,44 +306,73 @@ class ApplicationEngine:
         return True
 
     async def authorize(self, run, profile, fields):
-        await self.match_rewordings(run, profile, fields)
+        await self.ai_autofill(run, profile, fields)
         answers = self.store.answers()
         policies = {}
         for field in fields:
             resolution = resolve(field, profile, run, answers)
             policies[field.selector] = dict(key=field.key, label=field.label, value=resolution.value, omit=resolution.omit, ref=resolution.ref,
-                                           replace=resolution.ref.startswith('answer:'))
+                                           replace=resolution.ref.startswith('answer:') and not resolution.ai)
         await self.bridge.command('authorize', {'policies': policies})
 
-    async def match_rewordings(self, run, profile, fields):
-        """Record unanswered labels the optional AI provider identifies as rewordings of an approved answer."""
+    def unconfirmed(self, run):
+        """How many of this run's fields were filled from AI answers you haven't confirmed."""
+        ids = {'answer:' + a.id for a in self.store.answers() if a.origin == 'ai'}
+        return sum(f.answer_ref in ids for f in run.fields.values())
+
+    async def ai_autofill(self, run, profile, fields):
+        """Ask the optional AI provider about unanswered factual questions and record what it can answer from your own data."""
         answers = self.store.answers()
-        known = applicable(answers, profile, run)
-        labels = list(dict.fromkeys(f.label for f in fields if f.kind not in {'file', 'password'} and normalized(f.label) not in self.asked
-                                    and resolve(f, profile, run, answers).reason == UNANSWERED))
-        if not labels or not known or not self.store.get('automation_options', {}).get('ai_match', True):
+        questions = {}
+        for field in fields:
+            if askable(field) and normalized(field.label) not in self.asked and resolve(field, profile, run, answers).reason == UNANSWERED:
+                question = questions.setdefault(field.label, replace(field, options=list(field.options)))
+                if field.kind == 'radio' and field.option and field.option not in question.options:
+                    question.options.append(field.option)  # Each radio button is its own field; the question offers them all.
+        if not questions or not self.store.get('automation_options', {}).get('ai_match', True):
             return
-        self.asked.update(map(normalized, labels))
-        provider = self.store.get('ai_provider', 'gemini')
+        self.asked.update(map(normalized, questions))
         try:
-            key = self.store._vault().get(f'{provider}-api-key')
-            if not key:
-                return
-            run.ai_requests += 1
-            model = self.store.get(f'{provider}_model', PROVIDERS[provider]['model'])
-            matches = await asyncio.wait_for(asyncio.to_thread(match_questions, key, model, labels, [a.question for a in known], provider), self.AI_MATCH_SECONDS)
+            cfg = ai_config(self.store)
+        except Exception:
+            cfg = None  # The keychain could not be read; the questions are asked as usual.
+        if not cfg:
+            return
+        known = [a for a in applicable(answers, profile, run) if matchable(a)]
+        seconds = self.AI_LOCAL_SECONDS if cfg['local'] else self.AI_MATCH_SECONDS
+        run.ai_requests += 1
+        # The log records what kind of data left, never the content.
+        self.store.record_event(run.id, 'ai_request', run.stage, f"{cfg['name']} {'on this Mac' if cfg['local'] else '(cloud)'}: "
+                                f"{len(questions)} question{'s' if len(questions) > 1 else ''}; career facts {'included' if cfg['facts'] else 'not sent'}.")
+        try:
+            results = await asyncio.wait_for(asyncio.to_thread(autofill, cfg, list(questions.values()), [a.question for a in known], profile), seconds)
         except TimeoutError:
-            self.store.record_event(run.id, 'ai_match_failed', run.stage, f'The AI did not answer within {self.AI_MATCH_SECONDS} s; these questions are asked instead.')
+            self.store.record_event(run.id, 'ai_match_failed', run.stage, f'The AI did not answer within {seconds} s; these questions are asked instead.')
             return
         except Exception as exc:
-            # Matching is a convenience: unmatched questions are still asked as usual.
+            # AI is a convenience: unanswered questions are still asked as usual.
             self.store.record_event(run.id, 'ai_match_failed', run.stage, str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
             return
-        for label, index in matches.items():
-            answer = known[index]
-            answer.variants.append(label)
+        for label, (kind, value) in results.items():
+            if kind == 'saved':
+                answer = known[value]
+                answer.variants.append(label)
+                self.store.save_answer(answer)
+                self.store.record_event(run.id, 'answer_matched', run.stage, f'AI matched “{label}” to your answer for “{answer.question}”.')
+                continue
+            field = questions[label]
+            if kind == 'fact':
+                found = linked(field, profile, value).value
+                if found is None or (field.options and not any(normalized(o) == normalized(str(found)) for o in field.options)):
+                    continue  # The profile's wording isn't one of the form's options; ask instead.
+                answer = ApprovedAnswer(question=label, fact=value, profile_name=run.profile_name, scope='global', origin='ai')
+                note = f'AI linked “{label}” to your profile ({value}).'
+            else:
+                # Derived from today's facts, so it applies to this application only.
+                answer = ApprovedAnswer(question=label, value=value, profile_name=run.profile_name, scope='application', scope_key=run.id, origin='ai')
+                note = f'AI answered “{label}” from your career facts.'
             self.store.save_answer(answer)
-            self.store.record_event(run.id, 'answer_matched', run.stage, f'AI matched “{label}” to your answer for “{answer.question}”.')
+            self.store.record_event(run.id, 'answer_ai', run.stage, note + ' Confirm it under Answers.')
 
     async def wait_for_section(self, run, profile):
         for _ in range(self.SECTION_POLLS):

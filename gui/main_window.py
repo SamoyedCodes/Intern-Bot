@@ -1,4 +1,4 @@
-from core.automation.assistant import PROVIDERS
+from core.automation.assistant import DEFAULT_PROVIDER, PROVIDERS, endpoint, is_local
 from core.automation.models import site_key
 from core.storage.local_store import LocalStore
 
@@ -29,7 +29,7 @@ SAFETY_FACTS = [
     "Final submission is yours by default. Automatic submission needs your authorization for each application and stops if anything can't be verified.",
     "Applications run in a separate, visible Chromium window. Employers may ask you to sign in again.",
     "Profiles, answers and history stay in a local database on this Mac. Employer logins and API keys are kept only in the system keychain.",
-    "AI never receives your answers, profile values or pages. Matching a reworded question sends only question wording.",
+    "AI never receives your contact details, documents, credentials or pages. Cloud providers get only question wording, options and profile field names unless you allow career facts; a model on this Mac keeps everything local.",
     "Preview: adapters are tested against fictional forms. Live employer acceptance testing is still pending.",
 ]
 
@@ -72,13 +72,17 @@ class SettingsView(QWidget):
 
         frame, box = card()
         box.addWidget(label("AI assistance (optional)", "section"))
-        box.addWidget(label("AI drafts answers and compares profiles only when you ask, after you review the full context. With a key saved, it can also match reworded questions to your answers.", "muted"))
-        form = form_layout(10)
+        box.addWidget(label("AI fills factual questions your profile and answers don't cover by name, and drafts answers or compares profiles when you ask. A model running on this Mac (LM Studio, Ollama) keeps everything local.", "muted"))
+        form = self.ai_form = form_layout(10)
         self.provider = QComboBox()
         for key, spec in PROVIDERS.items():
             self.provider.addItem(spec["name"], key)
-        self.provider.setCurrentIndex(max(0, self.provider.findData(self.store.get("ai_provider", "gemini"))))
+        self.provider.setCurrentIndex(max(0, self.provider.findData(self.store.get("ai_provider", DEFAULT_PROVIDER))))
         form.addRow("Provider", self.provider)
+        self.ai_url = QLineEdit()
+        self.ai_url.setPlaceholderText(PROVIDERS["compatible"]["url"])
+        self.ai_url.editingFinished.connect(self.save_url)
+        form.addRow("Server URL", self.ai_url)
         self.ai_model = QLineEdit()
         self.ai_model.editingFinished.connect(self.save_model)
         form.addRow("Model", self.ai_model)
@@ -92,11 +96,17 @@ class SettingsView(QWidget):
         self.key_status = label(role="caption")
         form.addRow("", self.key_status)
         box.addLayout(form)
-        self.ai_match = QCheckBox("Match reworded questions to answers you've approved")
+        self.ai_privacy = label(role="caption")
+        box.addWidget(self.ai_privacy)
+        self.ai_facts = QCheckBox()
+        self.ai_facts.toggled.connect(self.save_facts)
+        box.addWidget(self.ai_facts)
+        self.ai_match = QCheckBox("Fill unknown and reworded questions with AI")
         self.ai_match.setChecked(options.get("ai_match", True))
         self.ai_match.toggled.connect(self.save_options)
         box.addWidget(self.ai_match)
-        box.addWidget(label("When a form asks a saved question in new words, its wording and your saved questions are sent, never the answers. Matches appear under Answers, where you can remove them.", "caption"))
+        box.addWidget(label("Factual questions only: essays, demographics, health, legal status, pay and consent questions are always left to you. "
+                            "AI answers fill the form and appear under Answers; automatic submission waits until you confirm them.", "caption"))
         layout.addWidget(frame)
         self.show_provider()
         self.provider.currentIndexChanged.connect(self.change_provider)
@@ -115,6 +125,9 @@ class SettingsView(QWidget):
             self.check_key()
 
     def check_key(self):
+        if self.provider.currentData() == "compatible" and is_local(self.ai_url.text()):
+            self.key_status.setText("No key needed for a server on this Mac.")
+            return
         try:
             saved = bool(self.store._vault().get(f"{self.provider.currentData()}-api-key"))
             self.key_status.setText("A key is stored in the system keychain." if saved else "No key saved yet.")
@@ -123,9 +136,51 @@ class SettingsView(QWidget):
 
     def show_provider(self):
         provider = self.provider.currentData()
-        self.ai_model.setText(self.store.get(f"{provider}_model", PROVIDERS[provider]["model"]))
+        spec = PROVIDERS[provider]
+        self.ai_form.setRowVisible(self.ai_url, provider == "compatible")
+        self.ai_url.setText(self.store.get(f"{provider}_url", spec.get("url", "")))
+        self.ai_model.setText(self.store.get(f"{provider}_model", spec["model"]))
+        self.ai_model.setPlaceholderText("The model's name on your server, e.g. qwen3-8b" if provider == "compatible" else "")
         self.ai_key.clear()
-        self.ai_key.setPlaceholderText(f"Paste a {PROVIDERS[provider]['name']} API key")
+        self.ai_key.setPlaceholderText("Only for a server that asks for one" if provider == "compatible" else f"Paste a {spec['name']} API key")
+        self.ai_facts.blockSignals(True)
+        self.ai_facts.setText(f"Also let {spec['name']} see your career facts (education, experience, skills) to pick answers like your degree level")
+        self.ai_facts.setChecked(bool(self.store.get(f"{provider}_facts", False)))
+        self.ai_facts.blockSignals(False)
+        self.show_privacy()
+
+    def show_privacy(self):
+        provider = self.provider.currentData()
+        name = PROVIDERS[provider]["name"]
+        local = provider == "compatible" and is_local(self.ai_url.text())
+        self.ai_facts.setVisible(not local)
+        if local:
+            text = "On this Mac: questions and your career facts go only to the local server, never over the internet."
+        elif self.ai_facts.isChecked():
+            text = f"{name} receives question wording, form options, your profile field names and your career facts, with names and contact details masked."
+        else:
+            text = f"{name} receives only question wording, form options and the names of your profile fields, never their values."
+        if provider == "deepseek":
+            text += " DeepSeek processes requests on servers in China."
+        self.ai_privacy.setText(text)
+
+    def save_url(self):
+        provider, url = self.provider.currentData(), self.ai_url.text().strip()
+        try:
+            endpoint(url)
+        except ValueError as exc:
+            self.notice.notify(str(exc), "warning")
+            return
+        if url != self.store.get(f"{provider}_url", PROVIDERS[provider].get("url", "")):
+            self.store.put(f"{provider}_url", url)
+            self.notice.notify("Server URL saved.", "success")
+        self.show_privacy()
+        self.check_key()
+
+    def save_facts(self, allowed):
+        self.store.put(f"{self.provider.currentData()}_facts", allowed)
+        self.show_privacy()
+        self.notice.notify("Saved.", "success")
 
     def change_provider(self):
         self.store.put("ai_provider", self.provider.currentData())

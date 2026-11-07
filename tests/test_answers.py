@@ -1,8 +1,8 @@
 import pytest
 
-from core.automation.answers import resolve
+from core.automation.answers import FACTS, fact_catalog, fact_name, linked, resolve
 from core.automation.fields import FormField
-from core.automation.models import ApplicantProfile, ApplicationRun, ApprovedAnswer, Experience, Language, employer_key
+from core.automation.models import ApplicantProfile, ApplicationRun, ApprovedAnswer, Education, Experience, Language, employer_key
 
 PROFILE = ApplicantProfile(
     first_name='Ada', last_name='Example', country='Singapore', preferred_middle_name='M',
@@ -122,3 +122,33 @@ def test_each_language_row_uses_its_own_answer_and_profile_facts(run):
     # A row's own answer names the row.
     own = first + [said('Speaking — Chinese (Mandarin)', '2 - Fair')]
     assert [resolve(f, profile, run, own).value for f in rows('Speaking')] == ['3 - Fluent', '2 - Fair']
+
+
+def test_an_ai_link_follows_the_profile_and_is_flagged(run):
+    link = ApprovedAnswer(question='Graduation year', fact='education.0.end_date.year', scope='global', origin='ai')
+    field = FormField('g', 'Graduation year', '', 'text')
+    profile = PROFILE.model_copy(update={'education': [Education(school='Example U', end_date='2027-05')]})
+    found = resolve(field, profile, run, [link])
+    assert (found.value, found.ref, found.ai) == ('2027', 'answer:' + link.id, True)
+    later = profile.model_copy(update={'education': [Education(school='Example U', end_date='2028-01')]})
+    assert resolve(field, later, run, [link]).value == '2028'
+    assert resolve(field, PROFILE, run, [link]).value is None  # The linked education entry is gone.
+
+
+def test_your_answer_outranks_the_ais_in_the_same_scope(run):
+    mine, ai = answer(run, False), answer(run, True, origin='ai')
+    found = resolve(QUESTION, PROFILE, run, [ai, mine])
+    assert found.value is False and not found.ai
+
+
+def test_every_offered_fact_links_to_its_profile_value():
+    profile = ApplicantProfile(**{key: 'x' for key in FACTS if key != 'full_name'},
+                               education=[Education(school='U', degree='BSc', major='CS', gpa='4', start_date='2024-08', end_date='2027-05', current=True)],
+                               experience=[Experience(employer='Co', job_title='Intern', location='SG', start_date='2025-05', end_date='2025-08', current=False)])
+    field = FormField('k', 'Anything', '', 'text')
+    catalog = fact_catalog(profile)
+    assert {'full_name', 'education.0.end_date', 'experience.0.current', 'language_proficiency.0.language'} <= catalog.keys()
+    assert not {'gender', 'work_authorized_us', 'employment_age', 'resume_path', 'pronouns'} & catalog.keys()
+    for key in catalog:
+        assert linked(field, profile, key).value not in (None, ''), key
+    assert fact_name('education.0.end_date.year') == 'education #1 end or expected graduation date (year)'

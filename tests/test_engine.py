@@ -494,35 +494,101 @@ def test_a_reformatted_phone_number_still_verifies(store):
     assert ApplicationEngine(store).verify(run, ApplicantProfile(phone_country_code='+65', phone_number='55512345'), [field], {'files': {}})
 
 
+def ai_questions(monkeypatch, results):
+    """Replace the provider call; returns what each request asked as (labels, options, saved questions)."""
+    sent = []
+    monkeypatch.setattr(engine_module, 'autofill', lambda cfg, questions, saved, profile:
+                        sent.append(([q.label for q in questions], [q.options for q in questions], saved)) or results)
+    return sent
+
+
 @pytest.mark.parametrize('key, enabled, asked', [('key', True, True), ('', True, False), ('key', False, False)])
 async def test_ai_records_a_rewording_once_and_it_resolves(store, monkeypatch, key, enabled, asked):
     run = ApplicationRun(job_url='https://example.wd1.myworkdayjobs.com/job')
     store.save_answer(ApprovedAnswer(question='When is your intended period of internship?', value='Jan - May 2027', scope='global'))
     store.put('automation_options', {'ai_match': enabled})
+    store.put('ai_provider', 'gemini')
     store._vault().set('gemini-api-key', key)
-    sent = []
-    monkeypatch.setattr(engine_module, 'match_questions', lambda key, model, questions, known, provider: sent.append((questions, known)) or {'Internship period': 0})
+    sent = ai_questions(monkeypatch, {'Internship period': ('saved', 0)})
     fields = [FormField('a', 'Internship period', '', 'text'), FormField('b', 'Hobbies', '', 'text'), FormField('c', 'First name', '', 'text')]
     profile = ApplicantProfile(first_name='Ada')
     engine = ApplicationEngine(store)
     for _ in range(2):  # The second pass must not ask again.
-        await engine.match_rewordings(run, profile, fields)
-    assert sent == ([(['Internship period', 'Hobbies'], ['When is your intended period of internship?'])] if asked else [])
+        await engine.ai_autofill(run, profile, fields)
+    assert sent == ([(['Internship period', 'Hobbies'], [[], []], ['When is your intended period of internship?'])] if asked else [])
     assert (resolve(fields[0], profile, run, store.answers()).value == 'Jan - May 2027') is asked
 
 
 async def test_a_slow_ai_reply_is_abandoned_so_the_fill_is_not_late(store, monkeypatch):
     run = ApplicationRun(job_url='https://example.wd1.myworkdayjobs.com/job')
     store.save_answer(ApprovedAnswer(question='When is your intended period of internship?', value='Jan - May 2027', scope='global'))
+    store.put('ai_provider', 'gemini')
     store._vault().set('gemini-api-key', 'key')
-    monkeypatch.setattr(engine_module, 'match_questions', lambda *args: time.sleep(.5) or {'Internship period': 0})
+    monkeypatch.setattr(engine_module, 'autofill', lambda *args: time.sleep(.5) or {'Internship period': ('saved', 0)})
     monkeypatch.setattr(ApplicationEngine, 'AI_MATCH_SECONDS', .05)
     field = FormField('a', 'Internship period', '', 'text')
     started = time.monotonic()
-    await ApplicationEngine(store).match_rewordings(run, ApplicantProfile(), [field])
+    await ApplicationEngine(store).ai_autofill(run, ApplicantProfile(), [field])
     assert time.monotonic() - started < .4
     assert resolve(field, ApplicantProfile(), run, store.answers()).value is None
     assert 'ai_match_failed' in [e['kind'] for e in store.events(run.id)]
+
+
+async def test_a_local_model_links_facts_for_every_application_and_answers_this_one(store, monkeypatch):
+    store.put('ai_provider', 'compatible')
+    store.put('compatible_model', 'qwen3:8b')  # The default URL is on this Mac, so no key is read.
+    run, other = ApplicationRun(job_url='https://jobs.lever.co/example/1'), ApplicationRun(job_url='https://jobs.lever.co/example/2')
+    profile = ApplicantProfile(education=[Education(school='Example U', degree='BSc Data Science', end_date='2027-05')])
+    fields = [FormField('a', 'Expected graduation year', '', 'text'), FormField('b', 'Degree level', '', 'select-one', options=["Bachelor's", "Master's"]),
+              FormField('c', 'Highest degree', '', 'select-one', options=["Bachelor's", "Master's"]),
+              FormField('d', 'Gender', '', 'select-one', options=['Female', 'Male']), FormField('e', 'Why us?', '', 'textarea')]
+    sent = ai_questions(monkeypatch, {'Expected graduation year': ('fact', 'education.0.end_date.year'), 'Degree level': ('value', "Bachelor's"),
+                                      'Highest degree': ('fact', 'education.0.degree')})
+    await ApplicationEngine(store).ai_autofill(run, profile, fields)
+    assert sent[0][0] == ['Expected graduation year', 'Degree level', 'Highest degree']  # Never the sensitive or essay questions.
+    year, level, degree = (resolve(f, profile, run, store.answers()) for f in fields[:3])
+    assert (year.value, year.ai, level.value, level.ai) == ('2027', True, "Bachelor's", True)
+    assert degree.value is None  # "BSc Data Science" is not one of the form's options, so no link was kept.
+    assert resolve(fields[0], profile, other, store.answers()).value == '2027'
+    assert resolve(fields[1], profile, other, store.answers()).value is None
+    assert any(e['kind'] == 'ai_request' and 'on this Mac' in e['note'] and 'career facts included' in e['note'] for e in store.events(run.id))
+
+
+async def test_answers_to_sensitive_questions_are_never_offered_for_matching(store, monkeypatch):
+    # Seen live: a Workday declaration labelled only "Confirm" was matched to a saved vaccination answer.
+    store.put('ai_provider', 'compatible')
+    store.put('compatible_model', 'qwen3:8b')
+    store.save_answer(ApprovedAnswer(question='Are you fully Covid-19 vaccinated?', value=True, scope='global'))
+    store.save_answer(ApprovedAnswer(question='When can you start?', value='Jan 2027', scope='global'))
+    sent = ai_questions(monkeypatch, {})
+    fields = [FormField('c', 'Confirm', '', 'checkbox'), FormField('s', 'Earliest start', '', 'text')]
+    await ApplicationEngine(store).ai_autofill(ApplicationRun(job_url='https://jobs.lever.co/example/1'), ApplicantProfile(), fields)
+    assert sent == [(['Earliest start'], [[]], ['When can you start?'])]
+
+
+async def test_radio_buttons_are_asked_as_one_question_with_their_options(store, monkeypatch):
+    store.put('ai_provider', 'compatible')
+    store.put('compatible_model', 'qwen3:8b')
+    sent = ai_questions(monkeypatch, {})
+    fields = [FormField('y', 'Currently enrolled?', '', 'radio', option='Yes'), FormField('n', 'Currently enrolled?', '', 'radio', option='No')]
+    await ApplicationEngine(store).ai_autofill(ApplicationRun(job_url='https://jobs.lever.co/example/1'), ApplicantProfile(), fields)
+    assert sent == [(['Currently enrolled?'], [['Yes', 'No']], [])]
+
+
+async def test_an_unconfirmed_ai_answer_fills_but_blocks_automatic_submission(context, store):
+    extra = '<label>Expected graduation year<input required></label>'
+    page = await open_fixture(context, 'greenhouse', greenhouse(extra=extra, handler=COUNT_SUBMISSION))
+    ai = ApprovedAnswer(question='Expected graduation year', value='2027', scope='global', origin='ai')
+    store.save_answer(ai)
+    run = await apply(store, page, ApplicationRun(job_url=page.url, auto_submit=True))
+    assert run.status == 'needs_input' and not run.submission_attempted, run.interventions
+    assert 'filled by AI' in run.interventions[-1].message
+    assert await page.locator('input[required]').last.input_value() == '2027'
+    assert not await page.evaluate('Boolean(window.submissions)')
+    ai.origin = 'you'
+    store.save_answer(ai)
+    run = await ApplicationEngine(store).resume(store.get_run(run.id), profile_for('greenhouse'), ExtensionBridge(page, run.id))
+    assert run.submission_attempted and await page.evaluate('window.submissions') == 1, run.interventions
 
 
 async def test_the_sites_own_step_list_is_recorded_for_the_progress_stepper(context, store):
@@ -711,3 +777,17 @@ async def test_workday_reordered_saved_jobs_keep_their_own_profile_policies(cont
     await page.locator('input').first.fill('Unknown Co')
     fields = (await bridge.command('scan'))['fields']
     assert all(f['row'] >= 2 for f in fields[:3])
+
+
+async def test_ai_answers_never_replace_what_the_form_already_holds(store):
+    sent = {}
+    async def command(name, payload=None):
+        sent[name] = payload
+    engine = ApplicationEngine(store)
+    engine.bridge = SimpleNamespace(command=command)
+    store.save_answer(ApprovedAnswer(question='Graduation year', value='2027', scope='global', origin='ai'))
+    store.save_answer(ApprovedAnswer(question='Start month', value='May', scope='global'))
+    fields = [FormField('a', 'Graduation year', '#a', 'text'), FormField('b', 'Start month', '#b', 'text')]
+    await engine.authorize(ApplicationRun(job_url='https://jobs.lever.co/example/1'), ApplicantProfile(), fields)
+    policies = sent['authorize']['policies']
+    assert (policies['#a']['value'], policies['#a']['replace'], policies['#b']['replace']) == ('2027', False, True)

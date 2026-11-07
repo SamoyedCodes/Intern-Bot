@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 import re
 
@@ -11,6 +11,7 @@ class Resolution:
     ref: str = ""
     omit: bool = False
     reason: str = ""
+    ai: bool = False  # Filled from an AI answer you haven't confirmed.
 
 
 # Exact aliases only: "country" must never resolve to a combined address.
@@ -54,6 +55,64 @@ ROW_ALIASES = {
                    "start date": "start_date", "end date": "end_date", "role description": "description",
                    "description": "description", "i currently work here": "current"},
 }
+
+
+# Profile facts an AI may link a question to, by name only. Demographics, legal status, age, pronouns and documents are never offered.
+FACTS = {
+    "first_name": "legal first (given) name", "middle_name": "middle name", "last_name": "last (family) name",
+    "full_name": "full legal name", "preferred_name": "preferred first name", "name_prefix": "name prefix or title",
+    "name_suffix": "name suffix", "email": "email address", "phone": "phone number",
+    "phone_country_code": "international calling code", "address_line1": "street address", "address_line2": "address line 2",
+    "city": "city", "region": "state or province", "postal_code": "postal or ZIP code", "country": "country of residence",
+    "linkedin_url": "LinkedIn profile URL", "github_url": "GitHub profile URL", "portfolio_url": "personal website or portfolio URL",
+    "skills": "skills", "languages": "languages spoken",
+}
+ROW_FACTS = {
+    "education": ("education", {"school": "school", "degree": "degree", "major": "field of study", "gpa": "GPA",
+                                "start_date": "start date", "end_date": "end or expected graduation date", "current": "currently attending"}),
+    "experience": ("job", {"employer": "employer", "job_title": "job title", "location": "location",
+                           "start_date": "start date", "end_date": "end date", "current": "currently working here"}),
+    "language_proficiency": ("language", {"language": "language", "proficiency": "proficiency", "fluent": "fluent"}),
+}
+FACT = re.compile(r"(?:(education|experience|language_proficiency)\.(\d+)\.)?(\w+)(?:\.(year|month))?")
+
+
+def fact_catalog(profile):
+    """Names and plain descriptions of the profile facts that have a value; never the values themselves."""
+    catalog = {key: text for key, text in FACTS.items()
+               if (profile.first_name and profile.last_name if key == "full_name" else getattr(profile, key))}
+    for group, (noun, attrs) in ROW_FACTS.items():
+        for row, entry in enumerate(profile_rows(profile, group)):
+            catalog.update({f"{group}.{row}.{attr}": f"{noun} #{row + 1} {text}" for attr, text in attrs.items()
+                            if getattr(entry, attr) not in ("", None)})
+    return catalog
+
+
+def fact_name(fact):
+    """'education.0.end_date.year' as 'education #1 end or expected graduation date (year)'."""
+    match = FACT.fullmatch(fact)
+    if match[1]:
+        noun, attrs = ROW_FACTS[match[1]]
+        text = f"{noun} #{int(match[2]) + 1} {attrs.get(match[3], match[3])}"
+    else:
+        text = FACTS.get(match[3], match[3])
+    return text + (f" ({match[4]})" if match[4] else "")
+
+
+def fact_allowed(fact, catalog):
+    """A key from the catalog, or a date key from it with a .year or .month part."""
+    base, _, part = fact.rpartition(".")
+    return fact in catalog or (part in {"year", "month"} and base in catalog and base.endswith(("start_date", "end_date")))
+
+
+def linked(field, profile, fact):
+    """Resolve a link to a profile fact exactly as if the form had used that fact's own label."""
+    match = FACT.fullmatch(fact)
+    group, row, attr, part = match[1] or "", int(match[2] or 0), match[3], match[4]
+    if group and row >= len(profile_rows(profile, group)):
+        return Resolution(reason="The profile entry this answer links to no longer exists. Update the profile or delete the answer.")
+    label = "full name" if attr == "full_name" else next(l for l, a in (ROW_ALIASES[group] if group else ALIASES).items() if a == attr)
+    return profile_fact(replace(field, label=f"{label} {part}" if part else label, group=group, row=row), profile)
 
 
 def field_value(field, value):
@@ -103,32 +162,36 @@ def question_for(field, profile: ApplicantProfile):
     return f"{field.label} — {name}" if name else field.label
 
 
-def approved(field, matches):
+def approved(field, matches, profile):
     """The most specific approved answer among matches, or None when nothing matched."""
     if not matches:
         return None
     priority = {"application": 0, "employer": 1, "global": 2}
     best = min(priority[a.scope] for a in matches)
     matches = [a for a in matches if priority[a.scope] == best]
-    if len({(str(a.value), a.omit) for a in matches}) != 1:
+    matches = [a for a in matches if a.origin == "you"] or matches  # Your own answer outranks the AI's.
+    if len({(str(a.value), a.fact, a.omit) for a in matches}) != 1:
         return Resolution(reason="Conflicting approved answers; edit the answer bank.")
     a = matches[-1]
     if a.omit and field.required:
         return Resolution(reason="A required field cannot be omitted.")
-    return Resolution(field_value(field, a.value), "answer:" + a.id, a.omit)
+    if a.fact:
+        found = linked(field, profile, a.fact)
+        return found if found.value is None else Resolution(found.value, "answer:" + a.id, ai=a.origin == "ai")
+    return Resolution(field_value(field, a.value), "answer:" + a.id, a.omit, ai=a.origin == "ai")
 
 
 def resolve(field, profile: ApplicantProfile, run: ApplicationRun, answers) -> Resolution:
     usable = applicable(answers, profile, run)
     if not field.group:
-        return approved(field, [a for a in usable if asks(a, field.label)]) or profile_fact(field, profile)
+        return approved(field, [a for a in usable if asks(a, field.label)], profile) or profile_fact(field, profile)
     if field.row >= len(profile_rows(profile, field.group)):
         return Resolution(reason="The browser contains an extra row; reconcile it with your profile.")
     # An answer to a bare row label ("Speaking") was given for the first row, where the question used to be asked;
     # other rows have their own named answer ("Speaking — Chinese (Mandarin)") or their own profile facts.
     named = question_for(field, profile)
     for question in dict.fromkeys(q for q in (named, field.label if field.row == 0 else None) if q):
-        found = approved(field, [a for a in usable if asks(a, question)])
+        found = approved(field, [a for a in usable if asks(a, question)], profile)
         if found:
             return found
     return profile_fact(field, profile)

@@ -162,6 +162,10 @@ class ApprovedAnswer(BaseModel):
     scope_key: str = ""
     country: str = ""
     omit: bool = False
+    # A live link to a profile fact ("email", "education.0.end_date.year"): the answer is that fact's current value.
+    fact: str = ""
+    # "ai" answers fill forms but block automatic submission until you confirm them, which makes them yours.
+    origin: Literal["you", "ai"] = "you"
     approved_at: str = Field(default_factory=now)
 
 

@@ -232,6 +232,8 @@ class RequestEngine(ApplicationEngine):
             required = set(definition.get('required', []))
             shown = [self.field(questions[k], k in required) for k, p in sorted(definition['properties'].items(), key=lambda item: item[1].get('order', ''))
                      if k in questions and not p.get('hidden')]
+            await self.ai_autofill(run, profile, shown)
+            answers = self.store.answers()
             missing, chosen, omitted = [], {}, set()
             for field in shown:
                 resolution = resolve(field, profile, run, answers)

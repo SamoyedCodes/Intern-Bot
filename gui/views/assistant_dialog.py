@@ -3,7 +3,8 @@ import json
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout, QPlainTextEdit, QVBoxLayout
 
-from core.automation.assistant import PROVIDERS, career_facts, generate_text
+from core.automation.assistant import DEFAULT_PROVIDER, PROVIDERS, ai_config, career_facts, generate_text
+from core.automation.privacy import redact
 from gui.theme import button, label, restyle
 
 
@@ -11,9 +12,9 @@ class AssistWorker(QThread):
     completed = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, key, model, mode, context, provider, parent):
+    def __init__(self, cfg, mode, context, parent):
         super().__init__(parent)
-        self.args = key, model, mode, context, provider
+        self.args = cfg, mode, context
 
     def run(self):
         try:
@@ -29,20 +30,29 @@ class AssistantDialog(QDialog):
         super().__init__(parent)
         self.store, self.application, self.mode = store, run, mode
         self.worker = None
-        self.provider = store.get("ai_provider", "gemini")
-        name = PROVIDERS[self.provider]["name"]
+        try:
+            self.cfg = ai_config(store)
+        except Exception:
+            self.cfg = None  # Reported when you try to send.
+        name = self.cfg["name"] if self.cfg else PROVIDERS.get(store.get("ai_provider", DEFAULT_PROVIDER), PROVIDERS[DEFAULT_PROVIDER])["name"]
+        local = bool(self.cfg and self.cfg["local"])
         self.setWindowTitle("Draft answer" if mode == "draft" else "Compare profiles")
         self.resize(760, 700)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(10)
         layout.addWidget(label(f"Draft an answer with {name}" if mode == "draft" else f"Compare profiles with {name}", "section"))
-        layout.addWidget(label(f"Review and edit exactly what will be sent to the {name} API. Contact details, file contents and credentials are left out automatically, but free-text career facts may still contain personal information.", "muted"))
+        layout.addWidget(label("Review and edit exactly what will be sent to your local model; nothing leaves this Mac." if local else
+                               f"Review and edit exactly what will be sent to the {name} API. Contact details, file contents and credentials are left out, and names, "
+                               "emails, phone numbers and links in your career facts are masked, but other free text may still be personal.", "muted"))
         profiles = store.profiles() if mode == "compare" else {run.profile_name: run.profile_snapshot or store.profiles()[store.get("active_profile", "Default")]}
         context = {"question": question, "company": run.company, "role": run.role,
                    "job_description": run.job_description, "profiles": {name: career_facts(p) for name, p in profiles.items()}}
         layout.addWidget(label("Context to send", "overline"))
-        self.context = QPlainTextEdit(json.dumps(context, indent=2, ensure_ascii=False))
+        text = json.dumps(context, indent=2, ensure_ascii=False)
+        for profile in profiles.values():
+            text = redact(text, profile)
+        self.context = QPlainTextEdit(text)
         layout.addWidget(self.context, 1)
         send = QHBoxLayout()
         self.consent = QCheckBox(f"Send this context to {name} for this request")
@@ -70,27 +80,20 @@ class AssistantDialog(QDialog):
         if not self.consent.isChecked():
             self.notice.setText("Review the context and select the consent checkbox first.")
             return
-        spec = PROVIDERS[self.provider]
-        try:
-            key = self.store._vault().get(f"{self.provider}-api-key")
-        except Exception:
-            self.notice.setText(f"Could not read the {spec['name']} key from the operating-system keychain.")
-            return
-        if not key:
-            self.notice.setText(f"Save a {spec['name']} API key in Settings first.")
+        if not self.cfg:
+            self.notice.setText("Set up an AI provider in Settings first: a model name, and an API key for cloud providers.")
             return
         self.generate.setEnabled(False)
         self.consent.setEnabled(False)
         self.buttons.setEnabled(False)
         self.output.clear()
-        self.worker = AssistWorker(key, self.store.get(f"{self.provider}_model", spec["model"]), self.mode,
-                                   self.context.toPlainText(), self.provider, self)
+        self.worker = AssistWorker(self.cfg, self.mode, self.context.toPlainText(), self)
         self.worker.completed.connect(self.complete)
         self.worker.failed.connect(self.notice.setText)
         self.worker.finished.connect(self.finished_request)
         self.application.ai_requests += 1
         self.store.save_run(self.application)
-        self.notice.setText(f"Waiting for {spec['name']}…")
+        self.notice.setText(f"Waiting for {self.cfg['name']}…")
         self.worker.start()
 
     def complete(self, text):

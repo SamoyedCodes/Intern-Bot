@@ -1,10 +1,19 @@
 import json
+from types import SimpleNamespace
 
+import anthropic
 import pytest
 
 from core.automation import assistant
-from core.automation.assistant import NoRedirect, career_facts, generate_text, match_questions
-from core.automation.models import ApplicantProfile
+from core.automation.assistant import PROVIDERS, NoRedirect, askable, autofill, career_facts, endpoint, generate_text
+from core.automation.fields import FormField
+from core.automation.models import ApplicantProfile, Education, Experience
+from core.automation.privacy import redact
+
+
+def cfg(provider='gemini', model='gemini-2.5-flash', key='key', url='', facts=False):
+    return {'provider': provider, 'name': PROVIDERS.get(provider, {}).get('name', provider), 'model': model, 'key': key,
+            'url': url, 'local': False, 'facts': facts}
 
 
 class Response:
@@ -24,6 +33,10 @@ class Response:
 
 def reply(finish='STOP', text='Draft based on Python.'):
     return {'candidates': [{'finishReason': finish, 'content': {'parts': [{'text': text}]}}]}
+
+
+def chat_reply(finish='stop', text='Chat draft.'):
+    return {'choices': [{'finish_reason': finish, 'message': {'role': 'assistant', 'content': text}}]}
 
 
 def openai_reply(status='completed', text='Luna draft.'):
@@ -55,7 +68,7 @@ def test_career_facts_exclude_identity_contact_and_documents():
 
 
 def test_key_travels_only_in_a_header_and_redirects_are_refused(network):
-    assert generate_text('key', 'gemini-2.5-flash', 'draft', '{"skills": "Python"}') == 'Draft based on Python.'
+    assert generate_text(cfg(), 'draft', '{"skills": "Python"}') == 'Draft based on Python.'
     request = network['requests'][0]
     assert 'key' not in request.full_url
     assert request.get_header('X-goog-api-key') == 'key'
@@ -66,7 +79,7 @@ def test_key_travels_only_in_a_header_and_redirects_are_refused(network):
 
 def test_openai_uses_the_responses_api_without_storage(network):
     network['payload'] = openai_reply()
-    assert generate_text('sk-test', 'gpt-6-luna', 'draft', 'facts', 'openai') == 'Luna draft.'
+    assert generate_text(cfg('openai', 'gpt-6-luna', 'sk-test'), 'draft', 'facts') == 'Luna draft.'
     request = network['requests'][0]
     body = json.loads(request.data)
     assert request.full_url == 'https://api.openai.com/v1/responses'
@@ -79,37 +92,161 @@ def test_openai_uses_the_responses_api_without_storage(network):
     ('gemini', 'gemini-2.5-flash', reply('STOP', '  '), 'Gemini'),
     ('openai', 'gpt-6-luna', openai_reply('incomplete'), 'OpenAI'),
     ('openai', 'gpt-6-luna', openai_reply(text=' '), 'OpenAI'),
+    ('deepseek', 'deepseek-flash', chat_reply('length', 'Partial'), 'DeepSeek'),
+    ('deepseek', 'deepseek-flash', chat_reply(text=''), 'DeepSeek'),
 ])
 def test_incomplete_or_empty_responses_are_rejected(network, provider, model, payload, name):
     network['payload'] = payload
     with pytest.raises(ValueError, match=f'{name} could not return a complete response'):
-        generate_text('key', model, 'draft', 'context', provider)
+        generate_text(cfg(provider, model), 'draft', 'context')
 
 
-@pytest.mark.parametrize('key, model, mode, context, provider', [
-    ('key', '../../evil', 'draft', 'context', 'gemini'),
-    ('key', '../../evil', 'draft', 'context', 'openai'),
-    ('key', 'gpt-6-luna', 'draft', 'context', 'nope'),
-    ('key', 'gemini-2.5-flash', 'other', 'context', 'gemini'),
-    ('', 'gemini-2.5-flash', 'draft', 'context', 'gemini'),
-    ('key', 'gemini-2.5-flash', 'draft', ' ', 'gemini'),
-    ('key', 'gemini-2.5-flash', 'draft', 'a' * 60001, 'gemini'),
+@pytest.mark.parametrize('config, mode, context', [
+    (cfg(model='../../evil'), 'draft', 'context'),
+    (cfg('openai', '../../evil'), 'draft', 'context'),
+    (cfg('nope', 'gpt-6-luna'), 'draft', 'context'),
+    (cfg(), 'other', 'context'),
+    (cfg(key=''), 'draft', 'context'),
+    (cfg('deepseek', 'deepseek-flash', ''), 'draft', 'context'),
+    (cfg('compatible', ''), 'draft', 'context'),
+    (cfg(), 'draft', ' '),
+    (cfg(), 'draft', 'a' * 60001),
+    (cfg('compatible', 'qwen3:8b', '', 'http://example.com/v1'), 'draft', 'context'),
+    (cfg('compatible', 'qwen3:8b', '', 'https://user:secret@example.com/v1'), 'draft', 'context'),
+    (cfg('compatible', 'qwen3:8b', '', 'file:///etc/passwd'), 'draft', 'context'),
 ])
-def test_invalid_requests_never_reach_the_network(network, key, model, mode, context, provider):
+def test_invalid_requests_never_reach_the_network(network, config, mode, context):
     with pytest.raises(ValueError):
-        generate_text(key, model, mode, context, provider)
+        generate_text(config, mode, context)
     assert network['requests'] == []
 
 
-def test_matching_sends_only_wording_and_keeps_valid_pairs(network):
-    network['payload'] = reply(text='```json\n{"1": 2, "2": null, "3": 9, "x": 1}\n```')
-    questions = ['Internship period?', 'Hobbies?', 'Third?']
-    assert match_questions('key', 'gemini-2.5-flash', questions, ['Degree', 'When can you start?']) == {'Internship period?': 1}
-    sent = json.loads(network['requests'][0].data)['contents'][0]['parts'][0]['text']
-    assert '1. Internship period?' in sent and '2. When can you start?' in sent
+def test_deepseek_and_local_servers_use_chat_completions(network):
+    network['payload'] = chat_reply()
+    assert generate_text(cfg('deepseek', 'deepseek-flash', 'sk-ds'), 'draft', 'facts') == 'Chat draft.'
+    assert generate_text(cfg('compatible', 'qwen3:8b', '', 'http://localhost:1234/v1/'), 'draft', 'facts') == 'Chat draft.'
+    cloud, local = network['requests']
+    assert cloud.full_url == 'https://api.deepseek.com/chat/completions' and cloud.get_header('Authorization') == 'Bearer sk-ds'
+    assert local.full_url == 'http://localhost:1234/v1/chat/completions' and not local.has_header('Authorization')
+    body = json.loads(local.data)
+    assert body['model'] == 'qwen3:8b' and body['stream'] is False and [m['role'] for m in body['messages']] == ['system', 'user']
 
 
-def test_an_unparseable_match_reply_matches_nothing(network):
-    network['payload'] = reply(text='No matches.')
+@pytest.mark.parametrize('url', ['http://127.0.0.1:11434/v1', 'http://[::1]:1234/v1', 'https://openrouter.ai/api/v1'])
+def test_https_or_this_mac_server_urls_are_accepted(url):
+    assert endpoint(url) == url + '/chat/completions'
+
+
+class Claude:
+    """Stands in for anthropic.Anthropic and records how it was built and called."""
+    calls = []
+    reply = SimpleNamespace(stop_reason='end_turn', content=[SimpleNamespace(type='thinking', thinking=''), SimpleNamespace(type='text', text='Claude draft.')])
+
+    def __init__(self, **options):
+        Claude.calls.append(options)
+        self.beta = SimpleNamespace(messages=SimpleNamespace(create=lambda **request: Claude.calls.append(request) or Claude.reply))
+
+
+@pytest.mark.parametrize('model, fallback', [('claude-opus-5-5', True), ('claude-haiku-5-5', False)])
+def test_claude_is_called_through_the_sdk_without_retries(monkeypatch, model, fallback):
+    monkeypatch.setattr(anthropic, 'Anthropic', Claude)
+    Claude.calls = []
+    assert generate_text(cfg('anthropic', model, 'sk-ant'), 'draft', 'facts') == 'Claude draft.'
+    options, request = Claude.calls
+    assert options == {'api_key': 'sk-ant', 'max_retries': 0, 'timeout': 40}
+    assert request['model'] == model and request['output_config'] == {'effort': 'low'} and request['messages'][0]['content'] == 'facts'
+    assert ('fallbacks' in request) is fallback
+
+
+def test_a_refused_or_truncated_claude_reply_is_rejected(monkeypatch):
+    monkeypatch.setattr(anthropic, 'Anthropic', Claude)
+    monkeypatch.setattr(Claude, 'reply', SimpleNamespace(stop_reason='refusal', content=[]))
+    with pytest.raises(ValueError, match='Claude could not return a complete response'):
+        generate_text(cfg('anthropic', 'claude-opus-5-5', 'sk-ant'), 'draft', 'facts')
+
+
+PERSON = ApplicantProfile(first_name='Jonathan', last_name='Tanaka', email='jon@private.test', phone='+65 9123 4567',
+                         address_line1='88 Hidden Road', postal_code='424242', linkedin_url='https://linkedin.com/in/jon-private',
+                         skills='Python, SQL', summary='Jonathan Tanaka (jon@private.test, 9123 4567) builds data tools.',
+                         education=[Education(school='Example University', degree='BSc Data Science', end_date='2027-05')],
+                         experience=[Experience(employer='Fictional Co', job_title='Analyst Intern')])
+
+
+def sent_text(network):
+    return json.loads(network['requests'][-1].data)['contents'][0]['parts'][0]['text']
+
+
+def test_autofill_keeps_only_replies_inside_the_closed_sets(network):
+    questions = [FormField('a', 'Email', '', 'email'), FormField('b', 'Graduation year', '', 'text'),
+                 FormField('c', 'Degree level', '', 'select-one', options=["Bachelor's", "Master's"]),
+                 FormField('d', 'Internship period', '', 'text'), FormField('e', 'Gender', '', 'text'),
+                 FormField('f', 'Email again', '', 'text'), FormField('g', 'Start', '', 'text')]
+    network['payload'] = reply(text='```json\n' + json.dumps({
+        '1': {'fact': 'email'}, '2': {'fact': 'education.0.end_date.year'}, '3': {'value': "Bachelor's"},
+        'q4': {'saved': 's1'}, '5': {'fact': 'gender'}, '6': {'fact': 'email.year'}, 'q7': {'saved': 's9'}, 'q9': {'fact': 'email'}, 'x': None}) + '\n```')
+    assert autofill(cfg(), questions, ['When can you start?'], PERSON) == {
+        'Email': ('fact', 'email'), 'Graduation year': ('fact', 'education.0.end_date.year'), 'Internship period': ('saved', 0)}
+
+
+@pytest.mark.parametrize('field, value, expected', [
+    (FormField('a', 'Degree level', '', 'select-one', options=["Bachelor's", "Master's"]), "bachelor's", "Bachelor's"),
+    (FormField('a', 'Degree level', '', 'select-one', options=["Bachelor's", "Master's"]), 'PhD', None),
+    (FormField('a', 'Currently enrolled', '', 'radio', options=['Yes', 'No']), True, 'Yes'),
+    (FormField('a', 'Years of Python', '', 'text'), '2', '2'),
+    (FormField('a', 'Years of Python', '', 'text'), 'x' * 121, None),
+    (FormField('a', 'Years of Python', '', 'text'), 'two\nyears', None),
+])
+def test_autofill_values_need_career_facts_and_must_fit_the_form(network, field, value, expected):
+    network['payload'] = reply(text=json.dumps({'1': {'value': value}}))
+    assert autofill(cfg(facts=True), [field], [], PERSON) == ({field.label: ('value', expected)} if expected is not None else {})
+    assert autofill(cfg(facts=False), [field], [], PERSON) == {}
+
+
+def test_without_career_facts_no_profile_value_leaves_this_mac(network):
+    network['payload'] = reply(text='{}')
+    autofill(cfg(), [FormField('a', 'School name', '', 'text')], ['Saved question?'], PERSON)
+    text = sent_text(network)
+    assert 'education.0.school' in text and 'Saved question?' in text
+    for value in ('Jonathan', 'Tanaka', 'jon@private.test', '9123', 'Hidden Road', '424242', 'jon-private', 'Python', 'Example University', 'Fictional Co', '2027'):
+        assert value not in text
+
+
+def test_career_facts_are_sent_masked_only_when_allowed(network):
+    network['payload'] = reply(text='{}')
+    autofill(cfg(facts=True), [FormField('a', 'School name', '', 'text')], [], PERSON)
+    text = sent_text(network)
+    assert 'Example University' in text and 'Python' in text
+    for value in ('Jonathan', 'Tanaka', 'jon@private.test', '9123', 'Hidden Road', '424242', 'jon-private'):
+        assert value not in text
+
+
+def test_redaction_masks_identity_but_keeps_dates_and_skills():
+    person = ApplicantProfile(first_name='May', last_name='Lim', email='may@x.test', phone_number='91234567', address_line1='1 Secret Ave')
+    text = redact('May Lim, may@x.test, +65 9123-4567, 1 Secret Ave, www.maylim.dev, github.com/maylim. Interned May 2025 using Python.', person)
+    assert text == 'May [name], [email], +65 [phone], [address], [link] [link] Interned May 2025 using Python.'
+
+
+@pytest.mark.parametrize('field, sent', [
+    (FormField('a', 'Expected graduation date', '', 'text'), True),
+    (FormField('a', 'Highest degree', '', 'combobox'), True),
+    (FormField('a', 'Why do you want to work here?', '', 'textarea'), False),
+    (FormField('a', 'Cover letter', '', 'file'), False),
+    (FormField('a', 'Gender', '', 'select-one'), False),
+    (FormField('a', 'Are you authorized to work in Canada?', '', 'radio'), False),
+    (FormField('a', 'Will you now or in the future require sponsorship?', '', 'radio'), False),
+    (FormField('a', 'I agree to the terms and conditions', '', 'checkbox'), False),
+    (FormField('a', 'Expected salary', '', 'text'), False),
+    (FormField('a', 'Are you fully Covid-19 vaccinated?', '', 'radio'), False),
+    (FormField('a', 'Confirm', '', 'checkbox'), False),
+    (FormField('a', 'Confirm', '', 'radio'), False),
+    (FormField('a', 'Currently enrolled', '', 'checkbox'), False),
+    (FormField('a', 'Primary language', '', 'text'), True),
+])
+def test_only_factual_non_sensitive_questions_are_asked(field, sent):
+    assert askable(field) is sent
+
+
+def test_an_unparseable_reply_fills_nothing(network):
+    network['payload'] = reply(text='No idea.')
     with pytest.raises(ValueError, match='not a question mapping'):
-        match_questions('key', 'gemini-2.5-flash', ['Q?'], ['Saved?'])
+        autofill(cfg(), [FormField('a', 'Q?', '', 'text')], ['Saved?'], PERSON)

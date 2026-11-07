@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from core.automation.answers import applicable, asks
+from core.automation.answers import applicable, asks, fact_name
 from core.automation.models import ApplicantProfile, ApprovedAnswer, Education, Experience, Language, employer_key, normalized, site_key
 from gui.theme import form_layout, MessageBar, button, card, dot_icon, label, restyle, shortcut
 
@@ -55,7 +55,9 @@ RESULTS = {"verified": ("Verified", "success"), "needs_input": ("Needs input", "
 
 
 def shown(answer):
-    return "Leave blank" if answer.omit else {True: "Yes", False: "No"}.get(answer.value, str(answer.value))
+    text = ("Leave blank" if answer.omit else f"Profile: {fact_name(answer.fact)}" if answer.fact
+            else {True: "Yes", False: "No"}.get(answer.value, str(answer.value)))
+    return f"AI · unconfirmed · {text}" if answer.origin == "ai" else text
 
 
 def bool_combo(value=None):
@@ -516,6 +518,8 @@ class AnswersView(QWidget):
         layout.addWidget(self.empty, 1)
         row = QHBoxLayout()
         row.addStretch()
+        self.confirm_btn = button("Confirm AI answer", self.confirm, "primary")
+        row.addWidget(self.confirm_btn)
         self.remove_btn = button("Delete answer…", self.remove, "danger")
         row.addWidget(self.remove_btn)
         layout.addLayout(row)
@@ -558,6 +562,16 @@ class AnswersView(QWidget):
         item = self.tree.currentItem() if self.tree.selectedItems() else None
         self.remove_btn.setEnabled(bool(item))
         self.remove_btn.setText("Remove wording…" if item and item.data(0, Qt.UserRole + 1) else "Delete answer…")
+        answer = next((a for a in self.answers if item and a.id == item.data(0, Qt.UserRole)), None)
+        self.confirm_btn.setVisible(any(a.origin == "ai" for a in self.answers))
+        self.confirm_btn.setEnabled(bool(answer) and answer.origin == "ai")
+
+    def confirm(self):
+        answer = next(a for a in self.answers if a.id == self.tree.currentItem().data(0, Qt.UserRole))
+        answer.origin = "you"
+        self.store.save_answer(answer)
+        self.refresh()
+        self.notice.notify("Confirmed. It now counts as your own answer, including for automatic submission.", "success")
 
     def remove(self):
         if not self.tree.selectedItems():

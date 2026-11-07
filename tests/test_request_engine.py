@@ -323,3 +323,15 @@ async def test_empty_validation_list_still_requires_successful_readback(store):
     assert not await engine.questionnaire(run, profile_for('workday'), 'qn1', 'primary')
     assert run.status == 'needs_input' and run.interventions
     assert all(f.disposition == 'needs_input' for f in run.fields.values())
+
+
+async def test_request_mode_asks_the_ai_before_asking_you(store, monkeypatch):
+    import core.automation.engine as engine_module
+    store.put('ai_provider', 'compatible')
+    store.put('compatible_model', 'qwen3:8b')
+    monkeypatch.setattr(engine_module, 'autofill', lambda cfg, questions, saved, profile: {questions[0].label: ('value', 'Student Pass')})
+    engine, run = questionnaire_engine(store)
+    assert await engine.questionnaire(run, profile_for('workday'), 'qn1', 'primary')
+    [field] = run.fields.values()
+    [ai] = store.answers()
+    assert ai.origin == 'ai' and field.answer_ref == 'answer:' + ai.id and field.disposition == 'verified'
