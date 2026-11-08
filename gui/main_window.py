@@ -1,4 +1,4 @@
-from core.automation.assistant import DEFAULT_PROVIDER, PROVIDERS, endpoint, is_local
+from core.automation.assistant import DEFAULT_PROVIDER, PROVIDERS, ai_config, endpoint, is_local, check_connection
 from core.automation.models import site_key
 from core.storage.local_store import LocalStore
 
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from gui.theme import form_layout, MessageBar, button, card, dot_icon, label, shortcut
 from gui.views.application_dialogs import AnswersView
+from gui.views.assistant_dialog import AssistWorker
 from gui.views.profile_view import ProfileView
 from gui.views.tasks_view import TasksView, status_meta
 
@@ -94,7 +95,11 @@ class SettingsView(QWidget):
         key_row.addWidget(self.save_api_key_btn)
         form.addRow("API key", key_row)
         self.key_status = label(role="caption")
-        form.addRow("", self.key_status)
+        self.test_btn = button("Test connection", self.test_connection)
+        status_row = QHBoxLayout()
+        status_row.addWidget(self.key_status, 1)
+        status_row.addWidget(self.test_btn)
+        form.addRow("", status_row)
         box.addLayout(form)
         self.ai_privacy = label(role="caption")
         box.addWidget(self.ai_privacy)
@@ -133,6 +138,20 @@ class SettingsView(QWidget):
             self.key_status.setText("A key is stored in the system keychain." if saved else "No key saved yet.")
         except Exception:
             self.key_status.setText("Couldn't read the system keychain.")
+
+    def test_connection(self):
+        self.save_model()
+        cfg = ai_config(self.store)
+        if not cfg:
+            self.notice.notify(f"Save a model{'' if self.provider.currentData() == 'compatible' else ' and API key'} first.", "warning")
+            return
+        self.test_btn.setEnabled(False)
+        self.test_btn.setText("Testing…")
+        self.tester = AssistWorker(self, cfg, func=check_connection)
+        self.tester.completed.connect(lambda text: self.notice.notify(text, "success"))
+        self.tester.failed.connect(lambda text: self.notice.notify(text, "danger"))
+        self.tester.finished.connect(lambda: (self.test_btn.setEnabled(True), self.test_btn.setText("Test connection")))
+        self.tester.start()
 
     def show_provider(self):
         provider = self.provider.currentData()

@@ -12,13 +12,13 @@ class AssistWorker(QThread):
     completed = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, cfg, mode, context, parent):
+    def __init__(self, parent, *args, func=generate_text):
         super().__init__(parent)
-        self.args = cfg, mode, context
+        self.args, self.func = args, func
 
     def run(self):
         try:
-            self.completed.emit(generate_text(*self.args))
+            self.completed.emit(self.func(*self.args))
         except ValueError as exc:
             self.failed.emit(str(exc))
         finally:
@@ -87,7 +87,7 @@ class AssistantDialog(QDialog):
         self.consent.setEnabled(False)
         self.buttons.setEnabled(False)
         self.output.clear()
-        self.worker = AssistWorker(self.cfg, self.mode, self.context.toPlainText(), self)
+        self.worker = AssistWorker(self, self.cfg, self.mode, self.context.toPlainText())
         self.worker.completed.connect(self.complete)
         self.worker.failed.connect(self.notice.setText)
         self.worker.finished.connect(self.finished_request)

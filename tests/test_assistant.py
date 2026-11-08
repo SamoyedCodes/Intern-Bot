@@ -5,7 +5,7 @@ import anthropic
 import pytest
 
 from core.automation import assistant
-from core.automation.assistant import PROVIDERS, NoRedirect, askable, autofill, career_facts, endpoint, generate_text
+from core.automation.assistant import PROVIDERS, NoRedirect, askable, autofill, career_facts, endpoint, generate_text, check_connection
 from core.automation.fields import FormField
 from core.automation.models import ApplicantProfile, Education, Experience
 from core.automation.privacy import redact
@@ -75,6 +75,17 @@ def test_key_travels_only_in_a_header_and_redirects_are_refused(network):
     assert 'tools' not in json.loads(request.data)
     redirects = [h for h in network['handlers'] if isinstance(h, NoRedirect)]
     assert redirects and redirects[0].redirect_request(request, None, 302, 'Found', {}, 'https://evil.test/') is None
+
+
+def test_connection_test_asks_for_a_tiny_reply_and_accepts_a_cut_short_one(network):
+    network['payload'] = reply('MAX_TOKENS', '')
+    assert 'accepted' in check_connection(cfg())
+    assert json.loads(network['requests'][0].data)['generationConfig']['maxOutputTokens'] == 16
+    with pytest.raises(ValueError, match='could not return'):
+        generate_text(cfg(), 'draft', 'facts')  # Ordinary requests still reject a cut-short reply.
+    network['payload'] = {'error': 'bad key'}
+    with pytest.raises(ValueError, match='Check the model, key'):
+        check_connection(cfg())
 
 
 def test_openai_uses_the_responses_api_without_storage(network):
