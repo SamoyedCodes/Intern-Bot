@@ -94,6 +94,8 @@
       else if (setter) {
         // Workday saves date parts and textareas on blur, and blur() only fires on a focused control.
         if(e instanceof HTMLTextAreaElement||e.matches('[role=spinbutton]')&&e.closest('[data-automation-id=dateInputWrapper]'))e.focus();
+        // A typeahead opens its suggestions only on a change, so retyping its current value (a resumed Ashby location) would leave the adapter waiting for them.
+        if(e.matches('input[role=combobox],input[aria-haspopup=listbox]')&&e.value===String(desired)){setter.call(e,'');e.dispatchEvent(new Event('input',{bubbles:true}));}
         setter.call(e, desired);
       } else e[key] = desired;
       denied.delete(e); lastChange = performance.now(); e.removeAttribute('data-intern-site-filled');
@@ -151,7 +153,8 @@
       }
       if (e.matches?.('[role=combobox],[aria-haspopup=listbox]')) picker=e;
       const text=normalize(e.innerText || e.getAttribute?.('aria-label'));
-      if (!e.matches?.('input,select,textarea,[role=option],option,[data-automation-id=promptOption],[data-automation-id=menuItem],[role=combobox],[aria-haspopup=listbox]') && !/^(add|add another|add education|add experience|add work experience|add language|add website|add employment|add row|search|browse|upload resume)$/.test(text)) {
+      // Lever's location typeahead lists its suggestions as plain divs.
+      if (!e.matches?.('input,select,textarea,[role=option],option,[data-automation-id=promptOption],[data-automation-id=menuItem],[role=combobox],[aria-haspopup=listbox],.dropdown-results > div') && !/^(add|add another|add education|add experience|add work experience|add language|add website|add employment|add row|search|browse|upload resume)$/.test(text)) {
         report('browser','An unrecognized adapter action needs manual review.');return;
       }
       e.click();
@@ -363,8 +366,8 @@
           const digest=hex(await crypto.subtle.digest('SHA-256',await selected.arrayBuffer()));
           field.file_digest=e.files.length===1?digest:'';
           const container=e.closest('[data-automation-id=resumeUpload],#s3_upload_for_resume,[data-upload]')||e.closest('label')||e.parentElement;
-          const receipts=[...container.querySelectorAll('[data-automation-id=file-upload-successful],.file-upload-success,.filename,[role=status]')];
-          const accepted=receipts.some(r=>visible(r)&&(r.getAttribute('data-automation-id')==='file-upload-successful'||r.classList.contains('filename')&&r.textContent.includes(selected.name)||r.textContent.includes(selected.name)&&/uploaded|attached|complete|success/i.test(r.textContent)));
+          const receipts=[...container.querySelectorAll('[data-automation-id=file-upload-successful],.file-upload-success,.filename,.ashby-application-form-input-file-item-name,[role=status]')];
+          const accepted=receipts.some(r=>visible(r)&&(r.getAttribute('data-automation-id')==='file-upload-successful'||r.matches('.filename,.ashby-application-form-input-file-item-name')&&r.textContent.includes(selected.name)||r.textContent.includes(selected.name)&&/uploaded|attached|complete|success/i.test(r.textContent)));
           field.invalid=field.invalid||!accepted;
         }
       }
@@ -423,6 +426,8 @@
         for(const [e,proposal]of proposals){if(!e.isConnected){proposals.delete(e);continue;}if(!policies.has(e)||site?.hold?.(e,policyOf))continue;proposals.delete(e);if(proposal.key==='option'){picker=e;action(proposal.value);continue;}assign(e,proposal.key,proposal.value);if(!denied.has(e)&&e.type!=='file'){e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));e.blur();}}
         for(const [selector,p]of Object.entries(policiesBySelector)){
           const e=handles.get(selector);
+          // A pressed-state choice button (Ashby yes/no): press the one whose text is the approved answer.
+          if(e?.matches('button[aria-pressed]')){if(p.value!=null&&!p.omit&&normalize(e.innerText)===normalize(String(p.value))&&e.getAttribute('aria-pressed')!=='true')e.click();continue;}
           // A native adapter's own widgets are set by its choose(); a direct-fill adapter leaves every plain control to approved values.
           // Workday dropdown buttons are chosen by choose(): writing their value changes nothing visible, and the blur closes an open listbox.
           if(e && !site?.custom?.(e) && !e.matches('button[aria-haspopup=listbox]') && (p.ref?.startsWith('answer:') || p.ref==='profile:cover_letter' || p.ref==='profile:cover_letter_path' ||

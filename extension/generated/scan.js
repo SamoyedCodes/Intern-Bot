@@ -3,10 +3,10 @@ globalThis.scanInternFields = (rootSelector) => {
   if (!root) return [];
   const visible = e => !!(e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
   const text = e => (e?.innerText || e?.textContent || '').trim();
-  const labelText = e => { const copy = e.cloneNode(true); copy.querySelectorAll('input,select,textarea,button,[role=listbox],[role=status],.filename,.file-upload-success').forEach(c=>c.remove()); return text(copy).replace(/\s+/g, ' '); };
-  const controls = [...root.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]),select,textarea,[role=combobox],[role=checkbox],[role=radio],[role=spinbutton],[contenteditable=true],button[aria-haspopup=listbox],[data-intern-kind],[data-automation-id="resumeUpload"]:not(:has(input[type=file])) [data-automation-id="file-upload-item"]')]
-    // Workday's utility bar includes a language listbox, not an applicant question.
-    .filter(e => (visible(e) || e.type === 'file') && e.getAttribute('data-automation-id') !== 'beecatcher' && !e.closest('[role=listbox],[data-automation-id="utilityButtonBar"]'));
+  const labelText = e => { const copy = e.cloneNode(true); copy.querySelectorAll('input,select,textarea,button,[role=listbox],[role=status],.filename,.file-upload-success,.application-field').forEach(c=>c.remove()); return text(copy).replace(/\s+/g, ' '); };
+  const controls = [...root.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]),select,textarea,[role=combobox],[role=checkbox],[role=radio],[role=spinbutton],[contenteditable=true],button[aria-haspopup=listbox],[data-intern-kind],[data-automation-id="resumeUpload"]:not(:has(input[type=file])) [data-automation-id="file-upload-item"],[data-field-path] button[aria-pressed]')]
+    // Workday's utility bar includes a language listbox, and Ashby's "Autofill from resume" pane an upload, neither an applicant question.
+    .filter(e => (visible(e) || e.type === 'file') && e.getAttribute('data-automation-id') !== 'beecatcher' && !e.closest('[role=listbox],[data-automation-id="utilityButtonBar"],[class*=_autofillPane]'));
   const counts = new Map();
   // Native validity misleads where the site keeps the answer elsewhere: an adapter-read dropdown's emptied search input,
   // or one box of a required checkbox group that another ticked box already satisfies. The site's own aria-invalid still counts.
@@ -24,9 +24,9 @@ globalThis.scanInternFields = (rootSelector) => {
     const resumeUpload = (e.type === 'file' || uploaded) && uploadContainer;
     // Workday listbox aria-labels include the selection; use the stable associated label.
     const listboxLabel = e.getAttribute('aria-haspopup') === 'listbox' ? ownLabel || text(fieldset?.querySelector('legend')) : '';
-    // A question's own label beside its options or unlabelled input (Chakra forms such as FormSG).
-    const choiceGroup = e.closest('[role=group]');
-    const question = choiceGroup && [...choiceGroup.querySelectorAll('legend,label')].find(l => !l.querySelector('input'));
+    // A question's own label beside its options or unlabelled input (Chakra forms such as FormSG, Lever's custom questions, Ashby's field entries).
+    const choiceGroup = e.closest('[role=group],.application-question,[data-field-path]');
+    const question = choiceGroup && [...choiceGroup.querySelectorAll('legend,label,.application-label')].find(l => !l.querySelector('input'));
     const groupQuestion = question ? labelText(question).replace(/\s*[*✱]\s*$/, '') : '';
     // A native adapter names controls the generic rules cannot (data-intern-label/-kind/-value).
     let label = e.getAttribute('data-intern-label') || listboxLabel || labelled || e.getAttribute('aria-label') || ownLabel || text(fieldset?.querySelector('legend,label')) || (resumeUpload ? 'Resume' : '') || groupQuestion || e.getAttribute('data-automation-id') || e.name || '';
@@ -48,7 +48,9 @@ globalThis.scanInternFields = (rootSelector) => {
     const group = groupContainer?.getAttribute('data-intern-group') || (groupContainer?.getAttribute('aria-labelledby') === 'Languages-section' ? 'language_proficiency' : groupContainer?.getAttribute('data-automation-id') === 'workExperienceSection' || groupContainer?.getAttribute('aria-labelledby') === 'Work-Experience-section' ? 'experience' : groupContainer ? 'education' : '');
     const rows = groupContainer ? [...groupContainer.querySelectorAll('[data-intern-row],[data-automation-id="workExperience"],[data-automation-id="education"],[role="group"][aria-labelledby$="-panel"]')] : [];
     const row = Math.max(0, rows.findIndex(r => r.contains(e)));
-    const type = e.getAttribute('data-intern-kind') || (uploaded ? 'file' : prompt || e.getAttribute('aria-haspopup') === 'listbox' ? 'combobox' : e.getAttribute('role') || e.type || e.tagName.toLowerCase());
+    // Ashby asks yes/no questions with a pair of pressed-state buttons.
+    const pressed = e.matches('button[aria-pressed]');
+    const type = e.getAttribute('data-intern-kind') || (pressed ? 'radio' : uploaded ? 'file' : prompt || e.getAttribute('aria-haspopup') === 'listbox' ? 'combobox' : e.getAttribute('role') || e.type || e.tagName.toLowerCase());
     const radio = type === 'radio';
     if (radio) label = (fieldset && (text(fieldset.querySelector('legend,[data-question]')) || fieldset.getAttribute('aria-label') || labelText(fieldset.querySelector(':scope > label:not(:has(input))') || document.createElement('i')))) || groupQuestion || label;
     if (type === 'checkbox' && !e.closest('[data-automation-id$="-CheckboxGroup"]') && groupQuestion && choiceGroup.querySelectorAll('input[type=checkbox]').length > 1 && label !== groupQuestion)
@@ -61,14 +63,15 @@ globalThis.scanInternFields = (rootSelector) => {
     e.setAttribute('data-intern-control', String(index));
     // Each radio is its own control; its options are every choice of its question, so an answer can be picked rather than typed.
     const choiceText = r => [...(r.labels || [])].map(labelText).join(' ') || r.getAttribute('aria-label') || r.value || text(r);
-    const choices = !radio ? [] : e.name ? [...root.querySelectorAll('input[type=radio]')].filter(r => r.name === e.name) : [...(fieldset?.querySelectorAll('[role=radio],input[type=radio]') || [e])];
+    const choices = !radio ? [] : pressed ? [...(choiceGroup?.querySelectorAll('button[aria-pressed]') || [e])]
+      : e.name ? [...root.querySelectorAll('input[type=radio]')].filter(r => r.name === e.name) : [...(fieldset?.querySelectorAll('[role=radio],input[type=radio]') || [e])];
     const options = e.tagName === 'SELECT' ? [...e.options].map(o => o.text.trim()) : radio ? choices.map(choiceText) : selected;
     let value = e.isContentEditable ? e.textContent : ('value' in e ? e.value : text(e));
     if (type === 'combobox' && e.tagName === 'BUTTON') value = text(e);
     if (prompt) value = selected.join(', ');
     if (e.tagName === 'SELECT') value = e.value ? e.selectedOptions[0]?.text.trim() || '' : '';
     if (type === 'combobox' && /^(select one|select an option|choose|select\.\.\.)$/i.test(value.trim())) value = '';
-    if (type === 'checkbox' || radio) value = e.checked ?? e.getAttribute('aria-checked') === 'true';
+    if (type === 'checkbox' || radio) value = pressed ? e.getAttribute('aria-pressed') === 'true' : e.checked ?? e.getAttribute('aria-checked') === 'true';
     if (type === 'file') value = [...(e.files || [])].map(f => f.name).join(', ');
     if (uploaded) value = text(receipt.querySelector('[data-automation-id="file-upload-item-name"]'));
     if (e.hasAttribute('data-intern-value')) value = e.getAttribute('data-intern-value');

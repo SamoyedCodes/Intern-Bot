@@ -449,6 +449,9 @@ class ApplicationEngine:
             elif resolution.ref in ('profile:phone', 'profile:phone_number'):
                 # Employers reformat phone numbers ("55512345" becomes "5551 2345").
                 matched = re.sub(r'\D', '', str(field.value)) == re.sub(r'\D', '', str(resolution.value)) and not field.invalid
+            elif re.search(r'location|city', field.label, re.I) and normalized(str(field.value)).startswith(normalized(str(resolution.value)) + ','):
+                # Location typeaheads add the region to the place you picked ("Singapore" becomes "Singapore, SGP" on Lever).
+                matched = not field.invalid
             else:
                 matched = (field.value == resolution.value if isinstance(resolution.value, bool) else normalized(str(field.value)) == normalized(str(resolution.value))) and not field.invalid
             if not matched:

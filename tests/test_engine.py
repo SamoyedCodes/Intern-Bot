@@ -552,6 +552,14 @@ def test_a_reformatted_phone_number_still_verifies(store):
     assert ApplicationEngine(store).verify(run, ApplicantProfile(phone_country_code='+65', phone_number='55512345'), [field], {'files': {}})
 
 
+def test_a_location_typeahead_may_add_the_region_but_not_change_the_place(store):
+    run = ApplicationRun(job_url='https://jobs.lever.co/acme/1/apply')
+    store.save_answer(ApprovedAnswer(question='Current location', value='Singapore', scope='global', profile_name=run.profile_name))
+    check = lambda shown: ApplicationEngine(store).verify(run, ApplicantProfile(), [FormField('loc', 'Current location', '', 'text', value=shown)], {'files': {}})
+    assert check('Singapore, SGP')
+    assert not check('Singapore Road, Leeds')
+
+
 def ai_questions(monkeypatch, results):
     """Replace the provider call; returns what each request asked as (labels, options, saved questions)."""
     sent = []

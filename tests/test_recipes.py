@@ -220,3 +220,39 @@ async def test_self_teach_uploads_the_resume_and_asks_a_radio_question_once(cont
     run = await SelfTeacher(store).start(ApplicationRun(job_url=URL), profile().model_copy(update={"resume_path": str(resume)}), page, STUB)
     assert await page.evaluate("document.querySelector('#cv').files[0]?.name") == "resume.pdf"
     assert [i.question for i in run.interventions] == ["Pick one"]
+
+
+# Lever markup: custom questions keep their text in .application-label, beside bare radios and an unlabelled input.
+LEVER = """<meta charset=utf-8><form><ul><li class="application-question resume"><label><div class="application-label">Resume/CV <span>✱</span></div>
+<div class="application-field"><a><span class="default-label">ATTACH RESUME/CV</span><input type=file name=resume></a>
+<span class="resume-upload-failure">Couldn't auto-read resume.</span></div></label></li>
+<li class="application-question custom-question"><div class="application-label"><div class="text">Highest degree?<span>✱</span></div></div>
+<ul><li><label><input type=radio name="cards[a][field0]" value=Bachelor required><span>Bachelor</span></label></li></ul></li>
+<li class="application-question custom-question"><div class="application-label"><div class="text">Graduation date?<span>✱</span></div></div>
+<div class="application-field"><input class="card-field-input" name="cards[a][field1]" required></div></li></ul></form>"""
+
+
+async def test_scan_names_lever_questions_by_their_question_text(context):
+    from core.automation.recipes import SCAN
+    page = await open_fixture(context, "", LEVER, URL)
+    labels = [f["label"] for f in await page.evaluate(f"({SCAN})(null)")]
+    assert labels == ["Resume/CV ✱", "Highest degree?", "Graduation date?"]
+
+
+# Ashby markup: labels point at field entries, a yes/no question is two pressed-state buttons, and a side pane offers résumé autofill.
+ASHBY = """<form><div class="_autofillPane_x"><input type=file></div>
+<div data-field-path=loc><label for=loc>Location</label><div><input role=combobox aria-haspopup=listbox></div></div>
+<div data-field-path=yn><label for=yn>Can you commit to 6 months?</label><div><button type=button aria-pressed=true>Yes</button><button type=button aria-pressed=false>No</button></div></div>
+<fieldset><label for=x>Are you a citizen?</label><span><input type=radio name=c id=c0></span><label for=c0>Citizen</label>
+<span><input type=radio name=c id=c1></span><label for=c1>Permanent resident</label></fieldset></form>"""
+
+
+async def test_scan_reads_ashby_field_entries_and_yes_no_buttons(context):
+    from core.automation.recipes import SCAN
+    page = await open_fixture(context, "", ASHBY, URL)
+    fields = [(f["label"], f["kind"], f["option"], f["value"], f["options"]) for f in await page.evaluate(f"({SCAN})(null)")]
+    assert [f[:4] for f in fields] == [("Location", "combobox", "", ""), ("Can you commit to 6 months?", "radio", "Yes", True),
+                      ("Can you commit to 6 months?", "radio", "No", False), ("Are you a citizen?", "radio", "Citizen", False),
+                      ("Are you a citizen?", "radio", "Permanent resident", False)]
+    # Every radio offers its question's choices, so the answer dialog lists them instead of asking for text.
+    assert [f[4] for f in fields] == [[], ["Yes", "No"], ["Yes", "No"], ["Citizen", "Permanent resident"], ["Citizen", "Permanent resident"]]

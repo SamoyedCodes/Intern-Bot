@@ -277,7 +277,15 @@ class RunDetailsDialog(QDialog):
         name = run.company or site_key(run.job_url)
         self.setWindowTitle(f"Answer questions — {name}")
         self.resize(800, 680)
-        self.pending = list(dict.fromkeys(i.question for i in run.interventions if i.question))
+        # A form's tick-all-that-apply list arrives as one checkbox per option ("Question — Option"); ask it as one checklist.
+        prefix = lambda q: q.rsplit(" — ", 1)[0]
+        boxes = [i.question for i in run.interventions if i.field_kind == "checkbox" and " — " in i.question]
+        self.groups = {}
+        for q in dict.fromkeys(boxes):
+            self.groups.setdefault(prefix(q), []).append(q)
+        self.groups = {k: v for k, v in self.groups.items() if len(v) > 1}
+        self.pending = list(dict.fromkeys(prefix(q) if " — " in q and prefix(q) in self.groups else q
+                                          for i in run.interventions if (q := i.question)))
         self.answered = set()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
@@ -323,6 +331,8 @@ class RunDetailsDialog(QDialog):
         self.choices.completer().setFilterMode(Qt.MatchContains)
         self.choices.completer().setCompletionMode(QCompleter.PopupCompletion)
         self.form.addRow("Form choices", self.choices)
+        self.checklist = QListWidget()
+        self.form.addRow("Tick all that apply", self.checklist)
         self.file = QLineEdit()
         self.file.setReadOnly(True)
         self.file.setPlaceholderText("The document to upload")
@@ -413,8 +423,12 @@ class RunDetailsDialog(QDialog):
         self.question_changed()
         self.update_progress()
 
+    def group(self):
+        return self.groups.get(self.questions.currentText().strip(), [])
+
     def request(self):
-        question = normalized(self.questions.currentText())
+        members = self.group()
+        question = normalized(members[0] if members else self.questions.currentText())
         return next((i for i in self.run.interventions if i.question and normalized(i.question) == question), None)
 
     def question_changed(self):
@@ -425,6 +439,15 @@ class RunDetailsDialog(QDialog):
         self.choices.clear()
         self.choices.addItems(request.options if request else [])
         self.choices.setCurrentIndex(-1)
+        self.checklist.clear()
+        for member in self.group():
+            item = QListWidgetItem(member.rsplit(" — ", 1)[1])
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            item.setData(Qt.UserRole, member)
+            self.checklist.addItem(item)
+        if self.checklist.count():
+            self.checklist.setFixedHeight(self.checklist.sizeHintForRow(0) * self.checklist.count() + 2 * self.checklist.frameWidth())
         question = normalized(self.questions.currentText())
         known = [a for a in applicable(self.store.answers(), self.run.profile_snapshot or ApplicantProfile(), self.run) if not asks(a, question)]
         known.sort(key=lambda a: -SequenceMatcher(None, question, normalized(a.question)).ratio())
@@ -456,18 +479,21 @@ class RunDetailsDialog(QDialog):
         self.kind_changed()
 
     def kind_changed(self):
-        new = not self.same.currentData()
+        checklist = bool(self.group())
+        new = checklist or not self.same.currentData()
+        single = new and not checklist
         index = self.kind.currentIndex()
         advanced = self.answer_options.isChecked()
         self.answer_options.setArrowType(Qt.DownArrow if advanced else Qt.RightArrow)
-        self.form.setRowVisible(self.same, advanced and self.same.count() > 1)
-        self.form.setRowVisible(self.kind, new and (advanced or index in (1, 2)))
+        self.form.setRowVisible(self.same, advanced and self.same.count() > 1 and not checklist)
+        self.form.setRowVisible(self.kind, single and (advanced or index in (1, 2)))
         self.form.setRowVisible(self.scope, new and advanced)
         self.remember_hint.setText("Remember for: " + self.scope.currentText())
         self.form.setRowVisible(self.remember_hint, new and not advanced)
-        self.form.setRowVisible(self.answer_box, new and index == 0)
-        self.form.setRowVisible(self.choices, new and index == 4)
-        self.form.setRowVisible(self.file_box, new and index == 5)
+        self.form.setRowVisible(self.answer_box, single and index == 0)
+        self.form.setRowVisible(self.choices, single and index == 4)
+        self.form.setRowVisible(self.file_box, single and index == 5)
+        self.form.setRowVisible(self.checklist, checklist)
 
     def pick_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Choose file", "", "Documents (*.pdf *.doc *.docx *.txt *.rtf)")
@@ -500,6 +526,13 @@ class RunDetailsDialog(QDialog):
         if not question:
             self.notice.notify("Enter the exact question first.", "warning")
             return
+        if self.group():
+            for row in range(self.checklist.count()):
+                item = self.checklist.item(row)
+                self.store_answer(item.data(Qt.UserRole), item.checkState() == Qt.Checked)
+                self.answered.add(normalized(item.data(Qt.UserRole)))
+            self.saved(question)
+            return
         if self.same.currentData():
             answer = next(a for a in self.store.answers() if a.id == self.same.currentData())
             answer.variants.append(question)
@@ -518,6 +551,10 @@ class RunDetailsDialog(QDialog):
         if index == 4 and self.choices.findText(value) < 0:
             self.notice.notify("Pick one of the form's options, or switch to a text answer.", "warning")
             return
+        self.store_answer(question, value, omit)
+        self.saved(question)
+
+    def store_answer(self, question, value, omit=False):
         scope = ["application", "employer", "global"][self.scope.currentIndex()]
         key = self.run.id if scope == "application" else employer_key(self.run.job_url) if scope == "employer" else ""
         country = self.run.profile_snapshot.country if self.run.profile_snapshot else ""
@@ -527,7 +564,6 @@ class RunDetailsDialog(QDialog):
         if existing:
             answer.id, answer.question, answer.variants = existing[-1].id, existing[-1].question, existing[-1].variants
         self.store.save_answer(answer)
-        self.saved(question)
 
     def saved(self, question):
         self.answered.add(normalized(question))

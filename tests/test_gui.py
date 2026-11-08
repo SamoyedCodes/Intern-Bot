@@ -135,6 +135,22 @@ def test_each_question_starts_with_its_form_control_type(window, tmp_path):
     assert str(resume) in translate(ApplicantProfile(), run, window.store.answers())['files']
 
 
+def test_tick_all_that_apply_options_are_asked_as_one_checklist(window):
+    asked = 'Where have you seen IMDA messages?'
+    run = ApplicationRun(company='Example', job_url=URL, profile_snapshot=ApplicantProfile(), status='needs_input', interventions=[
+        InterventionRequest(kind='answer', message='', question=f'{asked} — {option}', field_kind='checkbox')
+        for option in ('IMDA Website', 'IMDA LinkedIn', 'Word of Mouth')] + [
+        InterventionRequest(kind='answer', message='', question='Expected salary', field_kind='text')])
+    details = RunDetailsDialog(window.store, run)
+    assert details.pending == [asked, 'Expected salary']
+    assert [details.checklist.item(r).text() for r in range(details.checklist.count())] == ['IMDA Website', 'IMDA LinkedIn', 'Word of Mouth']
+    details.checklist.item(1).setCheckState(Qt.Checked)
+    details.save_answer()
+    assert {a.question: a.value for a in window.store.answers()} == {
+        f'{asked} — IMDA Website': False, f'{asked} — IMDA LinkedIn': True, f'{asked} — Word of Mouth': False}
+    assert details.questions.currentText() == 'Expected salary' and details.checklist.count() == 0
+
+
 def test_restart_turns_an_interrupted_run_into_a_handoff(window):
     view = window.tasks_view
     run = ApplicationRun(company='Example', job_url=URL, status='running', approved_review={'Documents': 'd1'})
