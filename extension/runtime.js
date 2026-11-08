@@ -90,7 +90,8 @@
       // React (Workday) only notices checkbox and radio changes made by a click; a radio cannot be clicked off.
       if (key === 'checked') {if (e.checked !== desired && (desired || e.type === 'checkbox')) e.click();}
       else if (setter) {
-        if(e.matches('[role=spinbutton]')&&e.closest('[data-automation-id=dateInputWrapper]'))e.focus();
+        // Workday saves date parts and textareas on blur, and blur() only fires on a focused control.
+        if(e instanceof HTMLTextAreaElement||e.matches('[role=spinbutton]')&&e.closest('[data-automation-id=dateInputWrapper]'))e.focus();
         setter.call(e, desired);
       } else e[key] = desired;
       denied.delete(e); lastChange = performance.now(); e.removeAttribute('data-intern-site-filled');
@@ -236,8 +237,8 @@
       }
       const container=e.closest(UPLOADS);
       const receipt=container?.querySelector(RECEIPTS), proof=container&&verifiedUploads.get(container);
-      // The site may still be processing this exact file (Monee uploads, then parses); sending it again would duplicate it.
-      if(!receipt&&proof?.digest===descriptor.digest&&performance.now()-proof.at<30000)return false;
+      // The site may still be processing this exact file (Monee parses it; Workday shows it loading, with no delete button yet); sending it again would duplicate it.
+      if(!proof?.receipt&&proof?.digest===descriptor.digest&&performance.now()-proof.at<30000)return false;
       if(receipt){
         if(proof?.receipt===receipt&&proof.digest===descriptor.digest)return true;
         const remove=receipt.querySelector('button[data-automation-id=delete-file]');

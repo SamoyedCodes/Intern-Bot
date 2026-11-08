@@ -775,6 +775,17 @@ async def test_workday_date_parts_commit_on_blur_and_expose_group_validation(con
     assert not engine.verify(run, profile, fields, config)
 
 
+async def test_workday_textarea_answer_commits_on_blur(context, store):
+    # Workday's textareas save their typed value to React state only when they lose focus.
+    html = '''<div data-automation-id="primaryQuestionnairePage">
+    <label for=q>Career Aspirations*</label><textarea id=q required onblur="window.saved=this.value"></textarea></div>'''
+    page = await open_fixture(context, 'workday', html)
+    run = ApplicationRun(job_url=page.url, auto_advance=False)
+    store.save_answer(ApprovedAnswer(question='Career Aspirations', value='Facility management', scope_key=run.id))
+    await prepare(page, store, 'workday', ApplicantProfile(), run)
+    assert await page.evaluate('window.saved') == 'Facility management'
+
+
 @pytest.mark.parametrize('replace,stop', [(False,False),(True,False),(True,True)])
 async def test_workday_saved_resume_is_replaced_only_by_an_explicit_file_answer(context, store, tmp_path, replace, stop):
     import hashlib
@@ -801,6 +812,27 @@ async def test_workday_saved_resume_is_replaced_only_by_an_explicit_file_answer(
         return
     assert field['value'] == ('new.pdf' if replace else 'old.pdf')
     assert field['file_digest'] == (hashlib.sha256(resume.read_bytes()).hexdigest() if replace else '')
+
+
+async def test_workday_resume_still_rendering_after_replacement_is_not_a_conflict(context, store, tmp_path):
+    # Workday shows a new upload's receipt (loading, no delete button) after the scan; a re-authorize must not take it for the old file.
+    resume = tmp_path / 'new.pdf'
+    resume.write_bytes(b'new fixture resume')
+    html = '''<div data-automation-id=myExperiencePage><div aria-labelledby="Resume/CV-section" role=group>
+    <input type=file onchange="this.files=new DataTransfer().files;setTimeout(()=>this.insertAdjacentHTML('afterend',`<div data-automation-id='file-upload-item' id=fresh><span data-automation-id='file-upload-item-name'>new.pdf</span> loading</div>`),300)">
+    <div data-automation-id=file-upload-item><span data-automation-id=file-upload-item-name>old.pdf</span><span data-automation-id=file-upload-successful>Successfully Uploaded!</span>
+    <button type=button data-automation-id=delete-file onclick="window.deletes=(window.deletes||0)+1;this.parentElement.remove()">Delete old.pdf</button></div>
+    </div></div>'''
+    page = await open_fixture(context, 'workday', html)
+    store.save_answer(ApprovedAnswer(question='Resume', value=str(resume), scope='global'))
+    profile = ApplicantProfile(resume_path=str(resume))
+    bridge, engine, run, _, _ = await prepare(page, store, 'workday', profile)
+    fields = [FormField(**f) for f in (await bridge.command('scan'))['fields']]
+    await page.wait_for_selector('#fresh')
+    await engine.authorize(run, profile, fields)
+    await page.wait_for_timeout(200)
+    assert not [p for p in (await bridge.command('snapshot'))['problems'] if p['kind'] == 'conflict']
+    assert await page.evaluate('window.deletes') == 1
 
 
 async def test_workday_reordered_saved_jobs_keep_their_own_profile_policies(context, store):
