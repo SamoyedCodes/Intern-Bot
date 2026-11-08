@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/banner.svg" alt="Intern-Bot: fill internship applications locally, track them from saved to offer" width="100%">
+</p>
+
 # Intern-Bot
 
 ![Intern-Bot's Applications view with seven internship applications at different stages and the detail panel for one that needs an answer](docs/cover.png)
