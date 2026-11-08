@@ -6,32 +6,38 @@ from datetime import datetime, timezone
 from PySide6.QtCore import QPointF, QRectF, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QGuiApplication, QKeySequence, QPainter, QPen
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QScrollArea,
+    QAbstractItemView, QApplication, QButtonGroup, QComboBox, QDialog, QFileDialog,
+    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QScrollArea,
     QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from core.automation.accounts import generate_login
 from core.automation.models import ApplicantProfile, ApplicationRun, InterventionRequest, ats_name, canonical_url, job_identity, now, site_key
+from core.automation.review import review_values
 from core.automation.service import AutomationService
 from core.storage.local_store import LocalStore
 from core.tracker import PIPELINE, activity, export_csv, import_csv
 from gui.theme import TOKENS, form_layout, MessageBar, button, card, dot_icon, label, more_button, restyle, shortcut
-from gui.views.application_dialogs import ProfileDialog, RunDetailsDialog
+from gui.views.application_dialogs import ProfileDialog, ReviewDialog, RunDetailsDialog
 
 GROUPS = ("All", "Needs you", "In progress", "Applied", "Closed")
 STATUS = {
     "queued": ("Queued", "neutral", "In progress"),
-    "running": ("Running…", "info", "In progress"),
-    "ready_for_review": ("Ready for review", "accent", "Needs you"),
+    "running": ("Preparing…", "info", "In progress"),
+    "ready_for_review": ("Ready to approve", "accent", "Needs you"),
     "failed": ("Failed", "danger", "Needs you"),
     "cancelled": ("Cancelled", "neutral", "Closed"),
 }
 FINISHED = {
     "needs_input": ("{} needs your input.", "warning"),
-    "ready_for_review": ("{} is ready for review in the browser. Submitting stays with you.", "success"),
+    "ready_for_review": ("{} is ready to approve. Review what was filled, then send it from here.", "success"),
     "failed": ("{} stopped with an error. Open it to see why.", "danger"),
 }
+
+
+def receipt_unconfirmed(run):
+    """Send was clicked once but no employer receipt was recognized: never offer Send again."""
+    return run.submission_attempted and not run.is_submitted
 
 
 def awaiting_verification(run):
@@ -53,6 +59,8 @@ def status_meta(run):
         return run.pipeline.title(), "success", "Applied"
     if run.is_submitted or run.submitted_at or run.pipeline == "applied":
         return ("Submitted by you" if run.submitted_by_user else "Applied"), "success", "Applied"
+    if receipt_unconfirmed(run):
+        return "Sent · receipt unconfirmed", "warning", "Needs you"
     if awaiting_verification(run):
         return "Waiting for email verification", "warning", "Needs you"
     if run.status == "needs_input":
@@ -148,7 +156,7 @@ class Item(QTableWidgetItem):
 
 
 class TaskDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, url=""):
         super().__init__(parent)
         self.store = parent.store if parent else LocalStore()
         self.start_after = False
@@ -180,11 +188,7 @@ class TaskDialog(QDialog):
         self.mode.addItem("Request · Workday API questions, then browser completion (beta)", "request")
         form.addRow("Mode", self.mode)
         layout.addLayout(form)
-        layout.addSpacing(4)
-        layout.addWidget(label("Advanced", "overline"))
-        self.auto_submit = QCheckBox("Submit automatically once every field and the review are verified")
-        layout.addWidget(self.auto_submit)
-        layout.addWidget(label("Off by default. If you turn it on, you'll be asked to authorize this one application, and Intern-Bot stops if anything can't be verified.", "caption"))
+        layout.addWidget(label("Company and role are read from the posting when left blank. Nothing is sent until you review and approve the filled application.", "caption"))
         self.error = label()
         self.error.setProperty("tone", "danger")
         layout.addWidget(self.error)
@@ -192,11 +196,11 @@ class TaskDialog(QDialog):
         buttons.addStretch()
         buttons.addWidget(button("Cancel", self.reject, "ghost"))
         buttons.addWidget(button("Add", lambda: self.validate(False)))
-        add_and_start = button("Add and start", lambda: self.validate(True), "primary")
+        add_and_start = button("Add and prepare", lambda: self.validate(True), "primary")
         add_and_start.setDefault(True)
         buttons.addWidget(add_and_start)
         layout.addLayout(buttons)
-        clipboard = QGuiApplication.clipboard().text().strip()
+        clipboard = url or QGuiApplication.clipboard().text().strip()
         if clipboard.startswith("https://") and not any(c.isspace() for c in clipboard):
             self.url.setText(clipboard)
             self.url.selectAll()
@@ -225,8 +229,6 @@ class TaskDialog(QDialog):
         if self.mode.currentData() == "request" and ats_name(self.url.text().strip()) != "Workday":
             self.error.setText("Request mode works with Workday postings only. Choose Classic for this site.")
             return
-        if self.auto_submit.isChecked() and QMessageBox.question(self, "Authorize this application", "Allow Intern-Bot to submit this specific application using the selected profile and approved answers? It will stop if anything cannot be verified.") != QMessageBox.Yes:
-            return
         self.start_after = start
         self.accept()
 
@@ -234,7 +236,7 @@ class TaskDialog(QDialog):
         return ApplicationRun(job_url=canonical_url(self.url.text().strip(), supported_only=False),
                               company=self.company.text().strip(), role=self.role.text().strip() or "Internship",
                               profile_name=self.profile.currentText(), profile_snapshot=self.store.profiles()[self.profile.currentText()],
-                              auto_submit=self.auto_submit.isChecked(), mode=self.mode.currentData(), **{**self.store.get("automation_options", {}), "browser": "chromium"})
+                              mode=self.mode.currentData(), **{**self.store.get("automation_options", {}), "browser": "chromium"})
 
 
 class TasksView(QWidget):
@@ -252,11 +254,13 @@ class TasksView(QWidget):
         self._active_id = None
         self._closing = False
         self._shown_id = None
+        self._stopped_id = None  # the run you paused or cancelled, so its stop doesn't notify you
         self._save_timer = QTimer(self, singleShot=True, interval=600, timeout=self.save_tracking)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(12)
         layout.addLayout(self._build_header())
+        layout.addLayout(self._build_paste())
         layout.addLayout(self._build_chips())
         self.notice = MessageBar()
         layout.addWidget(self.notice)
@@ -297,11 +301,22 @@ class TasksView(QWidget):
         row.addWidget(self.search)
         self.run_queue = button("Run queue", self.start_all_tasks, tip="Start every queued or failed application, one at a time")
         row.addWidget(self.run_queue)
-        row.addWidget(button("New application", self.add_dialog, "primary", "New application (⌘N)"))
         menu = QMenu(self)
         menu.addAction("Import CSV…", self.import_file)
         menu.addAction("Export CSV…", self.export_file)
         row.addWidget(more_button(menu, "Import and export"))
+        return row
+
+    def _build_paste(self):
+        row = QHBoxLayout()
+        self.paste = QLineEdit()
+        self.paste.setPlaceholderText("Paste a job link and press Enter")
+        self.paste.setAccessibleName("Job link")
+        self.paste.setClearButtonEnabled(True)
+        self.paste.returnPressed.connect(self.prepare_pasted)
+        row.addWidget(self.paste, 1)
+        row.addWidget(button("Prepare application", self.prepare_pasted, "primary", "Add the pasted job and start filling it with the active profile (⌘N focuses the link field)"))
+        row.addWidget(button("Options…", self.add_dialog, tip="Set company, role, profile or mode before adding"))
         return row
 
     def _build_chips(self):
@@ -329,7 +344,7 @@ class TasksView(QWidget):
         self.checklist = []
         for text, go, action in [("Add your name and email", "Edit profile", lambda: self.open_profile.emit("Name")),
                                  ("Choose your resume", "Choose resume", lambda: self.open_profile.emit("Documents")),
-                                 ("Add your first job", "Add job", self.add_dialog)]:
+                                 ("Add your first job", "Paste link", self.focus_paste)]:
             row = QHBoxLayout()
             mark = QLabel()
             mark.setFixedWidth(18)
@@ -397,12 +412,14 @@ class TasksView(QWidget):
 
         actions = QHBoxLayout()
         actions.setSpacing(6)
+        self.replace_btn = button("Replace link…", self.replace_link, tip="Use a different job or application link")
         self.answer_btn = button("Answer questions", self.details)
-        self.review_btn = button("Review in browser", self.start_selected, tip="Bring the prepared form to the front. Final submission stays with you.")
+        self.review_btn = button("Review application", self.review, tip="See exactly what was filled, then approve and send it")
         self.start_btn = button("Start", self.start_selected, tip="Start or resume (⌘R)")
+        self.recheck_btn = button("Recheck", self.start_selected, tip="Read the draft again after you edit it, and refresh the review")
         self.pause_btn = button("Pause", self.pause, tip="Stop adapter writes and pending waits")
         self.submitted_btn = button("I submitted it", self.mark_submitted)
-        self.action_buttons = (self.answer_btn, self.review_btn, self.start_btn, self.pause_btn)
+        self.action_buttons = (self.replace_btn, self.answer_btn, self.review_btn, self.start_btn, self.recheck_btn, self.pause_btn)
         self._tips = {widget: widget.toolTip() for widget in self.action_buttons}
         for widget in (*self.action_buttons, self.submitted_btn):
             actions.addWidget(widget)
@@ -410,6 +427,7 @@ class TasksView(QWidget):
         self.detail_menu = QMenu(self)
         self.report_action = self.detail_menu.addAction("Field report and history…", self.details)
         self.compare_action = self.detail_menu.addAction("Compare profiles with AI…", self.compare_profiles)
+        self.replace_action = self.detail_menu.addAction("Replace link…", self.replace_link)
         self.cancel_action = self.detail_menu.addAction("Stop and cancel automation", self.cancel)
         actions.addWidget(more_button(self.detail_menu))
         body.addLayout(actions)
@@ -470,9 +488,12 @@ class TasksView(QWidget):
     def load_state(self):
         self.tasks = self.store.runs()
         for run in self.tasks:
-            if run.status == "running":
-                run.status = "needs_input"
-                run.interventions = [InterventionRequest(kind="browser", message="Interrupted application. Resume to inspect the saved draft.")]
+            if run.status == "running" or run.approved_review:
+                # An approval is for one send attempt in this session: an interrupted one never sends after a restart.
+                if run.status == "running":
+                    run.status = "needs_input"
+                    run.interventions = [InterventionRequest(kind="browser", message="Interrupted application. Resume to inspect the saved draft.")]
+                run.approved_review = {}
                 self.store.save_run(run)
         self.render()
 
@@ -497,7 +518,7 @@ class TasksView(QWidget):
         if status_meta(run)[2] == "Applied":
             return run.notes.strip().splitlines()[0] if run.notes.strip() else ""
         if run.status == "ready_for_review":
-            return "Check the form in the browser, then submit it yourself"
+            return "Review what was filled, then approve & send"
         if run.status == "running":
             return f"{stage_text(run)} · {sum(f.disposition == 'verified' for f in run.fields.values())} fields verified"
         return ""
@@ -625,12 +646,18 @@ class TasksView(QWidget):
         idle = bool(run) and not active and not done
         status = run.status if run else ""
         self.pause_btn.setVisible(active)
-        self.start_btn.setText("I've verified my account" if run and awaiting_verification(run) else {"needs_input": "Resume", "failed": "Retry", "cancelled": "Restart"}.get(status, "Start"))
-        self.start_btn.setVisible(idle and status in {"queued", "needs_input", "failed", "cancelled"})
+        sent = bool(run) and receipt_unconfirmed(run)
+        ready = idle and status == "ready_for_review" and not sent
+        self.start_btn.setText("Check receipt" if sent else "I've verified my account" if run and awaiting_verification(run) else {"needs_input": "Resume", "failed": "Retry", "cancelled": "Restart"}.get(status, "Start"))
+        self.start_btn.setVisible(idle and (sent or status in {"queued", "needs_input", "failed", "cancelled"}))
+        self.replace_btn.setVisible(idle and not sent and any(i.kind == "link" for i in run.interventions))
         self.answer_btn.setVisible(idle and any(i.question for i in run.interventions))
-        self.review_btn.setVisible(idle and status == "ready_for_review")
-        self.submitted_btn.setVisible(idle and status == "ready_for_review")
-        for widget in (self.answer_btn, self.review_btn, self.start_btn):
+        self.review_btn.setVisible(ready)
+        self.recheck_btn.setVisible(ready)
+        self.submitted_btn.setText("Record employer confirmation" if sent else "I submitted it")
+        self.submitted_btn.setVisible(ready or (idle and sent))
+        # The last verified review stays readable while another application runs; only sending waits.
+        for widget in (self.replace_btn, self.answer_btn, self.start_btn, self.recheck_btn):
             widget.setEnabled(not busy)
             widget.setToolTip("Another application is running. Pause it or wait." if busy else self._tips[widget])
         primary = next((b for b in self.action_buttons if not b.isHidden()), None)
@@ -640,6 +667,7 @@ class TasksView(QWidget):
         self.report_action.setEnabled(bool(run) and not busy)
         self.compare_action.setEnabled(bool(run) and not busy)
         self.cancel_action.setEnabled(bool(run) and not done and status != "cancelled")
+        self.replace_action.setEnabled(idle and not busy and not sent)
         self.edit_btn.setEnabled(idle and not busy and not run.submission_attempted)
         self.delete_btn.setEnabled(bool(run) and not active)
         queueable = len(self._queueable())
@@ -665,10 +693,36 @@ class TasksView(QWidget):
 
     # Actions
 
+    def focus_paste(self):
+        self.paste.setFocus()
+        self.paste.selectAll()
+
+    def prepare_pasted(self):
+        """Paste → Enter: add the job with the active profile and start exactly that run."""
+        url = self.paste.text().strip()
+        if not url:
+            self.notify("Paste a job link first.", "warning")
+            return
+        run = ApplicationRun(job_url=url, **{**self.store.get("automation_options", {}), "browser": "chromium"})
+        if self.add_task(run):
+            self.paste.clear()
+            self._start_task(run)
+
     def add_dialog(self):
-        dialog = TaskDialog(self)
-        if dialog.exec() == QDialog.Accepted and self.add_task(dialog.application()) and dialog.start_after:
-            self.start_selected()
+        dialog = TaskDialog(self, self.paste.text().strip())
+        if dialog.exec() == QDialog.Accepted:
+            run = dialog.application()
+            if self.add_task(run):
+                self.paste.clear()
+                if dialog.start_after:
+                    self._start_task(run)  # The new run itself, whatever row a search or filter left selected.
+
+    def show_all(self):
+        """Clear the search and filter, so the application about to be selected is in the list."""
+        self.search.blockSignals(True)
+        self.search.clear()
+        self.search.blockSignals(False)
+        self.chips.button(0).setChecked(True)
 
     def add_task(self, run):
         try:
@@ -676,12 +730,15 @@ class TasksView(QWidget):
         except ValueError as exc:
             self.notify(str(exc), "danger")
             return False
-        existing = next((r for r in self.tasks if job_identity(r.job_url) == job_identity(run.job_url)), None)
+        identity = job_identity(run.job_url)
+        existing = next((r for r in self.tasks if identity in {job_identity(r.job_url), r.listing_url and job_identity(r.listing_url)}), None)
         if existing:
+            self.show_all()
             self.render(select_id=existing.id)
-            self.notify("This job is already in your list, so the existing application is selected.", "warning")
+            self.notify("This job is already in your list, so the existing application is open.", "warning")
             return False
-        if any(r.company.casefold() == run.company.casefold() and r.role.casefold() == run.role.casefold() for r in self.tasks):
+        # Missing metadata is never a match: two link-only jobs share a blank company and the default role.
+        if run.company and any(r.company.casefold() == run.company.casefold() and r.role.casefold() == run.role.casefold() for r in self.tasks):
             if QMessageBox.question(self, "Possible duplicate", "An application with this company and role already exists. Add this different URL as a separate application?") != QMessageBox.Yes:
                 return False
         if run.profile_snapshot is None:
@@ -689,6 +746,7 @@ class TasksView(QWidget):
             run.profile_snapshot = self.store.profiles()[run.profile_name]
         self.store.save_run(run)
         self.tasks.append(run)
+        self.show_all()
         self.render(select_id=run.id)
         return True
 
@@ -715,15 +773,14 @@ class TasksView(QWidget):
             if run:
                 self._start_task(run)
 
-    def _start_task(self, run):
+    def _start_task(self, run, inspect_only=False):
+        if inspect_only and self.service.show_browser(run.id):
+            return
         if self._active_id:
             self.notify("Another application is running. Pause it or wait before starting this one.", "warning")
             return
         if run.is_submitted or run.submitted_at or run.pipeline != "saved":
             self.notify("This application is already in your pipeline and won't restart.", "warning")
-            return
-        inspect_only = run.status == "ready_for_review"
-        if inspect_only and self.service.show_browser(run.id):
             return
         try:
             profile = run.profile_snapshot or ApplicantProfile.model_validate(self.store.get("verified_profile", {}))
@@ -748,7 +805,8 @@ class TasksView(QWidget):
                 run.status = "running"
                 run.interventions = []
                 self.render()
-                self.notify("Preparing the application in Chromium. The employer may ask you to sign in again. " + ("Automatic submission is authorized for this job." if run.auto_submit else "Final submission stays with you."))
+                self.notify("Rechecking the draft, then sending it if it still matches what you approved." if run.approved_review else
+                            "Preparing the application in Chromium. The employer may ask you to sign in again. Nothing is sent until you approve it.")
         except Exception as exc:
             run.status = "failed"
             run.interventions = [InterventionRequest(kind="browser", message=f"Check the profile, URL and operating-system keychain ({type(exc).__name__}).")]
@@ -766,20 +824,32 @@ class TasksView(QWidget):
         self.on_progress(run)
         self._active_id = None
         self.render()
+        stopped, self._stopped_id = run.id == self._stopped_id, None
         if run.status in FINISHED and not self._closing:
             message, tone = FINISHED[run.status]
             name = run.company or "The application"
-            if awaiting_verification(run):
+            title = {"needs_input": "Intern-Bot needs your input", "ready_for_review": "Ready to approve"}.get(run.status)
+            text = message.format(run.company or site_key(run.job_url))
+            if run.is_submitted:
+                message, tone, title = "{} was submitted. The employer's confirmation was recognized.", "success", "Application submitted"
+                text = message.format(run.company or site_key(run.job_url))
+            elif receipt_unconfirmed(run):
+                message, tone, title = "{} was sent once, but no employer receipt was recognized. Check it in the browser; Intern-Bot won't send it again.", "warning", "Check the employer receipt"
+                text = message.format(run.company or site_key(run.job_url))
+            elif awaiting_verification(run):
                 name = run.company or site_key(run.job_url)
-                message = "Verify the Workday email for {}, then click I've verified my account."
-                desktop_notification("Verify your Workday email", f"{name}: open the verification link, then click I've verified my account in Intern-Bot.")
+                message, title = "Verify the Workday email for {}, then click I've verified my account.", "Verify your Workday email"
+                text = f"{name}: open the verification link, then click I've verified my account in Intern-Bot."
             self.notify(message.format(name), tone)
+            if title and not stopped:
+                desktop_notification(title, text)  # Once per finish, so a job waiting on you reaches you away from the window.
             QApplication.alert(self.window())
         self._start_next()
 
     def pause(self):
         self._queue = []
         if self._active_id:
+            self._stopped_id = self._active_id
             self.service.pause(self._active_id)
             self.notify("Pausing: stopping adapter writes and pending waits.")
 
@@ -789,6 +859,7 @@ class TasksView(QWidget):
             return
         self._queue = [i for i in self._queue if i != run.id]
         if run.id == self._active_id:
+            self._stopped_id = run.id
             self.service.pause(run.id, cancel=True)
         else:
             run.status = "cancelled"
@@ -802,6 +873,59 @@ class TasksView(QWidget):
             return
         if RunDetailsDialog(self.store, run, self).exec() == QDialog.Accepted:
             self._start_task(run)
+
+    def review(self):
+        """The application exactly as filled; Approve & send is the only way it gets sent."""
+        run = self.selected()
+        if not run or run.status != "ready_for_review" or receipt_unconfirmed(run):
+            return
+        dialog = ReviewDialog(self.store, run, can_send=not self._active_id, parent=self)
+        result = dialog.exec()
+        if result == ReviewDialog.EDIT:
+            if self.service.show_browser(run.id):
+                self.notify("Edit the form in Chromium, then click Recheck to refresh the review.")
+            else:
+                self._start_task(run, inspect_only=True)  # The browser closed (or the app restarted): reopen the draft.
+        elif result == QDialog.Accepted:
+            self.approve_and_send(run, dialog.ai_ids)
+
+    def approve_and_send(self, run, ai_ids=()):
+        if self._active_id or run.submission_attempted or run.is_submitted:
+            self.notify("This application can't be sent from here now." if run.submission_attempted else "Another application is running. Send this one when it finishes.", "warning")
+            return
+        for answer in self.store.answers():
+            if answer.id in ai_ids and answer.origin == "ai":
+                answer.origin = "you"  # You saw it in the review and approved it.
+                self.store.save_answer(answer)
+        run.approved_review = review_values(run)
+        self.store.record_event(run.id, "approved", run.stage, f"You approved {len(run.approved_review) - 1} reviewed fields for sending.")
+        self.store.save_run(run)
+        self._start_task(run)
+
+    def replace_link(self):
+        run = self.selected()
+        if not run or run.id == self._active_id or receipt_unconfirmed(run) or run.is_submitted:
+            return
+        options = next((i.options for i in run.interventions if i.kind == "link" and i.options), []) or [run.job_url]
+        url, ok = QInputDialog.getItem(self, "Replace link", "Job posting or application link:", options, 0, True)
+        if not ok or not url.strip():
+            return
+        try:
+            url = canonical_url(url.strip(), supported_only=False)
+        except ValueError as exc:
+            self.notify(str(exc), "danger")
+            return
+        other = next((r for r in self.tasks if r.id != run.id and job_identity(url) in {job_identity(r.job_url), r.listing_url and job_identity(r.listing_url)}), None)
+        if other:
+            self.render(select_id=other.id)
+            self.notify("That job is already in your list, so the existing application is open.", "warning")
+            return
+        run.listing_url = run.listing_url or (run.job_url if job_identity(url) != job_identity(run.job_url) else "")
+        run.job_url, run.fields, run.completed_sections, run.steps, run.step, run.stage = url, {}, [], [], -1, "start"
+        run.status, run.interventions, run.approved_review = "queued", [], {}
+        self.store.record_event(run.id, "link_replaced", run.stage, f"Now applying through {site_key(url)}.")
+        self.store.save_run(run)
+        self._start_task(run)
 
     def compare_profiles(self):
         from gui.views.assistant_dialog import AssistantDialog
@@ -860,7 +984,7 @@ class TasksView(QWidget):
     def open_posting(self):
         run = self.selected()
         if run:
-            QDesktopServices.openUrl(QUrl(run.job_url))
+            QDesktopServices.openUrl(QUrl(run.listing_url or run.job_url))
 
     def import_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import applications", "", "CSV (*.csv)")

@@ -12,6 +12,7 @@ from core.automation.engine import ApplicationEngine
 from core.automation.extension_bridge import ExtensionBridge
 from core.automation.fields import FormField
 from core.automation.models import ApplicantProfile, ApplicationRun, ApprovedAnswer, Education, Experience, FieldAssessment, Language
+from core.automation.review import review_values
 from tests.support import FIXTURES, URLS, greenhouse, open_fixture, prepare, profile_for, resume_upload, until
 
 COUNT_SUBMISSION = 'window.submissions=(window.submissions||0)+1'
@@ -20,6 +21,15 @@ DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 
 async def apply(store, page, run, profile=None):
     return await ApplicationEngine(store).start(run, profile or profile_for('greenhouse'), ExtensionBridge(page, run.id))
+
+
+async def apply_and_send(store, page, run, profile=None, bridge=None):
+    """Prepare to review, approve exactly what was reviewed (as Approve & send does), then resume to send it."""
+    run = await ApplicationEngine(store).start(run, profile or profile_for('greenhouse'), bridge or ExtensionBridge(page, run.id))
+    if run.status == 'ready_for_review' and not run.interventions:
+        run.approved_review = review_values(run)
+        run = await ApplicationEngine(store).start(run, profile or profile_for('greenhouse'), bridge or ExtensionBridge(page, run.id))
+    return run
 
 
 def record_commands(bridge, before=None, after=None):
@@ -39,9 +49,13 @@ def record_commands(bridge, before=None, after=None):
 
 async def test_submission_is_persisted_before_the_click_and_never_retried(context, store):
     page = await open_fixture(context, 'greenhouse', greenhouse())
-    run = ApplicationRun(job_url=page.url, auto_submit=True)
+    run = ApplicationRun(job_url=page.url)
     checkpoints = []
     engine = ApplicationEngine(store, lambda r: checkpoints.append((r.submission_attempted, r.submission_confirmed)))
+    await engine.start(run, profile_for('greenhouse'), ExtensionBridge(page, run.id))
+    assert run.status == 'ready_for_review' and not run.submission_attempted, run.interventions
+    assert not await page.evaluate('Boolean(window.submissions)')  # Nothing is sent before you approve the review.
+    run.approved_review = review_values(run)
     await engine.start(run, profile_for('greenhouse'), ExtensionBridge(page, run.id))
     assert run.submission_confirmed and run.pipeline == 'applied', run.interventions
     assert (True, False) in checkpoints
@@ -50,13 +64,13 @@ async def test_submission_is_persisted_before_the_click_and_never_retried(contex
     assert await page.evaluate('window.submissions') == 1
 
 
-@pytest.mark.parametrize('auto_submit, extra, status', [
-    (False, '', 'ready_for_review'),
-    (True, '<label>Fictional fact<input required></label>', 'needs_input'),
-], ids=['manual-by-default', 'unknown-required-fact'])
-async def test_nothing_is_submitted_by_default_or_with_unknown_facts(context, store, auto_submit, extra, status):
+@pytest.mark.parametrize('approved, extra, status', [
+    ({}, '', 'ready_for_review'),
+    ({'First Name': 'Ada'}, '<label>Fictional fact<input required></label>', 'needs_input'),
+], ids=['manual-by-default', 'stale-approval-with-unknown-fact'])
+async def test_nothing_is_submitted_by_default_or_with_unknown_facts(context, store, approved, extra, status):
     page = await open_fixture(context, 'greenhouse', greenhouse(extra=extra, handler=COUNT_SUBMISSION))
-    run = await apply(store, page, ApplicationRun(job_url=page.url, auto_submit=auto_submit))
+    run = await apply(store, page, ApplicationRun(job_url=page.url, approved_review=approved))
     assert run.status == status and not run.submission_attempted, run.interventions
     assert not await page.evaluate('Boolean(window.submissions)')
 
@@ -68,9 +82,8 @@ async def test_nothing_is_submitted_by_default_or_with_unknown_facts(context, st
 async def test_an_unconfirmed_submission_is_never_retried(context, store, monkeypatch, handler):
     monkeypatch.setattr(ApplicationEngine, 'RECEIPT_POLLS', 4)
     page = await open_fixture(context, 'greenhouse', greenhouse(handler=handler))
-    run = ApplicationRun(job_url=page.url, auto_submit=True)
+    run = await apply_and_send(store, page, ApplicationRun(job_url=page.url))
     engine = ApplicationEngine(store)
-    await engine.start(run, profile_for('greenhouse'), ExtensionBridge(page, run.id))
     assert run.submission_attempted and not run.submission_confirmed
     await engine.resume(run, profile_for('greenhouse'), ExtensionBridge(page, run.id))
     assert not run.submission_confirmed and await page.evaluate('window.submissions') == 1
@@ -79,7 +92,7 @@ async def test_an_unconfirmed_submission_is_never_retried(context, store, monkey
 @pytest.mark.parametrize('stop, status', [('pause', 'needs_input'), ('cancel', 'cancelled')])
 async def test_stopping_a_waiting_adapter_blocks_late_writes(context, store, stop, status):
     page = await open_fixture(context, 'greenhouse', greenhouse().replace('id="application"', 'id="loading"'))
-    run = ApplicationRun(job_url=page.url, auto_submit=True)
+    run = ApplicationRun(job_url=page.url, approved_review={'Documents': ''})
     engine, bridge = ApplicationEngine(store), ExtensionBridge(page, run.id)
     sent = record_commands(bridge)
     task = asyncio.create_task(engine.start(run, profile_for('greenhouse'), bridge))
@@ -257,7 +270,7 @@ REVIEW_PAGE = '''<script>window.submissions=0;function review(){const value=docu
 async def test_auto_advance_submits_only_when_the_review_matches(context, store, reviewed_name, submitted):
     html = (FIXTURES / 'workday.html').read_text().replace('>Next</button>', ' onclick="review()">Next</button>')
     page = await open_fixture(context, 'workday', html + REVIEW_PAGE.replace('${VALUE}', reviewed_name))
-    run = await apply(store, page, ApplicationRun(job_url=page.url, auto_submit=True), profile_for('workday'))
+    run = await apply_and_send(store, page, ApplicationRun(job_url=page.url), profile_for('workday'))
     assert (run.submission_attempted, run.submission_confirmed) == (submitted, submitted), run.interventions
     assert run.status == ('ready_for_review' if submitted else 'needs_input')
     assert await page.evaluate('window.submissions') == int(submitted)
@@ -265,14 +278,14 @@ async def test_auto_advance_submits_only_when_the_review_matches(context, store,
 
 async def test_immediate_preclick_recheck_blocks_a_changed_form(context, store):
     page = await open_fixture(context, 'greenhouse', greenhouse())
-    run = ApplicationRun(job_url=page.url, auto_submit=True)
+    run = ApplicationRun(job_url=page.url)
     bridge = ExtensionBridge(page, run.id)
     async def change_before_click(name):
         if name == 'action':
             assert store.get_run(run.id).submission_attempted
             await page.evaluate("document.querySelector('#first_name').value='Unexpected value'")
     record_commands(bridge, before=change_before_click)
-    await ApplicationEngine(store).start(run, profile_for('greenhouse'), bridge)
+    run = await apply_and_send(store, page, run, bridge=bridge)
     assert run.submission_attempted and not run.submission_confirmed
     assert run.status == 'needs_input'
     assert not await page.evaluate('Boolean(window.submissions)')
@@ -608,14 +621,14 @@ async def test_an_unconfirmed_ai_answer_fills_but_blocks_automatic_submission(co
     page = await open_fixture(context, 'greenhouse', greenhouse(extra=extra, handler=COUNT_SUBMISSION))
     ai = ApprovedAnswer(question='Expected graduation year', value='2027', scope='global', origin='ai')
     store.save_answer(ai)
-    run = await apply(store, page, ApplicationRun(job_url=page.url, auto_submit=True))
+    run = await apply_and_send(store, page, ApplicationRun(job_url=page.url))
     assert run.status == 'needs_input' and not run.submission_attempted, run.interventions
     assert 'filled by AI' in run.interventions[-1].message
     assert await page.locator('input[required]').last.input_value() == '2027'
     assert not await page.evaluate('Boolean(window.submissions)')
-    ai.origin = 'you'
+    ai.origin = 'you'  # What approving a review that shows it does.
     store.save_answer(ai)
-    run = await ApplicationEngine(store).resume(store.get_run(run.id), profile_for('greenhouse'), ExtensionBridge(page, run.id))
+    run = await apply_and_send(store, page, store.get_run(run.id))
     assert run.submission_attempted and await page.evaluate('window.submissions') == 1, run.interventions
 
 
@@ -819,3 +832,26 @@ async def test_ai_answers_never_replace_what_the_form_already_holds(store):
     await engine.authorize(ApplicationRun(job_url='https://jobs.lever.co/example/1'), ApplicantProfile(), fields)
     policies = sent['authorize']['policies']
     assert (policies['#a']['value'], policies['#a']['replace'], policies['#b']['replace']) == ('2027', False, True)
+
+
+@pytest.mark.parametrize('change', ['answer', 'resume'])
+async def test_a_change_after_approval_needs_a_fresh_approval(context, store, tmp_path, change):
+    resume = tmp_path / 'resume.txt'
+    resume.write_text('first draft')
+    profile = profile_for('greenhouse').model_copy(update={'resume_path': str(resume)})
+    answer = ApprovedAnswer(question='Preferred start month', value='May', scope='global')
+    store.save_answer(answer)
+    page = await open_fixture(context, 'greenhouse', greenhouse(extra='<label>Preferred start month<input></label>', handler=COUNT_SUBMISSION))
+    run = await apply(store, page, ApplicationRun(job_url=page.url), profile)
+    assert run.status == 'ready_for_review', run.interventions
+    assert review_values(run)['Preferred start month'] == 'May'
+    run.approved_review = review_values(run)
+    if change == 'answer':
+        answer.value = 'June'
+        store.save_answer(answer)
+    else:
+        resume.write_text('second draft')
+    run = await apply(store, page, run, profile)
+    assert run.status == 'ready_for_review' and not run.submission_attempted and not run.approved_review, run.interventions
+    assert ('Preferred start month' if change == 'answer' else 'Documents') in run.interventions[0].message
+    assert not await page.evaluate('Boolean(window.submissions)')

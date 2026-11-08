@@ -164,7 +164,7 @@ class ApprovedAnswer(BaseModel):
     omit: bool = False
     # A live link to a profile fact ("email", "education.0.end_date.year"): the answer is that fact's current value.
     fact: str = ""
-    # "ai" answers fill forms but block automatic submission until you confirm them, which makes them yours.
+    # "ai" answers fill forms but block sending until you confirm them (approving a review that shows them does), which makes them yours.
     origin: Literal["you", "ai"] = "you"
     approved_at: str = Field(default_factory=now)
 
@@ -182,11 +182,14 @@ class FieldAssessment(BaseModel):
     reason: str = ""
     # Evidence records the verification method, never credentials or observed PII.
     evidence: str = ""
+    # What the form showed when it was verified, kept locally for the review you approve. Password fields are never assessed.
+    value: str | bool = ""
+    option: str = ""  # A radio button's own choice; value says whether it was selected.
     attempts: int = 0
 
 
 class InterventionRequest(BaseModel):
-    kind: Literal["answer", "conflict", "browser", "profile", "verification", "validation", "activation"]
+    kind: Literal["answer", "conflict", "browser", "profile", "verification", "validation", "activation", "link"]
     message: str
     field_key: str = ""
     question: str = ""
@@ -199,6 +202,8 @@ class ApplicationRun(BaseModel):
     schema_version: int = 1
     id: str = Field(default_factory=lambda: str(uuid4()))
     job_url: str
+    # The careers-page listing you pasted, when its Apply link led to job_url on a hiring platform.
+    listing_url: str = ""
     company: str = ""
     role: str = "Internship"
     profile_name: str = "Default"
@@ -207,13 +212,14 @@ class ApplicationRun(BaseModel):
     mode: Literal["classic", "request"] = "classic"
     auto_advance: bool = True
     reuse_answers: bool = True
-    auto_submit: bool = False
     pipeline: Literal["saved", "applied", "screen", "interviewing", "offer", "rejected", "archived"] = "saved"
     notes: str = ""
     job_description: str = ""
     created_at: str = Field(default_factory=now)
     submitted_at: str = ""
     submission_attempted: bool = False
+    # The review you approved (review_values); Send clicks only while the rechecked form still matches it exactly.
+    approved_review: dict[str, str] = Field(default_factory=dict)
     submission_confirmed: bool = False
     profile_revision: str = ""
     profile_snapshot: ApplicantProfile | None = None

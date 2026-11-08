@@ -269,7 +269,7 @@ class MainWindow(QMainWindow):
         QGuiApplication.styleHints().colorSchemeChanged.connect(lambda *_: self.tasks_view.render())
         for index in range(len(self.PAGES)):
             shortcut(f"Ctrl+{index + 1}", self, lambda i=index: self._select_nav(i))
-        shortcut(QKeySequence.New, self, lambda: (self._select_nav(0), self.tasks_view.add_dialog()))
+        shortcut(QKeySequence.New, self, lambda: (self._select_nav(0), self.tasks_view.focus_paste()))
         shortcut(QKeySequence.Find, self, lambda: (self._select_nav(0), self.tasks_view.search.setFocus()))
         shortcut("Ctrl+R", self, lambda: (self._select_nav(0), self.tasks_view.primary_action()))
         self._select_nav(0)

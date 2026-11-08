@@ -1,4 +1,5 @@
-"""Structured profile editing, guided answer approval and the approved-answer bank."""
+"""Structured profile editing, guided answer approval, the review you approve before sending, and the approved-answer bank."""
+import re
 from difflib import SequenceMatcher
 
 from PySide6.QtCore import Qt, Signal
@@ -9,7 +10,8 @@ from PySide6.QtWidgets import (
 )
 
 from core.automation.answers import applicable, asks, fact_name
-from core.automation.models import ApplicantProfile, ApprovedAnswer, Education, Experience, Language, employer_key, normalized, site_key
+from core.automation.models import ApplicantProfile, ApprovedAnswer, Education, Experience, Language, ats_name, employer_key, normalized, site_key
+from core.automation.review import shown_value
 from gui.theme import form_layout, MessageBar, button, card, dot_icon, label, restyle, shortcut
 
 BOOLEAN_FIELDS = {"work_authorized_us", "requires_sponsorship", "hispanic_or_latino"}
@@ -50,6 +52,9 @@ LABELS = {
     "veteran_status": ("Veteran status", ""), "disability_status": ("Disability status", ""),
 }
 COLUMNS = {"job_title": "Job title", "start_date": "Start", "end_date": "End", "gpa": "GPA"}
+# Declarations are accepted per application and wording; stable facts are worth reusing everywhere. Anything else defaults to this application.
+DECLARATION = re.compile(r"\b(agree|consent|acknowledg|certif|declar|attest|confirm|understand|privacy|terms)", re.I)
+STABLE_FACT = re.compile(r"authori[sz]ed to work|sponsor|visa|citizen|degree|graduat|\bgpa\b|universit|school|major|field of study|gender|race|ethnic|veteran|disabilit|hispanic|pronoun|linkedin|github|portfolio|website|language|phone|address|country|city|postal|zip|legal name|18 years", re.I)
 RESULTS = {"verified": ("Verified", "success"), "needs_input": ("Needs input", "warning"),
            "blocked": ("Blocked", "danger"), "intentionally_omitted": ("Left blank", "neutral")}
 
@@ -283,6 +288,11 @@ class RunDetailsDialog(QDialog):
         self.questions.addItems(self.pending)
         self.questions.setToolTip("Use the form's exact wording. Approvals match the normalized question text.")
         self.form.addRow("Question", self.questions)
+        self.why = label(role="caption")
+        self.form.addRow("Why", self.why)
+        self.declaration = label()
+        self.declaration.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.form.addRow("Declaration", self.declaration)
         # A reworded question can reuse an answer you already gave instead of a new one.
         self.same = QComboBox()
         self.same.setToolTip("Closest saved answers first. This wording is added to the chosen answer.")
@@ -315,12 +325,12 @@ class RunDetailsDialog(QDialog):
         self.form.addRow("Answer", self.answer_box)
         self.scope = QComboBox()
         self.scope.addItems(["Only this application", f"All applications to {name}", "Every application asking this question"])
-        self.scope.setCurrentIndex(2)
         self.form.addRow("Remember for", self.scope)
         box.addLayout(self.form)
         save_row = QHBoxLayout()
         save_row.addStretch()
-        save_row.addWidget(button("Save approved answer", self.save_answer, "primary"))
+        self.save_btn = button("Save approved answer", self.save_answer, "primary")
+        save_row.addWidget(self.save_btn)
         box.addLayout(save_row)
         layout.addWidget(frame)
         self.notice = MessageBar()
@@ -352,11 +362,11 @@ class RunDetailsDialog(QDialog):
             QTreeWidgetItem(history, [event["at"][:16].replace("T", " "), event["kind"].replace("_", " "), event["note"]]).setToolTip(2, event["note"])
         tabs.addTab(history, "History")
         layout.addWidget(tabs, 1)
-        layout.addWidget(label(f"Profile {run.profile_name} · Automatic submit {'authorized' if run.auto_submit else 'off'} · "
+        layout.addWidget(label(f"Profile {run.profile_name} · "
                                f"{run.elapsed_seconds:.0f} s active · {run.intervention_count} interventions · {run.ai_requests} AI requests", "caption"))
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        self.resume_btn = buttons.addButton("Resume application", QDialogButtonBox.AcceptRole)
+        self.resume_btn = buttons.addButton("Continue application", QDialogButtonBox.AcceptRole)
         restyle(self.resume_btn, variant="primary")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -391,6 +401,14 @@ class RunDetailsDialog(QDialog):
         self.same.blockSignals(False)
         required = bool(request and request.required)
         control = request.field_kind if request else ""
+        self.why.setText(request.message if request else "")
+        self.form.setRowVisible(self.why, bool(request))
+        declaration = bool(DECLARATION.search(self.questions.currentText()))
+        self.declaration.setText(self.questions.currentText() + "\n\nYour answer applies to this application and this exact wording only.")
+        self.form.setRowVisible(self.declaration, declaration)
+        # Reuse what stays true (eligibility, education, links); keep one job's specifics, and every declaration, to this job.
+        self.scope.setCurrentIndex(0 if declaration or not STABLE_FACT.search(self.questions.currentText()) else 2)
+        self.scope.setEnabled(not declaration)
         options = self.choices.count() > 0
         self.file.clear()
         # Required questions can't be omitted, so the option is unavailable rather than an error after saving.
@@ -422,6 +440,8 @@ class RunDetailsDialog(QDialog):
                               else "No open questions. You can still approve an answer to a question you expect.")
         required_left = any(i.required and i.question and normalized(i.question) not in self.answered for i in self.run.interventions)
         self.resume_btn.setVisible(bool(self.answered) and not required_left)
+        left = [q for q in self.pending if normalized(q) not in self.answered]
+        self.save_btn.setText("Save answers && continue" if len(left) == 1 else "Save and next" if left else "Save approved answer")
 
     def draft_answer(self):
         from gui.views.assistant_dialog import AssistantDialog
@@ -477,8 +497,89 @@ class RunDetailsDialog(QDialog):
             self.questions.setCurrentText(remaining[0])
             self.answer.clear()
             self.notice.notify(f"Answer saved. Next: {remaining[0]}", "success")
+        elif self.pending and not any(i.required and i.question and normalized(i.question) not in self.answered for i in self.run.interventions):
+            self.accept()  # Every open question is answered: carry on without a separate Resume step.
         else:
             self.notice.notify("Answer saved. Resume the application when you're ready.", "success")
+
+
+class ReviewDialog(QDialog):
+    """The application you approve: every value read back from the form, with what deserves a second look first."""
+    EDIT = 2
+
+    def __init__(self, store, run, can_send=True, parent=None):
+        super().__init__(parent)
+        name = run.company or site_key(run.job_url)
+        self.setWindowTitle(f"Review application — {name}")
+        self.resize(820, 720)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(10)
+        layout.addWidget(label(f"{name} · {run.role}", "section"))
+        source = f" · found through the listing on {site_key(run.listing_url)}" if run.listing_url else ""
+        layout.addWidget(label(f"Profile {run.profile_name} · {ats_name(run.job_url) or site_key(run.job_url)}{source}", "muted"))
+        files = [f"{a.label}: {a.value}" for a in run.fields.values() if a.kind == "file" and a.disposition == "verified" and a.value]
+        layout.addWidget(label("Attached · " + (" · ".join(files) if files else "no documents"), "caption"))
+        notice = MessageBar()
+        layout.addWidget(notice)
+        # A review verified before values were recorded can't be approved as seen; a recheck reads them back.
+        unread = any(a.disposition == "verified" and a.value == "" for a in run.fields.values())
+        messages = [i.message for i in run.interventions] + (["This review was prepared before Intern-Bot recorded the values it read back. Click Recheck on the board, then review it again."] if unread else [])
+        if messages:
+            notice.notify("\n".join(messages), "warning")
+
+        ai = {"answer:" + a.id for a in store.answers() if a.origin == "ai"}
+        self.ai_ids = {a.answer_ref.removeprefix("answer:") for a in run.fields.values() if a.answer_ref in ai}
+        tree = QTreeWidget()
+        tree.setHeaderLabels(["Field", "Value", "Note"])
+        tree.setColumnWidth(0, 260)
+        tree.setColumnWidth(1, 260)
+        tree.setWordWrap(True)
+        first = QTreeWidgetItem(tree, ["Check these first"])
+        pages, seen = {}, set()
+        sections = list(dict.fromkeys([*run.completed_sections, *(a.section for a in run.fields.values())]))
+        for assessment in run.fields.values():
+            if assessment.disposition not in {"verified", "intentionally_omitted"} or assessment.kind == "password":
+                continue
+            if assessment.kind == "radio" and assessment.value is not True and assessment.disposition == "verified":
+                continue  # Each radio button is its own field; only the chosen one is the answer.
+            identity = (assessment.section, assessment.label, assessment.group, assessment.row)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            value = assessment.option if assessment.kind == "radio" and assessment.value is True else shown_value(assessment)
+            field = assessment.label + (f" ({assessment.group} {assessment.row + 1})" if assessment.group else "")
+            note, flagged = ("Document", False) if assessment.kind == "file" else ("Profile", False) if assessment.answer_ref.startswith("profile:") else ("Your saved answer", False)
+            if assessment.answer_ref in ai:
+                note, flagged = "AI answer · approving confirms it as yours", True
+            elif DECLARATION.search(assessment.label):
+                note, flagged = "Declaration · approving accepts it for this application", True
+            elif assessment.disposition == "intentionally_omitted":
+                note, flagged = "Optional · left blank on purpose", True
+            if not flagged:
+                index = sections.index(assessment.section) + 1 if assessment.section in sections else 1
+                if index not in pages:
+                    pages[index] = QTreeWidgetItem(tree, [f"Page {index}"])
+            item = QTreeWidgetItem(first if flagged else pages[index], [field, value, note])
+            for column in range(3):
+                item.setToolTip(column, item.text(column))
+        first.setHidden(not first.childCount())
+        tree.expandAll()
+        layout.addWidget(tree, 1)
+        confirms = f" Approving also confirms the {len(self.ai_ids)} AI answer{'s' if len(self.ai_ids) != 1 else ''} above." if self.ai_ids else ""
+        layout.addWidget(label("Approve & send rechecks the form first and sends only if it still matches what you see here. "
+                               "Edit in browser to change something, then Recheck." + confirms, "caption"))
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        edit = buttons.addButton("Edit in browser", QDialogButtonBox.ActionRole)
+        edit.clicked.connect(lambda: self.done(self.EDIT))
+        self.send_btn = buttons.addButton("Approve && send", QDialogButtonBox.AcceptRole)
+        restyle(self.send_btn, variant="primary")
+        self.send_btn.setEnabled(can_send and not run.submission_attempted and not unread)
+        if not can_send:
+            self.send_btn.setToolTip("Another application is running. Send this one when it finishes.")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
 
 
 class AnswersView(QWidget):
@@ -575,7 +676,7 @@ class AnswersView(QWidget):
         answer.origin = "you"
         self.store.save_answer(answer)
         self.refresh()
-        self.notice.notify("Confirmed. It now counts as your own answer, including for automatic submission.", "success")
+        self.notice.notify("Confirmed. It now counts as your own answer, including for sending.", "success")
 
     def remove(self):
         if not self.tree.selectedItems():

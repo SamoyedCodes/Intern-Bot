@@ -8,7 +8,7 @@ import time
 import pytest
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QMessageBox, QPushButton, QTreeWidget
 
 import core.automation.service as service_module
 import gui.views.tasks_view as tasks_module
@@ -71,7 +71,7 @@ def test_a_reworded_question_joins_a_saved_answer_and_the_wording_can_be_removed
                          interventions=[InterventionRequest(kind='answer', message='', question='Internship period')])
     window.store.save_answer(ApprovedAnswer(question='When is your intended period of internship?', value='Jan - May 2027', scope='global'))
     details = RunDetailsDialog(window.store, run)
-    assert details.scope.currentIndex() == 2  # New answers are remembered for every application.
+    assert details.scope.currentIndex() == 0  # A job's own specifics (an internship period) stay with this application.
     details.same.setCurrentIndex(1)
     details.save_answer()
     assert window.store.answers()[0].variants == ['Internship period'] and len(window.store.answers()) == 1
@@ -113,11 +113,12 @@ def test_each_question_starts_with_its_form_control_type(window, tmp_path):
 
 def test_restart_turns_an_interrupted_run_into_a_handoff(window):
     view = window.tasks_view
-    run = ApplicationRun(company='Example', job_url=URL, status='running')
+    run = ApplicationRun(company='Example', job_url=URL, status='running', approved_review={'Documents': 'd1'})
     view.add_task(run)
     view.load_state()
     assert view.tasks[0].status == 'needs_input'
-    assert window.store.get_run(run.id).status == 'needs_input'
+    saved = window.store.get_run(run.id)
+    assert saved.status == 'needs_input' and not saved.approved_review  # Resuming after a crash can't send without a fresh approval.
 
 
 def test_the_same_job_is_added_only_once(window):
@@ -244,7 +245,7 @@ def test_new_application_uses_saved_settings_and_the_active_profile(window):
     dialog = TaskDialog(window.tasks_view)
     dialog.url.setText('https://jobs.lever.co/example/1')
     run = dialog.application()
-    assert run.browser == 'chromium' and not run.auto_submit and not run.auto_advance
+    assert run.browser == 'chromium' and not run.approved_review and not run.auto_advance
     assert run.profile_name == 'Engineering' and run.profile_snapshot.skills == 'Python'
 
 
@@ -252,7 +253,6 @@ def test_request_mode_is_chosen_per_application_for_workday_only(window):
     dialog = TaskDialog(window.tasks_view)
     dialog.url.setText('https://jobs.lever.co/example/1')
     dialog.mode.setCurrentIndex(dialog.mode.findData('request'))
-    assert dialog.auto_submit.isEnabled() and not dialog.auto_submit.isChecked()
     dialog.validate()
     assert 'Workday' in dialog.error.text() and dialog.result() != QDialog.Accepted
     dialog.url.setText('https://example.wd1.myworkdayjobs.com/en-US/Careers/job/Singapore/Intern_R123')
@@ -340,6 +340,9 @@ def test_desktop_workflow_pauses_asks_and_reaches_review_without_submitting(wind
     monkeypatch.setattr(Page, 'goto', intercepted_goto)
     # The service opens a visible browser for the user; tests keep it headless.
     monkeypatch.setattr(service_module, 'AsyncPlaywrightManager', lambda **kwargs: AsyncPlaywrightManager(**{**kwargs, 'headless': True}))
+    monkeypatch.setattr(service_module.ApplicationEngine, 'RECEIPT_POLLS', 4)
+    notifications = []
+    monkeypatch.setattr(tasks_module, 'desktop_notification', lambda *args: notifications.append(args))
     view = window.tasks_view
     def click(label, root=None):
         button = next(b for b in (root or view).findChildren(QPushButton) if b.text() == label and b.isVisible())
@@ -353,7 +356,7 @@ def test_desktop_workflow_pauses_asks_and_reaches_review_without_submitting(wind
 
     profile = ApplicantProfile(first_name='Ada', last_name='Example', email='ada@example.test')
     run = ApplicationRun(job_url=url, company='Fixture', profile_snapshot=profile, browser='firefox')
-    assert not run.auto_submit
+    assert not run.approved_review
     view.add_task(run)
     view.table.selectRow(0)
     window.show()
@@ -386,9 +389,7 @@ def test_desktop_workflow_pauses_asks_and_reaches_review_without_submitting(wind
             assert isinstance(dialog, RunDetailsDialog)
             assert dialog.questions.currentText() == 'Available for this internship?'
             dialog.kind.setCurrentIndex(2)
-            click('Save approved answer', dialog)
-            assert 'saved' in dialog.notice.text().lower()
-            QTest.mouseClick(dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.Close), Qt.LeftButton)
+            click('Save answers && continue', dialog)  # The only open question: saving it carries on.
         except Exception as error:
             errors.append(error)
             if app.activeModalWidget():
@@ -397,14 +398,12 @@ def test_desktop_workflow_pauses_asks_and_reaches_review_without_submitting(wind
     click('Answer questions')
     assert not errors, errors
     assert window.store.answers()[0].value is False
-
-    click('Resume')
     wait_for(lambda: not view.service.busy and view._active_id is None)
     final = view.tasks[0]
     assert final.status == 'ready_for_review', final.interventions
     assert all(f.disposition == 'verified' for f in final.fields.values())
     assert window.store.get_run(run.id).status == 'ready_for_review'
-    assert view.table.item(0, 2).text() == 'Ready for review'
+    assert view.table.item(0, 2).text() == 'Ready to approve'
     async def inspect_browser():
         manager, adapter = view.service.sessions[run.id]
         assert any(c['name'] == 'gui_session' and c['value'] == 'fixture-only' for c in await manager.context.cookies(url))
@@ -416,3 +415,155 @@ def test_desktop_workflow_pauses_asks_and_reaches_review_without_submitting(wind
     assert not final.submission_attempted
     assert final.browser == 'chromium' and (legacy / 'preserve.txt').read_text() == 'Old browser session must remain intact'
     assert any(event['kind'] == 'browser_migration' for event in window.store.events(run.id))
+    assert notifications[-1][0] == 'Ready to approve' and not any('Paused' in text for _, text in notifications)
+
+    # Approve & send from the board: one click, one send, and an unrecognized receipt never sends again.
+    def approve_review():
+        try:
+            dialog = app.activeModalWidget()
+            assert dialog.windowTitle() == 'Review application — Fixture'
+            QTest.mouseClick(dialog.send_btn, Qt.LeftButton)
+        except Exception as error:
+            errors.append(error)
+            if app.activeModalWidget():
+                app.activeModalWidget().reject()
+    QTimer.singleShot(50, approve_review)
+    click('Review application')
+    assert not errors, errors
+    wait_for(lambda: not view.service.busy and view._active_id is None)
+    sent = view.tasks[0]
+    assert sent.submission_attempted and not sent.submission_confirmed, sent.interventions
+    assert view.table.item(0, 2).text() == 'Sent · receipt unconfirmed'
+    click('Check receipt')
+    wait_for(lambda: not view.service.busy and view._active_id is None)
+    async def submissions():
+        return await view.service.sessions[run.id][1].page.evaluate('window.submissions')
+    assert asyncio.run_coroutine_threadsafe(submissions(), view.service.loop).result(timeout=10) == 1
+
+
+def test_a_pasted_link_starts_that_job_even_when_a_filter_hides_it(window, monkeypatch):
+    view = window.tasks_view
+    started = capture_starts(view, monkeypatch)
+    view.add_task(ApplicationRun(company='Other', job_url='https://jobs.lever.co/other/1', status='needs_input'))
+    view.search.setText('Other')
+    view.chips.button(1).click()  # Needs you
+    view.paste.setText('https://jobs.lever.co/acme/2')
+    QTest.keyClick(view.paste, Qt.Key_Return)
+    assert [run.job_url for run, *_ in started] == ['https://jobs.lever.co/acme/2']
+    assert view.selected().job_url == 'https://jobs.lever.co/acme/2' and not view.paste.text()
+
+
+def test_link_only_jobs_are_not_duplicates_but_the_same_listing_opens_the_existing_run(window, monkeypatch):
+    view = window.tasks_view
+    monkeypatch.setattr(QMessageBox, 'question', lambda *args: pytest.fail('Missing metadata must not look like a duplicate'))
+    assert view.add_task(ApplicationRun(job_url='https://jobs.lever.co/a/1'))
+    assert view.add_task(ApplicationRun(job_url='https://jobs.lever.co/b/2', listing_url='https://careers.b.test/jobs/2'))
+    assert not view.add_task(ApplicationRun(job_url='https://careers.b.test/jobs/2'))
+    assert len(view.tasks) == 2 and view.selected().job_url == 'https://jobs.lever.co/b/2'
+
+
+def ready_run(**kwargs):
+    from core.automation.models import FieldAssessment
+    fields = {
+        's:first': FieldAssessment(key='s:first', label='First Name', section='s', disposition='verified', answer_ref='profile:first_name', value='Ada'),
+        's:yes': FieldAssessment(key='s:yes', label='Eligible?', section='s', kind='radio', disposition='verified', answer_ref='answer:x', value=True, option='Yes'),
+        's:no': FieldAssessment(key='s:no', label='Eligible?', section='s', kind='radio', disposition='verified', answer_ref='answer:x', value=False, option='No'),
+        's:year': FieldAssessment(key='s:year', label='Graduation year', section='s', disposition='verified', answer_ref='answer:ai', value='2027'),
+        's:terms': FieldAssessment(key='s:terms', label='I agree to the privacy notice', section='s', kind='checkbox', disposition='verified', answer_ref='answer:x', value=True),
+        's:cv': FieldAssessment(key='s:cv', label='Resume', section='s', kind='file', disposition='verified', answer_ref='profile:resume_path', value='resume.pdf'),
+    }
+    return ApplicationRun(company='Acme', role='Data Intern', job_url='https://jobs.lever.co/acme/1', status='ready_for_review',
+                          fields=fields, completed_sections=['s'], documents_digest='d1', profile_snapshot=ApplicantProfile(), **kwargs)
+
+
+def test_review_shows_the_filled_values_and_approve_sends_exactly_that(window, monkeypatch):
+    from gui.views.application_dialogs import ReviewDialog
+    from core.automation.review import review_values
+    view = window.tasks_view
+    started = capture_starts(view, monkeypatch)
+    window.store.save_answer(ApprovedAnswer(id='ai', question='Graduation year', value='2027', origin='ai', scope='global'))
+    run = ready_run()
+    view.add_task(run)
+    assert view.status_label(run) == 'Ready to approve' and view.review_btn.isVisibleTo(view) and view.recheck_btn.isVisibleTo(view)
+    dialog = ReviewDialog(window.store, run)
+    tree = dialog.findChild(QTreeWidget)
+    first = tree.topLevelItem(0)
+    assert first.text(0) == 'Check these first'
+    assert {first.child(i).text(0) for i in range(first.childCount())} == {'Graduation year', 'I agree to the privacy notice'}
+    page = tree.topLevelItem(1)
+    assert [(page.child(i).text(0), page.child(i).text(1)) for i in range(page.childCount())] == [('First Name', 'Ada'), ('Eligible?', 'Yes'), ('Resume', 'resume.pdf')]
+    assert dialog.ai_ids == {'ai'}
+    view.approve_and_send(run, dialog.ai_ids)
+    assert started[-1][0].approved_review == review_values(run) and window.store.answers()[0].origin == 'you'
+    assert window.store.get_run(run.id).approved_review == review_values(run)
+
+
+def test_review_stays_readable_while_another_job_runs_but_send_waits(window, monkeypatch):
+    from gui.views.application_dialogs import ReviewDialog
+    view = window.tasks_view
+    started = capture_starts(view, monkeypatch)
+    run = ready_run()
+    view.add_task(run)
+    view._active_id = 'another'
+    view.render(select_id=run.id)
+    assert view.review_btn.isEnabled() and not view.recheck_btn.isEnabled()
+    assert not ReviewDialog(window.store, run, can_send=False).send_btn.isEnabled()
+    assert ReviewDialog(window.store, run).send_btn.isEnabled()
+    run.fields['s:first'].value = ''  # Verified by a version that didn't record values.
+    assert not ReviewDialog(window.store, run).send_btn.isEnabled()
+    view.approve_and_send(run)
+    assert started == [] and not window.store.get_run(run.id).approved_review
+
+
+def test_an_unconfirmed_send_offers_receipt_checks_never_a_second_send(window, monkeypatch):
+    view = window.tasks_view
+    started = capture_starts(view, monkeypatch)
+    run = ready_run(submission_attempted=True)
+    run.status = 'needs_input'
+    view.add_task(run)
+    assert view.status_label(run) == 'Sent · receipt unconfirmed'
+    assert view.start_btn.text() == 'Check receipt' and view.submitted_btn.text() == 'Record employer confirmation'
+    assert not view.review_btn.isVisibleTo(view) and not view.recheck_btn.isVisibleTo(view)
+    run.status = 'ready_for_review'  # Even a run left in review never offers Send again.
+    view.render(select_id=run.id)
+    assert not view.review_btn.isVisibleTo(view) and view.start_btn.text() == 'Check receipt'
+    view.approve_and_send(run)
+    assert started == [] and not run.approved_review
+
+
+def test_replace_link_offers_the_listings_applications_and_restarts_on_the_choice(window, monkeypatch):
+    view = window.tasks_view
+    started = capture_starts(view, monkeypatch)
+    run = ApplicationRun(job_url='https://careers.acme.test/jobs/1', status='needs_input', interventions=[
+        InterventionRequest(kind='link', message='More than one', options=['https://jobs.lever.co/acme/1', 'https://jobs.lever.co/acme/2'])])
+    view.add_task(run)
+    assert view.replace_btn.isVisibleTo(view)
+    offered = []
+    monkeypatch.setattr(tasks_module.QInputDialog, 'getItem', lambda parent, title, text, items, *args: offered.append(items) or (items[1], True))
+    view.replace_link()
+    assert offered == [['https://jobs.lever.co/acme/1', 'https://jobs.lever.co/acme/2']]
+    saved = window.store.get_run(run.id)
+    assert (saved.job_url, saved.listing_url, saved.stage) == ('https://jobs.lever.co/acme/2', 'https://careers.acme.test/jobs/1', 'start')
+    assert started[-1][0].job_url == 'https://jobs.lever.co/acme/2'
+
+
+def test_answers_default_to_this_job_except_stable_facts_and_declarations_are_locked(window):
+    run = ApplicationRun(company='Example', job_url=URL, profile_snapshot=ApplicantProfile(), status='needs_input', interventions=[
+        InterventionRequest(kind='answer', message='The form needs an answer.', question='Expected salary', required=True),
+        InterventionRequest(kind='answer', message='', question='Will you require visa sponsorship?', required=True),
+        InterventionRequest(kind='answer', message='', question='I certify the information above is true', required=True, field_kind='checkbox')])
+    details = RunDetailsDialog(window.store, run)
+    assert details.scope.currentIndex() == 0 and details.why.text() == 'The form needs an answer.'
+    assert details.save_btn.text() == 'Save and next'
+    details.answer.setPlainText('Negotiable')
+    details.save_answer()
+    assert details.questions.currentText() == 'Will you require visa sponsorship?' and details.scope.currentIndex() == 2
+    details.kind.setCurrentIndex(2)
+    details.save_answer()
+    assert details.scope.currentIndex() == 0 and not details.scope.isEnabled()
+    assert 'this exact wording' in details.declaration.text() and details.save_btn.text() == 'Save answers && continue'
+    details.save_answer()
+    assert details.result() == QDialog.Accepted  # The last answer continues the application; no separate Resume.
+    scopes = {a.question: (a.scope, a.scope_key) for a in window.store.answers()}
+    assert scopes == {'Expected salary': ('application', run.id), 'Will you require visa sponsorship?': ('global', ''),
+                      'I certify the information above is true': ('application', run.id)}

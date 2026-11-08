@@ -216,11 +216,19 @@ class ApplicationEngine:
                     if not self.verify_review(run, profile, settled.get('summary', [])):
                         return run
                     run.status = 'ready_for_review'
+                    from core.automation.review import review_changes, review_values
+                    changed = run.approved_review and review_changes(run.approved_review, review_values(run))
+                    if changed:
+                        # Approval covers exactly what you saw; anything different needs a fresh look.
+                        run.approved_review = {}
+                        message = f'Changed since you approved it: {", ".join(changed[:5])}{" and more" if len(changed) > 5 else ""}. Review the application again before sending.'
+                        run.interventions = [InterventionRequest(kind='validation', message=message)]
+                        self.store.record_event(run.id, 'approval_invalidated', run.stage, message)
                     self.checkpoint(run)
-                    if run.auto_submit and not self._pause and not self._cancel:
+                    if run.approved_review and not self._pause and not self._cancel:
                         unconfirmed = self.unconfirmed(run)
                         if unconfirmed:
-                            self.intervene(run, f'{unconfirmed} answer{"s" if unconfirmed > 1 else ""} filled by AI need your confirmation. Confirm them under Answers, then resume to submit.', 'validation')
+                            self.intervene(run, f'{unconfirmed} answer{"s" if unconfirmed > 1 else ""} filled by AI need your confirmation. Review the application and approve it again.', 'validation')
                             return run
                         run.submission_attempted = True
                         self.checkpoint(run)
@@ -250,6 +258,8 @@ class ApplicationEngine:
             self.intervene(run, f'{message} ({type(exc).__name__})')
         finally:
             await bridge.stop()
+            # An approval is good for one send attempt; a stop on the way there needs a fresh one.
+            run.approved_review = {}
             if self._cancel:
                 run.status = 'cancelled'
             elif self._pause:
@@ -433,7 +443,8 @@ class ApplicationEngine:
             key = run.stage + ':' + field.key
             run.fields[key] = FieldAssessment(key=key, label=field.label, section=run.stage, required=field.required, group=field.group, row=field.row, kind=field.kind,
                 answer_ref=resolution.ref, disposition='intentionally_omitted' if omitted else 'verified' if matched else 'needs_input',
-                evidence='Exact file digest and DOM validity' if matched and field.kind == 'file' else 'Section DOM read-back' if matched else '',reason='' if matched else reason)
+                evidence='Exact file digest and DOM validity' if matched and field.kind == 'file' else 'Section DOM read-back' if matched else '',reason='' if matched else reason,
+                value='' if field.kind == 'password' else field.value, option=field.option)
             if not matched:
                 self.intervene(run, reason, 'conflict' if 'conflict' in reason else 'answer', field)
         return ok

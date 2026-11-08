@@ -80,3 +80,36 @@ def workday_review_error(previous, summary, profile, run, answers):
         if key not in expected or key not in actual or actual[key] not in accepted:
             return f'Cannot reconcile {key[0]} on the saved review.'
     return ''
+
+
+def shown_value(assessment):
+    """A verified field's read-back as the review shows it."""
+    if assessment.disposition == 'intentionally_omitted':
+        return 'Left blank'
+    value = assessment.value
+    return 'Yes' if value is True else 'No' if value is False else str(value)
+
+
+def review_values(run):
+    """What Approve & send approves: each verified field as the form showed it, plus the documents' fingerprint."""
+    values = {'Documents': run.documents_digest}
+    for assessment in sorted(run.fields.values(), key=lambda a: a.key):
+        if assessment.disposition not in {'verified', 'intentionally_omitted'} or assessment.kind == 'password':
+            continue
+        if assessment.kind == 'radio':
+            if assessment.value is not True:
+                continue  # Each radio button is its own field; the selected one names the answer.
+            value = assessment.option
+        else:
+            value = shown_value(assessment)
+        name = assessment.label + (f' ({assessment.group} {assessment.row + 1})' if assessment.group else '')
+        key, n = name, 2
+        while key in values:
+            key, n = f'{name} [{n}]', n + 1
+        values[key] = value
+    return values
+
+
+def review_changes(before, after):
+    """Names of the fields whose reviewed value was added, removed or changed."""
+    return [key for key in dict.fromkeys([*before, *after]) if before.get(key) != after.get(key)]
