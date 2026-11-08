@@ -1,6 +1,6 @@
 <p align="center">
   <a href="docs/cover.png">
-    <img src="docs/banner.png" alt="Intern-Bot's current Applications, Profile and Answers views: local autofill with 28 site-specific adapters, application tracking, reusable profiles and approved answers. Screenshots use fictional demo records." width="100%">
+    <img src="docs/banner.png" alt="Intern-Bot in its native dark theme: local autofill with 28 site-specific adapters, reusable profiles and answers, and application tracking. The Applications screenshot uses fictional demo records." width="100%">
   </a>
 </p>
 
