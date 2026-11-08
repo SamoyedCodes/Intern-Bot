@@ -336,6 +336,34 @@ async def test_workday_language_dropdown_and_fluency_checkbox(context, store):
     assert await page.locator('input[type=checkbox]').is_checked()
 
 
+
+
+WORKDAY_YEAR = '''<div data-automation-id="myExperiencePage"><h2>Application Questions</h2>
+<div data-automation-id="formField-year"><label id="year-label">Year of Study</label>
+<button type="button" aria-labelledby="year-label" aria-haspopup="listbox" aria-controls="year-choices" onclick="openChoices(this)">Select One</button></div>
+<button type="button" data-automation-id="bottom-navigation-next-button">Next</button></div>
+<script>
+function openChoices(button){
+    if(document.querySelector('#year-choices'))return;
+    const popup=document.createElement('div');popup.dataset.automationWidget='wd-popup';popup.dataset.automationActivepopup='true';
+    popup.innerHTML='<ul id="year-choices" role="listbox"><li role="option">Year 1</li><li role="option">Year 2</li></ul>';
+    popup.querySelectorAll('li').forEach(e=>e.onclick=()=>{button.textContent=e.textContent;popup.remove()});document.body.append(popup);
+}
+</script>'''
+
+
+async def test_a_resumed_workday_dropdown_holding_an_option_id_is_not_a_conflict(context, store):
+    # Once saved, Workday sets the dropdown button's value to the option's internal ID while it still shows the label.
+    page = await open_fixture(context, 'workday', WORKDAY_YEAR)
+    store.save_answer(ApprovedAnswer(question='Year of Study', value='Year 2', scope='global', origin='ai'))
+    run = await apply(store, page, ApplicationRun(job_url=page.url, auto_advance=False), ApplicantProfile())
+    button = page.get_by_role('button', name='Year of Study')
+    assert await button.inner_text() == 'Year 2', run.interventions
+    await button.evaluate("e => e.value = '0e6f215273e20188b807ee855a18819c'")
+    run = await ApplicationEngine(store).resume(store.get_run(run.id), ApplicantProfile(), ExtensionBridge(page, run.id))
+    assert not any(i.kind == 'conflict' for i in run.interventions), run.interventions
+    assert all(f.disposition == 'verified' for f in run.fields.values()), run.interventions
+
 WORKDAY_SPEAKING = '''<div data-automation-id="myExperiencePage"><h2>My Experience</h2>
 <div role="group" aria-labelledby="Languages-section"><h3 id="Languages-section">Languages</h3>
 <button type="button" aria-label="Add Language" onclick="addLanguage()">Add Language</button></div>

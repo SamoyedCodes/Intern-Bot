@@ -55,7 +55,9 @@
       const notice=e.matches('[data-automation-id=ariaLiveMessage]')&&uploaded&&normalize(e.textContent)===normalize(`${uploaded} successfully uploaded`);
       return visible(e)&&e.textContent.trim()&&!notice;
     };
-    const readable = e => e instanceof HTMLSelectElement ? (e.value ? e.selectedOptions[0]?.textContent || '' : '') : ['checkbox','radio'].includes(e.type) ? e.checked : e.value ?? e.textContent;
+    // A Workday dropdown button shows its choice; its value is the option's internal ID once saved.
+    const shownChoice = e => { const text = normalize(e.innerText || e.textContent); return text === 'select one' ? '' : text; };
+    const readable = e => e instanceof HTMLSelectElement ? (e.value ? e.selectedOptions[0]?.textContent || '' : '') : ['checkbox','radio'].includes(e.type) ? e.checked : e.matches?.('button[aria-haspopup=listbox]') ? shownChoice(e) : e.value ?? e.textContent;
     // Employers reformat phone numbers ("55512345" becomes "5551 2345").
     const phone = p => /^profile:phone(_number)?$/.test(p.ref || ''), digits = v => String(v ?? '').replace(/\D/g, '');
     const matches = (e, p) => e.type === 'radio' ? e.checked === (normalize(e.labels?.[0]?.textContent || e.value) === normalize(p.value)) : e.type === 'checkbox' ? e.checked === p.value : phone(p) ? digits(readable(e)) === digits(p.value) : normalize(readable(e)) === normalize(p.value);
@@ -412,7 +414,8 @@
         for(const [selector,p]of Object.entries(policiesBySelector)){
           const e=handles.get(selector);
           // A native adapter's own widgets are set by its choose(); a direct-fill adapter leaves every plain control to approved values.
-          if(e && !site?.custom?.(e) && (p.ref?.startsWith('answer:') || p.ref==='profile:cover_letter' || p.ref==='profile:cover_letter_path' ||
+          // Workday dropdown buttons are chosen by choose(): writing their value changes nothing visible, and the blur closes an open listbox.
+          if(e && !site?.custom?.(e) && !e.matches('button[aria-haspopup=listbox]') && (p.ref?.startsWith('answer:') || p.ref==='profile:cover_letter' || p.ref==='profile:cover_letter_path' ||
             config.adapter==='workday' && !authControls().passwords.length && p.ref?.startsWith('profile:') && e.matches('input:not([type=file]),textarea,select') && !prompt(e) ||
             site?.fill==='direct' && p.ref?.startsWith('profile:') && e.matches('input,textarea,select'))){
             if(e.type==='file')void upload(null,e);
