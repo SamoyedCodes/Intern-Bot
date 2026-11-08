@@ -361,6 +361,10 @@ class RunDetailsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        # Saved answers can be paragraphs; size the lists by a short width, not their longest item, or the dialog outgrows the screen.
+        for combo in self.findChildren(QComboBox):
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(30)
         self.questions.currentTextChanged.connect(self.question_changed)
         self.kind.currentIndexChanged.connect(self.kind_changed)
         self.same.currentIndexChanged.connect(self.kind_changed)

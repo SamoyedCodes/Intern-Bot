@@ -57,6 +57,15 @@ def test_answers_are_saved_from_run_details_and_removed_from_the_bank(window, mo
     assert window.store.answers() == []
 
 
+
+def test_a_paragraph_long_saved_answer_does_not_widen_the_answer_dialog(window):
+    window.store.save_answer(ApprovedAnswer(question='Are you fully vaccinated? ' + 'Fully vaccinated means the full approved regime. ' * 40, value=True, scope='global'))
+    run = ApplicationRun(company='Example', job_url=URL, profile_snapshot=ApplicantProfile(), status='needs_input',
+                         interventions=[InterventionRequest(kind='answer', message='', question='Year of study')])
+    details = RunDetailsDialog(window.store, run)
+    assert details.same.count() == 2
+    assert details.minimumSizeHint().width() < 900
+
 def test_a_reworded_question_joins_a_saved_answer_and_the_wording_can_be_removed(window, monkeypatch):
     run = ApplicationRun(company='Example', job_url=URL, profile_snapshot=ApplicantProfile(), status='needs_input',
                          interventions=[InterventionRequest(kind='answer', message='', question='Internship period')])
