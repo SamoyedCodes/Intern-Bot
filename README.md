@@ -73,6 +73,15 @@ For Workday, choose **Request** mode to answer questions through the API. It nev
 
 Select an application and press its primary action (**Start**, **Resume** or **Retry**; ⌘R or Return), or use **Run queue**. Queues run one at a time and skip submitted applications and anything waiting on you. Pause and cancel stop further adapter writes and pending timers.
 
+### Unsupported sites: teach them once
+
+When a site has no adapter, the application stops with **Teach by filling it in** and **Let AI teach itself**. Either way Intern-Bot saves a *recipe* for that site, so later applications there (another internship at the same company, say) fill without AI.
+
+- **Teach by filling it in.** Fill the application in Chromium as usual, then click **Finish teaching**. Intern-Bot learns which buttons continue and submit, which controls are custom dropdowns, and the confirmation page, and offers to keep the answers you typed. No AI is used.
+- **Let AI teach itself.** The AI fills the application page by page and stops at the review page. It sees field labels, options, button text and your profile field names, never the values. Answers it picks show as *AI · unconfirmed*.
+
+You review each recipe before it's used. A recipe stores no personal values. Until it has seen the site's confirmation page, you submit on that site yourself and press **I submitted it** on the confirmation page.
+
 ### 4. Answer questions
 
 When an application needs a fact or hits a conflict, open **Answer questions**. The dialog moves to the next open question after each save and offers **Resume application** once required questions are answered. The **Needs you** filter shows everything waiting on you.

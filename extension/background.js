@@ -16,7 +16,7 @@ globalThis.internBot = {
       for (const frame of frames) {
         if (!frame.url.startsWith('https://')) continue;
         try {
-          const result = await chrome.tabs.sendMessage(tabs[0].id, {command: 'detect', document: frame.documentId}, {documentId: frame.documentId});
+          const result = await chrome.tabs.sendMessage(tabs[0].id, {command: 'detect', document: frame.documentId, recipes: payload.recipes || []}, {documentId: frame.documentId});
           for (const adapter of result.adapters || []) matches.push({tab: tabs[0].id, frame: frame.frameId, document: frame.documentId, url: frame.url, adapter});
         } catch { /* A loading or inaccessible frame cannot receive personal data. */ }
       }

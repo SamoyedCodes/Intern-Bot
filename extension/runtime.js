@@ -14,6 +14,8 @@
   const receiptName = r => r.getAttribute('data-intern-receipt') || r.querySelector('[data-automation-id=file-upload-item-name]')?.textContent.trim();
   // Hand-written adapters register factories beside the extracted vendor adapters.
   const nativeAdapters = R => (globalThis.internAdapters || []).map(make => make(R));
+  // Site recipes the desktop passes in (extension/adapters/recipe.js), used only where no other adapter matches.
+  const recipeAdapters = (R, recipes) => (recipes || []).map(recipe => globalThis.internRecipeAdapter(R, recipe));
   function runtime(config, token, documentId) {
     const timers = new Set(), intervals = new Set(), frames = new Set(), observers = new Set();
     const abort = new AbortController(), policies = new WeakMap(), proposals = new Map(), denied = new WeakSet();
@@ -98,6 +100,13 @@
       return value;
     }
     function classify(e) {
+      // A recipe's button hint may raise a click to a submission, but lower one to Next only when you were seen doing that.
+      const hint = config.recipe && e.getAttribute('data-intern-action');
+      if (hint === 'submit') return 'submit';
+      const natural = siteClassify(e);
+      return hint === 'next' && (natural !== 'submit' || config.recipe.origin === 'taught') ? 'next' : natural;
+    }
+    function siteClassify(e) {
       const text = normalize(e.innerText || e.value || e.getAttribute('aria-label'));
       const id = `${e.id} ${e.getAttribute('data-automation-id') || ''}`.toLowerCase();
       if (/submit|send application|apply now|finish application/.test(text) || text==='apply' || /submit|btn-submit/.test(id)) return 'submit';
@@ -215,7 +224,7 @@
       }
     };
     // A native adapter's hooks: annotate (labels the scanner can't infer), custom/choose/options (its own widgets), open (link to the form).
-    const site = nativeAdapters(R).find(a => a.id === config.adapter);
+    const site = [...nativeAdapters(R), ...recipeAdapters(R, config.recipe && [config.recipe])].find(a => a.id === config.adapter);
     // hold/busy: the adapter defers fills while the site rewrites the form itself (Monee parses the uploaded resume).
     const policyOf = e => policies.get(e);
     async function upload(file, e) {
@@ -562,7 +571,10 @@
       if(message.command==='detect') {
         // Registry construction only; no adapter starts and no profile is requested.
         const inert={environment:native,call:(o,k,a,opt)=>opt&&o?.[k]==null?undefined:o[k](...a),assign:(o,k,v)=>(o[k]=v),update:(o,k,op,rhs)=>o[k]??(o[k]=rhs())};
-        const adapters=[...createSpeedyAdapters(inert),...nativeAdapters(inert)].filter(a=>(!a.pattern||a.pattern.test(location.href))&&(!a.selector||document.querySelector(a.selector))).map(a=>({id:a.id,name:a.name}));
+        const fits=a=>(!a.pattern||a.pattern.test(location.href))&&(!a.selector||document.querySelector(a.selector));
+        let adapters=[...createSpeedyAdapters(inert),...nativeAdapters(inert)].filter(fits);
+        if(!adapters.length)adapters=recipeAdapters(inert,message.recipes).filter(fits);
+        adapters=adapters.map(a=>({id:a.id,name:a.name}));
         respond({adapters,document:message.document});return;
       }
       if(message.command==='prepare') {active?.R.stop();active=runtime(message.payload,message.token,message.document);}

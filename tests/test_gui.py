@@ -613,6 +613,22 @@ def test_answers_default_to_this_job_except_stable_facts_and_declarations_are_lo
                       'I certify the information above is true': ('application', run.id)}
 
 
+def test_an_unsupported_site_offers_teaching_and_a_draft_recipe_offers_review(window):
+    from core.automation.models import InterventionRequest
+    from core.automation.recipes import Recipe, save_recipe
+    view = window.tasks_view
+    run = ApplicationRun(job_url='https://careers.niche.test/apply/1', status='needs_input',
+                         interventions=[InterventionRequest(kind='browser', message='No supported application form was detected. Open the application form or continue manually.')])
+    view.add_task(run)
+    view.render(select_id=run.id)
+    assert not view.teach_btn.isHidden() and view.self_teach_btn.isHidden()
+    assert view.secondary_actions[view.self_teach_btn].isVisible()
+    assert view.recipe_btn.isHidden() and view.finish_teach_btn.isHidden()
+    save_recipe(window.store, Recipe(host='careers.niche.test', origin='ai'))
+    view.render(select_id=run.id)
+    assert not view.recipe_btn.isHidden() and view.secondary_actions[view.submitted_btn].isVisible()
+
+
 @pytest.mark.parametrize('size', [(1040, 660), (1280, 780)])
 @pytest.mark.parametrize('state', ['ready', 'questions'])
 def test_board_fits_supported_windows_and_keeps_secondary_actions_available(window, size, state):

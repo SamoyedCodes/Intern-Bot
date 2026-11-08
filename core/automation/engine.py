@@ -13,6 +13,7 @@ from pathlib import Path
 from core.automation.speedy_profile import translate
 from core.automation.privacy import configure_privacy
 from core.automation.fields import FormField
+from core.automation.recipes import recipe_for, save_recipe
 
 ENGINE_VERSION = 'speedyapply-local-2.28.0-v2'
 SIGN_IN_HANDOFF = 'Complete employer sign-in or activation in Chromium, then resume. Saved credentials remain in the operating-system keychain; an existing authentication attempt will not be repeated.'
@@ -35,6 +36,7 @@ class ApplicationEngine:
         self.store, self.emit = store, emit or (lambda run: None)
         self._pause = self._cancel = False
         self.bridge = None
+        self.recipe = None  # the approved site recipe driving an otherwise unsupported site
         self.asked = set()  # Normalized labels already sent for AI matching during this run.
 
     def pause(self):
@@ -66,6 +68,7 @@ class ApplicationEngine:
     async def start(self, run, profile, bridge, credential=None):
         self.bridge = bridge
         self._pause = self._cancel = False
+        self.recipe = recipe_for(self.store, run.job_url)
         if run.is_submitted:
             return run
         started = time.monotonic()
@@ -98,7 +101,8 @@ class ApplicationEngine:
                 if employer_key(bridge.page.url) != employer_key(run.job_url):
                     self.intervene(run, 'The tab left the selected employer. Open the selected application before resuming.')
                     return run
-                found = await bridge.discover()
+                self.recipe = recipe_for(self.store, bridge.page.url)
+                found = await bridge.discover([self.recipe.model_dump()] if self.recipe else [])
                 if self._pause or self._cancel:
                     return run
                 matches = found.get('matches', [])
@@ -111,6 +115,7 @@ class ApplicationEngine:
                     self.intervene(run, 'The application frame left the selected employer. Inspect the redirect before resuming.')
                     return run
                 config['adapter'] = match['adapter']['id']
+                config['recipe'] = self.recipe.model_dump() if self.recipe and config['adapter'] == self.recipe.id else None
                 result = await bridge.command('prepare', config, binding=match)
                 if self._pause or self._cancel:
                     return run
@@ -189,6 +194,10 @@ class ApplicationEngine:
                     continue
                 run.authentication_attempted = False
                 verified = self.verify(run, profile, fields, config)
+                if not verified and config['recipe']:
+                    self.recipe.failures += 1
+                    save_recipe(self.store, self.recipe)
+                    self.store.record_event(run.id, 'recipe_stale', run.stage, 'Some fields on this recipe site could not be filled. If the site changed, teach it again or repair it with AI.')
                 # A field's blocked choice (a typeahead suggestion that isn't the approved answer) is asked with the other questions,
                 # even though its typed text reads back as the answer.
                 asked = {i.field_key for i in run.interventions if i.field_key}
@@ -231,6 +240,10 @@ class ApplicationEngine:
                         unconfirmed = self.unconfirmed(run)
                         if unconfirmed:
                             self.intervene(run, f'{unconfirmed} answer{"s" if unconfirmed > 1 else ""} filled by AI need your confirmation. Review the application and approve it again.', 'validation')
+                            return run
+                        if config['recipe'] and not self.recipe.receipt:
+                            # Without a known confirmation page a send could never be confirmed, so it isn't attempted.
+                            self.intervene(run, "This site's recipe doesn't know its confirmation page yet. Submit it yourself in Chromium, then press I submitted it.", 'validation')
                             return run
                         run.submission_attempted = True
                         self.checkpoint(run)
@@ -496,7 +509,7 @@ class ApplicationEngine:
             if len(frames) == 1:
                 receipts = frames[0].locator('[data-automation-id="applicationSubmitted"],#application_confirmation,.application-confirmation,.ashby-application-form-success-message,.thanks,h1,h2,[role=status]')
                 for receipt in await receipts.all():
-                    if await receipt.is_visible() and normalized(await receipt.inner_text()) in {'application submitted','your application has been submitted','thank you for applying','your application has been received'}:
+                    if await receipt.is_visible() and normalized(await receipt.inner_text()) in {'application submitted','your application has been submitted','thank you for applying','your application has been received', *([normalized(self.recipe.receipt)] if self.recipe and self.recipe.receipt else [])}:
                         received = True
                         break
             if received:

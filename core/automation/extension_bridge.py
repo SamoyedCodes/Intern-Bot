@@ -54,9 +54,9 @@ class ExtensionBridge:
             self.binding = response['binding']
         return response
 
-    async def discover(self):
+    async def discover(self, recipes=()):
         for _ in range(20):
-            result = await self.command('discover', {'url': self.page.url})
+            result = await self.command('discover', {'url': self.page.url, 'recipes': list(recipes)})
             if result.get('matches'):
                 return result
             await asyncio.sleep(.1)

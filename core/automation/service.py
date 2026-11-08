@@ -11,7 +11,9 @@ from PySide6.QtCore import QObject, Signal
 from core.automation.engine import ApplicationEngine
 from core.automation.extension_bridge import ExtensionBridge
 from core.automation.models import InterventionRequest, ats_name, canonical_url, employer_key, job_identity, site_key
+from core.automation.recipes import OBSERVE, TEACH, recipe_for, save_recipe
 from core.automation.request_engine import RequestEngine
+from core.automation.self_teach import SelfTeacher
 from core.browser.playwright_mgr import AsyncPlaywrightManager
 
 
@@ -34,6 +36,7 @@ class AutomationService(QObject):
         self.sessions = {}
         self.hosts = {}  # run id -> the one host its tab may navigate to
         self.engines = {}
+        self.teaching = {}  # run id -> pages captured while you teach its site
         self.busy = False
         self.active_id = None
         self._future = None
@@ -128,7 +131,7 @@ class AutomationService(QObject):
         # Only "not found" and "gone" are final: bot checks answer 403 or 503 and then let the page through.
         if response and response.status in {404, 410}:
             return f"The link returned HTTP {response.status}, so the posting can't be opened. Replace the link with the current posting.", []
-        if not ats_name(run.job_url):
+        if not ats_name(run.job_url) and not recipe_for(self.store, run.job_url):
             if ats_name(page.url) and site_key(page.url) != site_key(run.job_url):
                 targets = [page.url]  # The listing redirected straight to its application.
             else:
@@ -170,6 +173,74 @@ class AutomationService(QObject):
             parts = [part for part in parts if part.casefold() != run.company.casefold()] or parts
             run.role = parts[0][:120] if parts else run.role
         self.store.save_run(run)
+
+    # Site recipes. Each works on the run's open Chromium tab; False/None means there is none (resume the application first).
+
+    def _page(self, run_id):
+        session = self.sessions.get(run_id)
+        return session[1].page if session and not session[1].page.is_closed() else None
+
+    def _call(self, coroutine, timeout=15):
+        return asyncio.run_coroutine_threadsafe(coroutine, self.loop).result(timeout)
+
+    def teach_start(self, run_id):
+        """Watch you fill this application: every button click reports the page before it navigates. Nothing is filled or clicked."""
+        page = self._page(run_id)
+        if not page or self.busy:
+            return False
+        self.teaching[run_id] = []
+        def captured(source, observed):
+            if run_id in self.teaching:  # Clicks after teaching ends are ignored.
+                self.teaching[run_id].append(observed)
+        async def install():
+            if not getattr(page, "_intern_teach", False):
+                await page.expose_binding("internTeach", captured)  # Once per tab: Playwright can't unbind.
+                await page.add_init_script(f"({TEACH})()")
+                page._intern_teach = True
+            await page.evaluate(TEACH)
+            await page.bring_to_front()
+        self._call(install())
+        return True
+
+    def is_teaching(self, run_id):
+        return run_id in self.teaching
+
+    def teach_finish(self, run_id):
+        """The clicks captured while teaching and the page as it is now, or None when the tab closed."""
+        captures = self.teaching.pop(run_id, None)
+        page = self._page(run_id)
+        if captures is None or not page:
+            return None
+        return captures, self._call(page.evaluate(OBSERVE))
+
+    def self_teach(self, run, profile, cfg):
+        page = self._page(run.id)
+        if not page or self.busy:
+            return False
+        self.busy, self.active_id, self._stop_request = True, run.id, None
+        async def teach():
+            teacher = SelfTeacher(self.store, self.progress.emit)
+            self.engines[run.id] = teacher
+            try:
+                await page.bring_to_front()
+                await teacher.start(run, profile, page, cfg)
+            finally:
+                self.busy, self.active_id = False, None
+                self.finished.emit(run.model_copy(deep=True))
+        self._future = asyncio.run_coroutine_threadsafe(teach(), self.loop)
+        return True
+
+    def capture_receipt(self, run_id):
+        """After you submit on a recipe site: keep its confirmation heading so later sends can be confirmed."""
+        page = self._page(run_id)
+        recipe = page and recipe_for(self.store, page.url, approved=False)
+        if not recipe or recipe.receipt:
+            return ""
+        observed = self._call(page.evaluate(OBSERVE))
+        heading = next(iter(observed["headings"]), "") if not observed["fields"] else ""
+        if heading:
+            save_recipe(self.store, recipe.model_copy(update={"receipt": heading[:200]}))
+        return heading
 
     def pause(self, run_id, cancel=False):
         if self.active_id == run_id:

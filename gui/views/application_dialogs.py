@@ -4,13 +4,14 @@ from difflib import SequenceMatcher
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QHeaderView, QLineEdit, QListWidget,
+    QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QHeaderView, QLineEdit, QListWidget, QListWidgetItem,
     QMessageBox, QPlainTextEdit, QScrollArea, QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget,
     QTreeWidget, QTreeWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
 from core.automation.answers import applicable, asks, fact_name
 from core.automation.models import ApplicantProfile, ApprovedAnswer, Education, Experience, Language, ats_name, employer_key, normalized, site_key
+from core.automation.recipes import save_recipe
 from core.automation.review import shown_value
 from gui.theme import form_layout, MessageBar, ReadableTree, button, card, dot_icon, label, restyle, shortcut
 
@@ -625,6 +626,66 @@ class ReviewDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+
+class RecipeReviewDialog(QDialog):
+    """A site recipe before it drives later applications: what it learned, and the answers you typed that it would keep."""
+
+    def __init__(self, store, recipe, proposals=(), parent=None):
+        super().__init__(parent)
+        self.store, self.recipe, self.proposals = store, recipe, list(proposals)
+        self.setWindowTitle(f"Save recipe — {recipe.host}")
+        self.resize(640, 560)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(10)
+        layout.addWidget(label(f"Recipe for {recipe.host}", "section"))
+        source = "learned by watching you" if recipe.origin == "taught" else "drafted by the AI filling it"
+        layout.addWidget(label(f"{source.capitalize()}. Later applications on this site fill without AI. It stores no personal values, "
+                               "only how to drive the site; your answers stay in the answer bank.", "muted"))
+        nexts = [b.text or b.css for b in recipe.buttons if b.action == "next"]
+        submits = [b.text or b.css for b in recipe.buttons if b.action == "submit"]
+        layout.addWidget(label("Continue: " + (", ".join(nexts) or "the site's own Next buttons") +
+                               " · Submit: " + (", ".join(submits) or "recognized from its wording"), "caption"))
+        layout.addWidget(label(f"Confirmation page: “{recipe.receipt}”" if recipe.receipt else
+                               "Confirmation page: not known yet. You submit on this site until Intern-Bot sees it once (press I submitted it on that page).", "caption"))
+        fields = QListWidget()
+        for f in recipe.fields:
+            fields.addItem(f"{f.match or f.css} · {f.widget} dropdown" if f.widget != "native" else f"{f.match or f.css} · read as “{f.label}”")
+        layout.addWidget(label("Controls it handles specially", "overline"))
+        layout.addWidget(fields if recipe.fields else label("None. Every field on this site has a plain label.", "caption"))
+        self.answers = QListWidget()
+        for answer in self.proposals:
+            value = f"your profile ({fact_name(answer.fact)})" if answer.fact else ("Yes" if answer.value else "No") if isinstance(answer.value, bool) else str(answer.value)
+            item = QListWidgetItem(f"{answer.question} → {value} · {'everywhere' if answer.scope == 'global' else 'this employer'}")
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            # A declaration is accepted per application, so keeping it for next time is your explicit choice.
+            item.setCheckState(Qt.Unchecked if DECLARATION.search(answer.question) else Qt.Checked)
+            self.answers.addItem(item)
+        if self.proposals:
+            layout.addWidget(label("Answers to keep", "overline"))
+            layout.addWidget(self.answers, 1)
+        buttons = QDialogButtonBox()
+        discard = buttons.addButton("Discard", QDialogButtonBox.DestructiveRole)
+        discard.clicked.connect(self.discard)
+        save = buttons.addButton("Save recipe", QDialogButtonBox.AcceptRole)
+        restyle(save, variant="primary")
+        buttons.accepted.connect(self.save)
+        layout.addWidget(buttons)
+
+    def save(self):
+        save_recipe(self.store, self.recipe.model_copy(update={"approved": True}))
+        for index, answer in enumerate(self.proposals):
+            if self.answers.item(index).checkState() == Qt.Checked:
+                self.store.save_answer(answer)
+        self.accept()
+
+    def discard(self):
+        stored = self.store.get("recipes", {})
+        if not stored.get(self.recipe.host, {}).get("approved"):
+            stored.pop(self.recipe.host, None)  # Only an unapproved draft goes; a recipe you saved earlier stays.
+            self.store.put("recipes", stored)
+        self.reject()
 
 
 class AnswersView(QWidget):

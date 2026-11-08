@@ -87,6 +87,19 @@ TASKS = {
                 '{"value": "answer"} only when career facts are supplied and state the answer outright: a short factual answer, exactly one listed option when options are given; '
                 "null for anything else, including opinions, essays and anything you would have to guess. "
                 'Reply with only a JSON object with one entry per question id, like {"q1": {"fact": "email"}, "q2": {"saved": "s3"}, "q3": null}.',
+    "self_teach": "You are filling one page of a job application form, described as data: fields (f1, f2, …) with their label, kind, options "
+                  "and a short control outline, the page's buttons (b0, b1, …), saved questions and the names of the applicant's profile facts. "
+                  "For each field choose how to fill it: "
+                  '"widget": "native" for plain inputs, selects, checkboxes and radios, "aria-combobox" for a searchable custom dropdown '
+                  '(role=combobox), "click-list" for a custom dropdown you open by clicking; '
+                  'when the field is not answered and may_answer is true, also exactly one of {"saved": "s3"} when that saved question asks for '
+                  'exactly the same fact, {"fact": "key"} when that profile fact answers it directly (append ".year" or ".month" for part of a date), '
+                  'or {"value": "answer"} only when career facts are supplied and state it outright (exactly one listed option when options are given); '
+                  'when the field is marked unlabelled, add "label": the plain question it asks, judged from its outline and options. '
+                  "Never answer opinions, essays, consents or anything you would have to guess. "
+                  'Then choose "advance": the id of the button that continues to the next page (never one whose kind is submit), '
+                  'or "done": "review" when this is the final review page with only a submit button left, or "done": "blocked" with a short "reason". '
+                  'Reply with only a JSON object like {"fields": {"f1": {"widget": "native", "fact": "email"}, "f2": {"widget": "aria-combobox"}}, "advance": "b3"}.',
     "ping": "Reply with only the word OK.",
 }
 TEST_TOKENS = 16  # The cheapest reply every provider accepts (OpenAI's minimum).

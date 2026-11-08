@@ -12,13 +12,16 @@ from PySide6.QtWidgets import (
 )
 
 from core.automation.accounts import login_address
+from core.automation.assistant import ai_config
+from core.automation.recipes import build_from_capture, recipe_for
+from core.automation.self_teach import consent_text
 from core.automation.models import ApplicantProfile, ApplicationRun, InterventionRequest, ats_name, canonical_url, job_identity, now, site_key
 from core.automation.review import review_values
 from core.automation.service import AutomationService
 from core.storage.local_store import LocalStore
 from core.tracker import PIPELINE, activity, export_csv, import_csv
 from gui.theme import TOKENS, form_layout, MessageBar, button, card, dot_icon, label, more_button, restyle, shortcut
-from gui.views.application_dialogs import ProfileDialog, ReviewDialog, RunDetailsDialog
+from gui.views.application_dialogs import ProfileDialog, RecipeReviewDialog, ReviewDialog, RunDetailsDialog
 
 BULK_LABELS = {"retry": "Retry failed", "restart": "Restart from beginning", "cancel": "Cancel tasks", "delete": "Delete tasks"}
 GROUPS = ("All", "Needs you", "In progress", "Applied", "Closed")
@@ -39,6 +42,11 @@ FINISHED = {
 def receipt_unconfirmed(run):
     """Send was clicked once but no employer receipt was recognized: never offer Send again."""
     return run.submission_attempted and not run.is_submitted
+
+
+def unsupported(run):
+    """Stopped because no adapter or recipe knows this site: it can be taught."""
+    return run.status == "needs_input" and any(i.message.startswith("No supported application form") for i in run.interventions)
 
 
 def awaiting_verification(run):
@@ -479,7 +487,12 @@ class TasksView(QWidget):
         self.recheck_btn = button("Recheck", self.start_selected, tip="Read the draft again after you edit it, and refresh the review")
         self.pause_btn = button("Pause", self.pause, tip="Stop adapter writes and pending waits")
         self.submitted_btn = button("I submitted it", self.mark_submitted)
-        self.action_buttons = (self.replace_btn, self.answer_btn, self.review_btn, self.start_btn, self.recheck_btn, self.pause_btn)
+        self.finish_teach_btn = button("Finish teaching", self.finish_teach, tip="Turn what you just did into a recipe for this site")
+        self.recipe_btn = button("Review recipe", self.review_recipe, tip="See what the AI learned about this site, then save or discard it")
+        self.teach_btn = button("Teach this site", self.teach, tip="Fill this application yourself; Intern-Bot learns the site for next time")
+        self.self_teach_btn = button("Fill with AI…", self.ai_teach, tip="The AI fills this application and learns the site for next time")
+        self.action_buttons = (self.finish_teach_btn, self.recipe_btn, self.replace_btn, self.answer_btn, self.review_btn, self.teach_btn,
+                               self.self_teach_btn, self.start_btn, self.recheck_btn, self.pause_btn)
         self._tips = {widget: widget.toolTip() for widget in self.action_buttons}
         for widget in (*self.action_buttons, self.submitted_btn):
             actions.addWidget(widget)
@@ -728,8 +741,11 @@ class TasksView(QWidget):
             self.d_role.setText(run.role)
             self.d_dot.setPixmap(dot_icon(tone).pixmap(16, 16))
             self.d_status.setText(text)
-            self.d_platform.setText((ats_name(run.job_url) or "Unrecognized site") + (" · Request mode" if run.mode == "request" else ""))
+            recipe = recipe_for(self.store, run.job_url)
+            self.d_platform.setText((ats_name(run.job_url) or (recipe and "Taught site") or "Unrecognized site") + (" · Request mode" if run.mode == "request" else ""))
             messages = [request.message for request in run.interventions]
+            if unsupported(run):
+                messages = ["This site needs a filling guide. Teach it once, or choose Fill with AI from More actions."]
             self.callout.setText("\n".join(dict.fromkeys(messages)))
             self.callout.setVisible(bool(messages))
             total = len(run.fields)
@@ -770,10 +786,21 @@ class TasksView(QWidget):
         self.answer_btn.setVisible(idle and any(i.question for i in run.interventions))
         self.review_btn.setVisible(ready)
         self.recheck_btn.setVisible(ready)
+        teaching = bool(run) and self.service.is_teaching(run.id)
+        draft = recipe_for(self.store, run.job_url, approved=False) if run else None
+        teachable = idle and not teaching and (unsupported(run) or bool(draft) and status == "needs_input")
+        self.finish_teach_btn.setVisible(teaching)
+        self.recipe_btn.setVisible(idle and not teaching and bool(draft) and not draft.approved)
+        self.teach_btn.setVisible(teachable)
+        self.self_teach_btn.setVisible(teachable)
+        if teaching:
+            for widget in (self.replace_btn, self.answer_btn, self.start_btn, self.recheck_btn, self.review_btn):
+                widget.setVisible(False)
         self.submitted_btn.setText("Record employer confirmation" if sent else "I submitted it")
-        self.submitted_btn.setVisible(ready or (idle and sent))
+        # After teaching, you submit on a recipe site yourself until it knows the confirmation page.
+        self.submitted_btn.setVisible(ready or (idle and sent) or (idle and bool(draft) and status == "needs_input"))
         # The last verified review stays readable while another application runs; only sending waits.
-        for widget in (self.replace_btn, self.answer_btn, self.start_btn, self.recheck_btn):
+        for widget in (self.replace_btn, self.answer_btn, self.start_btn, self.recheck_btn, self.teach_btn, self.self_teach_btn):
             widget.setEnabled(not busy)
             widget.setToolTip("Another application is running. Pause it or wait." if busy else self._tips[widget])
         primary = next((b for b in self.action_buttons if not b.isHidden()), None)
@@ -894,6 +921,8 @@ class TasksView(QWidget):
 
     def eligible(self, run, action):
         active = run.id == self._active_id or run.status == "running"
+        if self.service.is_teaching(run.id):
+            return False
         if action == "delete":
             return not active
         if action == "cancel" and active:
@@ -1173,9 +1202,81 @@ class TasksView(QWidget):
         self._queue = [i for i in self._queue if i != run.id]
         self.store.record_event(run.id, "submitted_by_user", run.stage, "User confirmed employer submission receipt.")
         self.store.save_run(run)
+        try:
+            heading = self.service.capture_receipt(run.id)
+        except Exception:
+            heading = ""  # The tab closed or moved on; the recipe learns its confirmation page next time.
+        if heading:
+            self.store.record_event(run.id, "recipe_receipt", run.stage, f"This site's recipe now recognizes its confirmation page (“{heading}”).")
         self._shown_id = None  # reload the tracking fields with the new stage
         self.render(select_id=run.id)
         self.notify("Recorded as submitted. Track its stage and notes here.", "success")
+
+    # Site recipes
+
+    def _profile(self, run):
+        return run.profile_snapshot or ApplicantProfile.model_validate(self.store.get("verified_profile", {}))
+
+    def teach(self):
+        run = self.selected()
+        if not run or self._active_id:
+            self.notify("Pause the running application before teaching a site.", "warning")
+            return
+        if not self.service.teach_start(run.id):
+            self.notify("Resume the application first so it's open in Chromium, then teach it.", "warning")
+            return
+        self.render()
+        self.notify("Teaching: fill in the application in Chromium and click through it as usual (submitting is up to you). Then click Finish teaching.")
+
+    def finish_teach(self):
+        run = self.selected()
+        if not run:
+            return
+        result = self.service.teach_finish(run.id)
+        self.render()
+        if not result or not result[0]:
+            self.notify("Nothing was learned: the Chromium tab closed or no button was clicked while teaching.", "warning")
+            return
+        captures, final = result
+        recipe, proposals = build_from_capture(site_key(final["url"]), captures, final, self._profile(run), run, self.store.answers())
+        previous = recipe_for(self.store, final["url"], approved=False)
+        recipe = previous.merged(recipe) if previous else recipe
+        if RecipeReviewDialog(self.store, recipe, proposals, self).exec() == QDialog.Accepted:
+            self.notify(f"Recipe saved. New applications on {recipe.host} fill from it. If you submitted this one, press I submitted it.", "success")
+        self.render()
+
+    def ai_teach(self):
+        run = self.selected()
+        if not run or self._active_id:
+            self.notify("Pause the running application before letting AI teach itself.", "warning")
+            return
+        try:
+            cfg = ai_config(self.store)
+        except Exception:
+            cfg = None
+        if not cfg:
+            self.notify("Set up an AI provider in Settings first.", "warning")
+            return
+        host = site_key(run.job_url)
+        consented = self.store.get("self_teach_consent", [])
+        if host not in consented:
+            if QMessageBox.question(self, f"Let AI teach itself — {host}", consent_text(cfg)) != QMessageBox.Yes:
+                return
+            self.store.put("self_teach_consent", consented + [host])
+        if not self.service.self_teach(run.model_copy(deep=True), self._profile(run), cfg):
+            self.notify("Resume the application first so it's open in Chromium, then let AI teach itself.", "warning")
+            return
+        self._active_id = run.id
+        run.status, run.interventions = "running", []
+        self.render()
+        self.notify("The AI is filling the application in Chromium. It stops at the review page and never submits.")
+
+    def review_recipe(self):
+        run = self.selected()
+        draft = run and recipe_for(self.store, run.job_url, approved=False)
+        if draft and not draft.approved and RecipeReviewDialog(self.store, draft, (), self).exec() == QDialog.Accepted:
+            self.notify(f"Recipe saved. New applications on {draft.host} fill from it.", "success")
+        self.render()
 
     def delete_selected(self):
         run = self.selected()

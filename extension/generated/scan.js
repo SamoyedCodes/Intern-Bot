@@ -8,6 +8,10 @@ globalThis.scanInternFields = (rootSelector) => {
     // Workday's utility bar includes a language listbox, not an applicant question.
     .filter(e => (visible(e) || e.type === 'file') && e.getAttribute('data-automation-id') !== 'beecatcher' && !e.closest('[role=listbox],[data-automation-id="utilityButtonBar"]'));
   const counts = new Map();
+  // Native validity misleads where the site keeps the answer elsewhere: an adapter-read dropdown's emptied search input,
+  // or one box of a required checkbox group that another ticked box already satisfies. The site's own aria-invalid still counts.
+  const nativeInvalid = e => !!(e.validity && !e.validity.valid) && !e.hasAttribute('data-intern-value') &&
+    !(e.type === 'checkbox' && e.name && [...root.querySelectorAll('input[type=checkbox]')].some(c => c.name === e.name && c.checked));
   return controls.filter(e => !controls.some(p => p !== e && p.contains(e))).map((e, index) => {
     const labelled = (e.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => text((root.getElementById ? root : document).getElementById(id))).filter(Boolean).join(' ');
     const ownLabel = [...(e.labels || [])].map(labelText).join(' ');
@@ -20,8 +24,12 @@ globalThis.scanInternFields = (rootSelector) => {
     const resumeUpload = (e.type === 'file' || uploaded) && uploadContainer;
     // Workday listbox aria-labels include the selection; use the stable associated label.
     const listboxLabel = e.getAttribute('aria-haspopup') === 'listbox' ? ownLabel || text(fieldset?.querySelector('legend')) : '';
+    // A question's own label beside its options or unlabelled input (Chakra forms such as FormSG).
+    const choiceGroup = e.closest('[role=group]');
+    const question = choiceGroup && [...choiceGroup.querySelectorAll('legend,label')].find(l => !l.querySelector('input'));
+    const groupQuestion = question ? labelText(question).replace(/\s*[*✱]\s*$/, '') : '';
     // A native adapter names controls the generic rules cannot (data-intern-label/-kind/-value).
-    let label = e.getAttribute('data-intern-label') || listboxLabel || labelled || e.getAttribute('aria-label') || ownLabel || text(fieldset?.querySelector('legend,label')) || (resumeUpload ? 'Resume' : '') || e.getAttribute('data-automation-id') || e.name || '';
+    let label = e.getAttribute('data-intern-label') || listboxLabel || labelled || e.getAttribute('aria-label') || ownLabel || text(fieldset?.querySelector('legend,label')) || (resumeUpload ? 'Resume' : '') || groupQuestion || e.getAttribute('data-automation-id') || e.name || '';
     if (e.type === 'checkbox' && e.closest('[data-automation-id$="-CheckboxGroup"]')) {
       const question = text(e.closest('[data-automation-id^="formField-"]')?.querySelector('legend'));
       if (question) label = question + ' — ' + label;
@@ -42,7 +50,9 @@ globalThis.scanInternFields = (rootSelector) => {
     const row = Math.max(0, rows.findIndex(r => r.contains(e)));
     const type = e.getAttribute('data-intern-kind') || (uploaded ? 'file' : prompt || e.getAttribute('aria-haspopup') === 'listbox' ? 'combobox' : e.getAttribute('role') || e.type || e.tagName.toLowerCase());
     const radio = type === 'radio';
-    if (radio && fieldset) label = text(fieldset.querySelector('legend,[data-question]')) || fieldset.getAttribute('aria-label') || label;
+    if (radio) label = (fieldset && (text(fieldset.querySelector('legend,[data-question]')) || fieldset.getAttribute('aria-label') || labelText(fieldset.querySelector(':scope > label:not(:has(input))') || document.createElement('i')))) || groupQuestion || label;
+    if (type === 'checkbox' && !e.closest('[data-automation-id$="-CheckboxGroup"]') && groupQuestion && choiceGroup.querySelectorAll('input[type=checkbox]').length > 1 && label !== groupQuestion)
+      label = groupQuestion + ' — ' + label;
     const base = `${group}:${row}:${label.toLowerCase()}:${radio ? e.name : ''}`;
     const ordinal = counts.get(base) || 0;
     counts.set(base, ordinal + 1);
@@ -50,7 +60,7 @@ globalThis.scanInternFields = (rootSelector) => {
     // The selector is an ephemeral handle; durable identity uses section, row and label.
     e.setAttribute('data-intern-control', String(index));
     // Each radio is its own control; its options are every choice of its question, so an answer can be picked rather than typed.
-    const choiceText = r => [...(r.labels || [])].map(labelText).join(' ') || r.getAttribute('aria-label') || r.value;
+    const choiceText = r => [...(r.labels || [])].map(labelText).join(' ') || r.getAttribute('aria-label') || r.value || text(r);
     const choices = !radio ? [] : e.name ? [...root.querySelectorAll('input[type=radio]')].filter(r => r.name === e.name) : [...(fieldset?.querySelectorAll('[role=radio],input[type=radio]') || [e])];
     const options = e.tagName === 'SELECT' ? [...e.options].map(o => o.text.trim()) : radio ? choices.map(choiceText) : selected;
     let value = e.isContentEditable ? e.textContent : ('value' in e ? e.value : text(e));
@@ -69,7 +79,7 @@ globalThis.scanInternFields = (rootSelector) => {
       split_phone: e.id === 'phoneNumber--phoneNumber' && !!root.querySelector('[id="phoneNumber--countryPhoneCode"]'),
       required: dateRequired || !!e.required || e.getAttribute('aria-required') === 'true' || /[*✱✳]/.test(label),
       disabled: !!e.disabled || e.getAttribute('aria-disabled') === 'true',
-      invalid: [...(e.closest('fieldset,[data-automation-id="formField"]')?.querySelectorAll('[data-automation-id="inputAlert"]') || [])].some(a=>visible(a)&&text(a)) || e.getAttribute('aria-invalid') === 'true' || !!(e.validity && !e.validity.valid) || (uploaded && (!receipt.querySelector('[data-automation-id="file-upload-successful"]') || uploadContainer.querySelectorAll('[data-automation-id="file-upload-item"]').length !== 1)),
+      invalid: [...(e.closest('fieldset,[data-automation-id="formField"]')?.querySelectorAll('[data-automation-id="inputAlert"]') || [])].some(a=>visible(a)&&text(a)) || e.getAttribute('aria-invalid') === 'true' || nativeInvalid(e) || (uploaded && (!receipt.querySelector('[data-automation-id="file-upload-successful"]') || uploadContainer.querySelectorAll('[data-automation-id="file-upload-item"]').length !== 1)),
       readonly: !!e.readOnly};
   });
 }
