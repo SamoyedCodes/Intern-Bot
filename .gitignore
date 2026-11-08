@@ -22,3 +22,7 @@ nodriver_profile/
 
 # Extension build dependencies
 node_modules/
+
+# Local agent and tool output
+.claude/
+graphify-out/
