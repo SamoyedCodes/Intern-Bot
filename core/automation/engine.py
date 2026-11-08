@@ -188,14 +188,16 @@ class ApplicationEngine:
                     await bridge.stop()
                     continue
                 run.authentication_attempted = False
-                if not self.verify(run, profile, fields, config):
+                verified = self.verify(run, profile, fields, config)
+                # A field's blocked choice (a typeahead suggestion that isn't the approved answer) is asked with the other questions,
+                # even though its typed text reads back as the answer.
+                asked = {i.field_key for i in run.interventions if i.field_key}
+                problems = [p for p in settled['problems'] if verified or (p.get('field') and p['field'] not in asked)]
+                for problem in problems:
+                    field = next((f for f in fields if f.key == problem.get('field')), None)
+                    self.intervene(run, problem['message'], problem['kind'], field)
+                if not verified or problems:
                     await self.list_options(run, profile, fields)
-                    return run
-                problems = settled['problems']
-                if problems:
-                    for problem in problems:
-                        field = next((f for f in fields if f.key == problem.get('field')), None)
-                        self.intervene(run, problem['message'], problem['kind'], field)
                     return run
                 if settled.get('errors'):
                     self.intervene(run, 'The application reports validation errors. Correct them before continuing.', 'validation')

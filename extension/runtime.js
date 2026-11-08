@@ -443,6 +443,16 @@
           const found=await search(e,query||text);dismiss(e,text);
           return found.map(optionText);
         }
+        // A typeahead (Ashby's location) lists suggestions only for typed text: the approved answer, else what is already typed.
+        if(e?.isConnected&&e.matches('input[role=combobox],input[aria-haspopup=listbox]')){
+          const text=e.value;
+          if(!(query||text))return [];
+          const items=()=>[...(document.getElementById(e.getAttribute('aria-controls'))?.querySelectorAll('[role=option]')||[])];
+          e.focus();typeText(e,'');typeText(e,query||text);
+          for(let i=0;i<20&&!items().length;i++)await pause(100);
+          const found=items().map(o=>o.textContent.trim());dismiss(e,text);
+          return found;
+        }
         const items=await listbox(e);
         if(items.length)close(e);
         return items.map(o=>o.textContent.trim());

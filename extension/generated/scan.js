@@ -49,7 +49,10 @@ globalThis.scanInternFields = (rootSelector) => {
     const key = `${base}:${ordinal}`;
     // The selector is an ephemeral handle; durable identity uses section, row and label.
     e.setAttribute('data-intern-control', String(index));
-    const options = e.tagName === 'SELECT' ? [...e.options].map(o => o.text.trim()) : selected;
+    // Each radio is its own control; its options are every choice of its question, so an answer can be picked rather than typed.
+    const choiceText = r => [...(r.labels || [])].map(labelText).join(' ') || r.getAttribute('aria-label') || r.value;
+    const choices = !radio ? [] : e.name ? [...root.querySelectorAll('input[type=radio]')].filter(r => r.name === e.name) : [...(fieldset?.querySelectorAll('[role=radio],input[type=radio]') || [e])];
+    const options = e.tagName === 'SELECT' ? [...e.options].map(o => o.text.trim()) : radio ? choices.map(choiceText) : selected;
     let value = e.isContentEditable ? e.textContent : ('value' in e ? e.value : text(e));
     if (type === 'combobox' && e.tagName === 'BUTTON') value = text(e);
     if (prompt) value = selected.join(', ');
@@ -60,7 +63,7 @@ globalThis.scanInternFields = (rootSelector) => {
     if (uploaded) value = text(receipt.querySelector('[data-automation-id="file-upload-item-name"]'));
     if (e.hasAttribute('data-intern-value')) value = e.getAttribute('data-intern-value');
     if (e.type === 'password') value = ''; // Never return a password to the scanner.
-    const option = radio ? ownLabel || e.getAttribute('aria-label') || e.value : '';
+    const option = radio ? choiceText(e) : '';
     return {key, label: label.replace(/\s*\*\s*$/, '').trim(), selector: `[data-intern-control="${index}"]`,
       kind: type, value, options, option, group, row, uploaded,
       split_phone: e.id === 'phoneNumber--phoneNumber' && !!root.querySelector('[id="phoneNumber--countryPhoneCode"]'),

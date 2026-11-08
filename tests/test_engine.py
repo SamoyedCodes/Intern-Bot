@@ -904,3 +904,39 @@ async def test_a_change_after_approval_needs_a_fresh_approval(context, store, tm
     assert run.status == 'ready_for_review' and not run.submission_attempted and not run.approved_review, run.interventions
     assert ('Preferred start month' if change == 'answer' else 'Documents') in run.interventions[0].message
     assert not await page.evaluate('Boolean(window.submissions)')
+
+
+# Ashby's location typeahead lists places only for typed text, keeps unpicked text, and gives its popup an id only while open.
+ASHBY_LOCATION = '''<div aria-labelledby="job-application-form"><div class="ashby-application-form-section-container">
+<div data-field-path=loc><label for=loc>Location</label><div><input id=loc role=combobox aria-haspopup=listbox aria-expanded=false></div></div>
+<fieldset><legend>Are you a Singapore citizen?</legend><span><input type=radio name=c id=c0></span><label for=c0>Yes</label>
+<span><input type=radio name=c id=c1></span><label for=c1>No</label></fieldset></div></div>
+<script>
+const places=['Singapore','South Georgia and the South Sandwich Islands','Spain'], box=document.querySelector('[role=combobox]');
+const close=()=>{document.getElementById('lb')?.remove();box.removeAttribute('aria-controls');};
+box.addEventListener('input',()=>{close();const q=box.value.toLowerCase();if(!q)return;
+  const lb=document.createElement('div');lb.id='lb';lb.setAttribute('role','listbox');
+  lb.innerHTML=places.filter(p=>q==='sg'?p!=='Spain':p.toLowerCase().includes(q)).map(p=>`<div role=option>${p}</div>`).join('');
+  lb.addEventListener('click',ev=>{box.value=window.picked=ev.target.textContent;close();});
+  document.body.append(lb);box.setAttribute('aria-controls','lb');});
+box.addEventListener('keydown',ev=>{if(ev.key==='Escape')close();});
+</script>'''
+
+
+async def test_an_ashby_location_lists_its_suggestions_and_selects_the_approved_place(context, store):
+    page = await open_fixture(context, '', ASHBY_LOCATION, 'https://jobs.ashbyhq.com/example/1/application')
+    profile = ApplicantProfile(country='SG')
+    run = ApplicationRun(job_url=page.url, auto_advance=False)
+    # As an AI link to the profile's country would: the adapter types "SG" and clicks the first suggestion, which isn't "SG".
+    store.save_answer(ApprovedAnswer(question='Location', fact='country', scope='global', profile_name=run.profile_name))
+    run = await apply(store, page, run, profile)
+    # Asked together: the unanswered radio, and the location whose typed "SG" reads back as the answer but was never picked.
+    asked = {i.question: i.options for i in run.interventions}
+    assert asked == {'Location': ['Singapore', 'South Georgia and the South Sandwich Islands'], 'Are you a Singapore citizen?': ['Yes', 'No']}, run.interventions
+    assert not await page.evaluate('window.picked')
+    store.save_answer(ApprovedAnswer(question='Location', value='Singapore', scope_key=run.id, profile_name=run.profile_name))
+    store.save_answer(ApprovedAnswer(question='Are you a Singapore citizen?', value='Yes', scope_key=run.id, profile_name=run.profile_name))
+    run = await apply(store, page, run, profile)
+    assert await page.evaluate('window.picked') == 'Singapore'
+    assert await page.locator('#c0').is_checked()
+    assert not any(i.question for i in run.interventions), run.interventions
