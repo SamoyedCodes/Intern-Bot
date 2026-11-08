@@ -26,7 +26,8 @@ class ApplicationEngine:
     RECEIPT_POLLS = 20
     AUTH_POLLS = 40
     # The page's adapter stops 20 s after it starts, so fills must not wait on a slow AI reply.
-    AI_MATCH_SECONDS = 5
+    # A session's first cloud call also loads the SDK and opens a connection: ~5-6 s with Claude, seen live.
+    AI_MATCH_SECONDS = 10
     AI_LOCAL_SECONDS = 30  # A local model may need to load into memory first.
 
     def __init__(self, store, emit=None):
