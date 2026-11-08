@@ -90,7 +90,8 @@
       // React (Workday) only notices checkbox and radio changes made by a click; a radio cannot be clicked off.
       if (key === 'checked') {if (e.checked !== desired && (desired || e.type === 'checkbox')) e.click();}
       else if (setter) {
-        if(e.matches('[role=spinbutton]')&&e.closest('[data-automation-id=dateInputWrapper]'))e.focus();
+        // Workday saves date parts and textareas on blur, and blur() only fires on a focused control.
+        if(e instanceof HTMLTextAreaElement||e.matches('[role=spinbutton]')&&e.closest('[data-automation-id=dateInputWrapper]'))e.focus();
         setter.call(e, desired);
       } else e[key] = desired;
       denied.delete(e); lastChange = performance.now(); e.removeAttribute('data-intern-site-filled');

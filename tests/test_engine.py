@@ -762,6 +762,17 @@ async def test_workday_date_parts_commit_on_blur_and_expose_group_validation(con
     assert not engine.verify(run, profile, fields, config)
 
 
+async def test_workday_textarea_answer_commits_on_blur(context, store):
+    # Workday's textareas save their typed value to React state only when they lose focus.
+    html = '''<div data-automation-id="primaryQuestionnairePage">
+    <label for=q>Career Aspirations*</label><textarea id=q required onblur="window.saved=this.value"></textarea></div>'''
+    page = await open_fixture(context, 'workday', html)
+    run = ApplicationRun(job_url=page.url, auto_advance=False)
+    store.save_answer(ApprovedAnswer(question='Career Aspirations', value='Facility management', scope_key=run.id))
+    await prepare(page, store, 'workday', ApplicantProfile(), run)
+    assert await page.evaluate('window.saved') == 'Facility management'
+
+
 @pytest.mark.parametrize('replace,stop', [(False,False),(True,False),(True,True)])
 async def test_workday_saved_resume_is_replaced_only_by_an_explicit_file_answer(context, store, tmp_path, replace, stop):
     import hashlib
