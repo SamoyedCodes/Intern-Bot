@@ -801,6 +801,27 @@ async def test_workday_saved_resume_is_replaced_only_by_an_explicit_file_answer(
     assert field['file_digest'] == (hashlib.sha256(resume.read_bytes()).hexdigest() if replace else '')
 
 
+async def test_workday_resume_still_rendering_after_replacement_is_not_a_conflict(context, store, tmp_path):
+    # Workday shows a new upload's receipt (loading, no delete button) after the scan; a re-authorize must not take it for the old file.
+    resume = tmp_path / 'new.pdf'
+    resume.write_bytes(b'new fixture resume')
+    html = '''<div data-automation-id=myExperiencePage><div aria-labelledby="Resume/CV-section" role=group>
+    <input type=file onchange="this.files=new DataTransfer().files;setTimeout(()=>this.insertAdjacentHTML('afterend',`<div data-automation-id='file-upload-item' id=fresh><span data-automation-id='file-upload-item-name'>new.pdf</span> loading</div>`),300)">
+    <div data-automation-id=file-upload-item><span data-automation-id=file-upload-item-name>old.pdf</span><span data-automation-id=file-upload-successful>Successfully Uploaded!</span>
+    <button type=button data-automation-id=delete-file onclick="window.deletes=(window.deletes||0)+1;this.parentElement.remove()">Delete old.pdf</button></div>
+    </div></div>'''
+    page = await open_fixture(context, 'workday', html)
+    store.save_answer(ApprovedAnswer(question='Resume', value=str(resume), scope='global'))
+    profile = ApplicantProfile(resume_path=str(resume))
+    bridge, engine, run, _, _ = await prepare(page, store, 'workday', profile)
+    fields = [FormField(**f) for f in (await bridge.command('scan'))['fields']]
+    await page.wait_for_selector('#fresh')
+    await engine.authorize(run, profile, fields)
+    await page.wait_for_timeout(200)
+    assert not [p for p in (await bridge.command('snapshot'))['problems'] if p['kind'] == 'conflict']
+    assert await page.evaluate('window.deletes') == 1
+
+
 async def test_workday_reordered_saved_jobs_keep_their_own_profile_policies(context, store):
     html = '''<div data-automation-id=myExperiencePage><div data-intern-group=experience>
     <div data-intern-row><label>Company<input value="Second Co"></label><label>Job Title<input value="Tutor"></label><label>I currently work here<input type=checkbox checked></label></div>

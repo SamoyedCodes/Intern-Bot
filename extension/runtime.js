@@ -237,8 +237,8 @@
       }
       const container=e.closest(UPLOADS);
       const receipt=container?.querySelector(RECEIPTS), proof=container&&verifiedUploads.get(container);
-      // The site may still be processing this exact file (Monee uploads, then parses); sending it again would duplicate it.
-      if(!receipt&&proof?.digest===descriptor.digest&&performance.now()-proof.at<30000)return false;
+      // The site may still be processing this exact file (Monee parses it; Workday shows it loading, with no delete button yet); sending it again would duplicate it.
+      if(!proof?.receipt&&proof?.digest===descriptor.digest&&performance.now()-proof.at<30000)return false;
       if(receipt){
         if(proof?.receipt===receipt&&proof.digest===descriptor.digest)return true;
         const remove=receipt.querySelector('button[data-automation-id=delete-file]');
