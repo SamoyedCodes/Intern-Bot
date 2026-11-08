@@ -73,7 +73,9 @@ async def run_request(context, store, tenant, run=None, credential=None):
     page = await context.new_page()
     await page.route('**/*', tenant.handle)
     run = run or ApplicationRun(job_url=URL, mode='request')
-    await RequestEngine(store).answer_questions(run, profile_for('workday'), SimpleNamespace(page=page, binding=None), credential)
+    # These scenarios supply authorization answers explicitly rather than using the profile's default Yes.
+    profile = profile_for('workday').model_copy(update={'work_authorized': None})
+    await RequestEngine(store).answer_questions(run, profile, SimpleNamespace(page=page, binding=None), credential)
     return run, page
 
 
@@ -107,6 +109,7 @@ async def test_an_unanswered_question_offers_workdays_own_options_and_writes_not
     run, _ = await run_request(context, store, tenant)
     assert not tenant.posts and run.status == 'needs_input'
     [request] = run.interventions
+    assert request.question == 'Are you legally authorized to work in Singapore?'
     assert request.options == ['Yes', 'No'] and request.field_kind == 'combobox' and request.required
 
 
