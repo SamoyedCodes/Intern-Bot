@@ -14,7 +14,7 @@ from core.automation.models import ApplicantProfile, ApprovedAnswer, Education, 
 from core.automation.review import shown_value
 from gui.theme import form_layout, MessageBar, ReadableTree, button, card, dot_icon, label, restyle, shortcut
 
-BOOLEAN_FIELDS = {"work_authorized_us", "requires_sponsorship", "hispanic_or_latino"}
+BOOLEAN_FIELDS = {"work_authorized", "requires_sponsorship", "hispanic_or_latino"}
 ROW_BOOLEANS = {"current", "fluent"}
 LONG_FIELDS = {"summary", "cover_letter"}
 FILE_FIELDS = {"resume_path": "Choose resume", "cover_letter_path": "Choose cover letter"}
@@ -25,7 +25,7 @@ SECTIONS = [
     ("Contact", "Where employers should reach you.", ["email", "phone", "phone_country_code", "phone_number", "phone_device_type", "address_line1", "address_line2", "city", "region", "postal_code", "country"]),
     ("Documents", "Uploaded with their original bytes and file type.", ["resume_path", "cover_letter_path", "cover_letter"]),
     ("Links", "", ["linkedin_url", "github_url", "portfolio_url"]),
-    ("Work eligibility", "Leave a question as Unknown to be asked for each application.", ["work_authorized_us", "requires_sponsorship", "employment_age"]),
+    ("Citizenship & eligibility", "For Singapore jobs, work authorization defaults to Yes. Leave a field blank or Unknown to answer for each application.", ["work_authorized", "requires_sponsorship", "citizenship", "nationality", "employment_age"]),
     ("About you", "", ["summary", "skills", "languages"]),
     ("Education", DATE_HINT, "education"),
     ("Experience", DATE_HINT, "experience"),
@@ -45,7 +45,8 @@ LABELS = {
     "cover_letter": ("Cover letter text", "Used where a form asks for text instead of a file"),
     "linkedin_url": ("LinkedIn", "https://www.linkedin.com/in/…"), "github_url": ("GitHub", "https://github.com/…"),
     "portfolio_url": ("Portfolio or website", "https://…"),
-    "work_authorized_us": ("Authorized to work in the US", ""), "requires_sponsorship": ("Will require visa sponsorship", ""),
+    "work_authorized": ("Authorized to work in job's country", ""), "requires_sponsorship": ("Will require visa sponsorship", ""),
+    "citizenship": ("Citizenship (country)", "e.g. Singapore"), "nationality": ("Nationality", "e.g. Singaporean"),
     "employment_age": ("Age", "Only if a form requires it"),
     "summary": ("Summary", ""), "skills": ("Skills", "Python, SQL, Figma"), "languages": ("Languages spoken", "English, Spanish"),
     "gender": ("Gender", ""), "race_ethnicity": ("Race or ethnicity", ""), "hispanic_or_latino": ("Hispanic or Latino", ""),
@@ -54,7 +55,7 @@ LABELS = {
 COLUMNS = {"job_title": "Job title", "start_date": "Start", "end_date": "End", "gpa": "GPA"}
 # Declarations are accepted per application and wording; stable facts are worth reusing everywhere. Anything else defaults to this application.
 DECLARATION = re.compile(r"\b(agree|consent|acknowledg|certif|declar|attest|confirm|understand|privacy|terms)", re.I)
-STABLE_FACT = re.compile(r"authori[sz]ed to work|sponsor|visa|citizen|degree|graduat|\bgpa\b|universit|school|major|field of study|gender|race|ethnic|veteran|disabilit|hispanic|pronoun|linkedin|github|portfolio|website|language|phone|address|country|city|postal|zip|legal name|18 years", re.I)
+STABLE_FACT = re.compile(r"authori[sz]ed to work|sponsor|visa|citizen|nationality|degree|graduat|\bgpa\b|universit|school|major|field of study|gender|race|ethnic|veteran|disabilit|hispanic|pronoun|linkedin|github|portfolio|website|language|phone|address|country|city|postal|zip|legal name|18 years", re.I)
 RESULTS = {"verified": ("Verified", "success"), "needs_input": ("Needs input", "warning"),
            "blocked": ("Blocked", "danger"), "intentionally_omitted": ("Left blank", "neutral")}
 
@@ -91,6 +92,7 @@ class ProfileEditor(QWidget):
 
     def __init__(self, profile, parent=None):
         super().__init__(parent)
+        self._profile = profile
         self.inputs, self.tables = {}, {}
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -105,7 +107,7 @@ class ProfileEditor(QWidget):
         layout.addWidget(self.pages, 1)
         covered = {key for _, _, keys in SECTIONS if isinstance(keys, list) for key in keys}
         # A field added to the model later still gets an editor instead of silently disappearing.
-        other = [k for k in ApplicantProfile.model_fields if k not in covered and k not in TABLES and k != "schema_version"]
+        other = [k for k in ApplicantProfile.model_fields if k not in covered and k not in TABLES and k not in {"schema_version", "work_authorized_us"}]
         for title, hint, keys in SECTIONS + ([("Other", "", other)] if other else []):
             frame, box = card()
             box.addWidget(label(title, "section"))
@@ -216,9 +218,11 @@ class ProfileEditor(QWidget):
                 if any(entry.values()):
                     rows.append(entry)
             data[group] = rows
-        return ApplicantProfile.model_validate(data)
+        # Preserve legacy country-specific facts without reusing them for Singapore jobs.
+        return ApplicantProfile.model_validate({**self._profile.model_dump(), **data})
 
     def load_profile(self, profile):
+        self._profile = profile
         for name, widget in self.inputs.items():
             value = getattr(profile, name)
             if isinstance(widget, QPlainTextEdit):

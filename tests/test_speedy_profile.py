@@ -11,7 +11,7 @@ def test_profile_transport_keeps_unknowns_documents_names_and_proficiency(tmp_pa
         phone_country_code='+65', phone_number='5551234567', phone_device_type='Mobile',
         education=[Education(school='Fictional', gpa='3.8', current=None)], languages='English',
         language_proficiency=[Language(language='English', proficiency='Advanced', fluent=None)],
-        resume_path=str(resume), cover_letter_path=str(cover), work_authorized_us=None, requires_sponsorship=False,
+        resume_path=str(resume), cover_letter_path=str(cover), work_authorized=None, requires_sponsorship=False,
         skills=','.join('skill' + str(i) for i in range(30)))
     config = translate(profile, ApplicationRun(job_url='https://boards.greenhouse.io/example/1'), [])
     data = config['profile']
@@ -24,6 +24,13 @@ def test_profile_transport_keeps_unknowns_documents_names_and_proficiency(tmp_pa
     assert data['nameData']['middleName'] == 'M'
     assert config['files'][str(resume)]['mime'] == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     assert config['files'][str(cover)]['mime'] == 'text/plain'
+
+
+def test_employment_transport_uses_job_country_authorization_and_explicit_citizenship():
+    profile = ApplicantProfile(work_authorized_us=False, citizenship='Singapore', nationality='Singaporean')
+    data = translate(profile, ApplicationRun(job_url='https://example.wd1.myworkdayjobs.com/job/1'), [])['profile']['employmentData']
+    assert data['eligibilityUS'] is True
+    assert data['citizenship'] == 'Singapore' and data['nationality'] == 'Singaporean'
 
 
 def test_only_answers_scoped_to_this_run_and_profile_are_transported():

@@ -51,7 +51,9 @@ def translate(profile, run, answers):
         'resumeData': files.get(profile.resume_path, {}),
         'websiteData': dict(websites=[profile.portfolio_url] if profile.portfolio_url else [],github=profile.github_url,
                             linkedin=profile.linkedin_url,personal=profile.portfolio_url),
-        'employmentData': dict(eligibilityUS=profile.work_authorized_us,sponsorship=profile.requires_sponsorship,
+        # The vendor's legacy key also drives generic work-authorization controls; resolve() approves each actual question.
+        'employmentData': dict(eligibilityUS=profile.work_authorized,sponsorship=profile.requires_sponsorship,
+                               citizenship=profile.citizenship,nationality=profile.nationality,
                                gender=profile.gender,ethnicity=profile.race_ethnicity,veteran=boolean(profile.veteran_status),
                                disability=boolean(profile.disability_status),age=profile.employment_age,
                                hispanicOrLatino=profile.hispanic_or_latino),

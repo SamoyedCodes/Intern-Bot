@@ -44,7 +44,9 @@ Upgrading from the Chrome/Firefox version keeps your records and browser directo
 
 ### 1. Set up a profile
 
-Open **Profile** and work through its sections (Name, Contact, Documents, Work eligibility, Education, Experience and so on). Documents keep their original bytes and file type. **Save profile** (⌘S) lights up when there are unsaved changes, and the header lists any essentials still missing.
+Open **Profile** and work through its sections (Name, Contact, Documents, Citizenship & eligibility, Education, Experience and so on). Documents keep their original bytes and file type. **Save profile** (⌘S) lights up when there are unsaved changes, and the header lists any essentials still missing.
+
+Under **Citizenship & eligibility**, **Authorized to work in job's country** defaults to **Yes** for Singapore applications. Enter citizenship as a country (for example, Singapore) and nationality as it appears on your documents (for example, Singaporean). These fields are optional; blank or Unknown answers are asked during each application. Saved No and Unknown work-authorization choices are preserved.
 
 Use the profile switcher and its ⋯ menu to create, import or export named profiles. Saving a profile affects new applications only. To change one application's copy, use **Edit snapshot…** in its detail panel.
 

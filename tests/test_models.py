@@ -1,6 +1,19 @@
 import pytest
 
-from core.automation.models import ats_name, canonical_url, employer_key, job_identity
+from core.automation.models import ApplicantProfile, ats_name, canonical_url, employer_key, job_identity
+
+
+@pytest.mark.parametrize('legacy', [True, False, None])
+def test_singapore_authorization_default_is_separate_from_legacy_us_authorization(legacy):
+    profile = ApplicantProfile.model_validate({'work_authorized_us': legacy})
+    assert profile.work_authorized is True and profile.work_authorized_us is legacy
+    assert profile.citizenship == profile.nationality == ''
+
+
+@pytest.mark.parametrize('choice', [True, False, None])
+def test_eligibility_and_citizenship_survive_json_export_and_import(choice):
+    profile = ApplicantProfile(work_authorized=choice, citizenship='Malaysia', nationality='Malaysian')
+    assert ApplicantProfile.model_validate_json(profile.model_dump_json()) == profile
 
 
 @pytest.mark.parametrize('url', [

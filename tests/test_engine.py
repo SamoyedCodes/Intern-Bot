@@ -470,6 +470,23 @@ async def test_greenhouse_boolean_question_selects_the_profile_fact(context, sto
     assert await page.locator('select').input_value() == 'No'
 
 
+async def test_workday_fills_singapore_eligibility_citizenship_and_nationality(context, store):
+    page = await open_fixture(context, 'workday', '''<form>
+        <label>Are you legally authorized to work in Singapore?<select id=authorized required>
+            <option value="">Select One</option><option>Yes</option><option>No</option></select></label>
+        <label>Country of citizenship<select id=citizenship required>
+            <option value="">Select One</option><option>Singapore</option><option>Malaysia</option></select></label>
+        <label>Nationality<input id=nationality required></label>
+        </form>''')
+    profile = ApplicantProfile(citizenship='Malaysia', nationality='Malaysian')
+    run = await apply(store, page, ApplicationRun(job_url=page.url, auto_advance=False), profile)
+    assert run.fields and all(f.disposition == 'verified' for f in run.fields.values()), run.interventions
+    assert await page.locator('#authorized').input_value() == 'Yes'
+    assert await page.locator('#citizenship').input_value() == 'Malaysia'
+    assert await page.locator('#nationality').input_value() == 'Malaysian'
+    assert not run.submission_attempted
+
+
 async def test_worker_restart_rebinds_without_restarting_the_adapter(fresh_context, store):
     context = fresh_context
     page = await open_fixture(context, 'greenhouse', greenhouse())

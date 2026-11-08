@@ -7,7 +7,7 @@ from core.automation.models import ApplicantProfile, ApplicationRun, ApprovedAns
 PROFILE = ApplicantProfile(
     first_name='Ada', last_name='Example', country='Singapore', preferred_middle_name='M',
     cover_letter='Dear team', cover_letter_path='/tmp/letter.pdf',
-    work_authorized_us=True, requires_sponsorship=False,
+    work_authorized_us=True, requires_sponsorship=False, citizenship='Singapore', nationality='Singaporean',
     language_proficiency=[Language(language='English', proficiency='Advanced', fluent=False)],
     experience=[Experience(start_date='2025-05')])
 QUESTION = FormField('q', 'Question', '', 'checkbox', required=True)
@@ -70,6 +70,12 @@ def test_employer_answers_stay_with_their_tenant(run):
     ('Cover letter', 'text', 'Dear team'),
     ('Cover letter', 'file', '/tmp/letter.pdf'),
     ('Are you authorized to work in the United States?', 'radio', 'Yes'),
+    ('Authorized to work in job\'s country', 'radio', 'Yes'),
+    ('Are you legally authorized to work in Singapore?', 'select-one', 'Yes'),
+    ('Are you authorized to work in the country where this job is located?', 'radio', 'Yes'),
+    ('Country of citizenship', 'select-one', 'Singapore'),
+    ('Citizenship', 'text', 'Singapore'),
+    ('Nationality', 'text', 'Singaporean'),
     ('Do you require sponsorship?', 'select-one', 'No'),
     ('Preferred Middle Name', 'text', 'M'),
 ])
@@ -84,6 +90,22 @@ def test_false_row_fact_is_an_answer(run):
 
 def test_missing_facts_are_never_guessed(run):
     assert resolve(FormField('k', 'Are you Hispanic or Latino?', '', 'radio'), PROFILE, run, []).value is None
+
+
+@pytest.mark.parametrize('choice, expected', [(True, 'Yes'), (False, 'No'), (None, None)])
+def test_work_authorization_respects_no_and_unknown(run, choice, expected):
+    profile = ApplicantProfile(work_authorized=choice)
+    field = FormField('k', 'Are you legally authorized to work in Singapore?', '', 'select-one')
+    assert resolve(field, profile, run, []).value == expected
+
+
+@pytest.mark.parametrize('question', [
+    'Are you authorized to work in the United States?',
+    'Are you legally authorized to work in Australia?',
+    'Are you a Singapore citizen?', 'Citizenship', 'Nationality',
+])
+def test_singapore_authorization_does_not_imply_other_legal_facts(run, question):
+    assert resolve(FormField('k', question, '', 'text'), ApplicantProfile(), run, []).value is None
 
 
 @pytest.mark.parametrize('label, expected', [('From Month', '5'), ('From Year', '2025'), ('From Day', None)])
@@ -148,7 +170,7 @@ def test_every_offered_fact_links_to_its_profile_value():
     field = FormField('k', 'Anything', '', 'text')
     catalog = fact_catalog(profile)
     assert {'full_name', 'education.0.end_date', 'experience.0.current', 'language_proficiency.0.language'} <= catalog.keys()
-    assert not {'gender', 'work_authorized_us', 'employment_age', 'resume_path', 'pronouns'} & catalog.keys()
+    assert not {'gender', 'work_authorized_us', 'work_authorized', 'citizenship', 'nationality', 'employment_age', 'resume_path', 'pronouns'} & catalog.keys()
     for key in catalog:
         assert linked(field, profile, key).value not in (None, ''), key
     assert fact_name('education.0.end_date.year') == 'education #1 end or expected graduation date (year)'

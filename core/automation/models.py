@@ -108,7 +108,10 @@ class ApplicantProfile(BaseModel):
     phone_number: str = ""
     phone_device_type: str = ""
     work_authorized_us: bool | None = None
+    work_authorized: bool | None = True
     requires_sponsorship: bool | None = None
+    citizenship: str = ""
+    nationality: str = ""
     hispanic_or_latino: bool | None = None
     employment_age: int | None = None
     language_proficiency: list[Language] = Field(default_factory=list)

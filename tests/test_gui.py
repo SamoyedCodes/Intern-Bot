@@ -32,14 +32,38 @@ def capture_starts(view, monkeypatch):
 
 def test_profile_save_keeps_structured_fields(window):
     view = window.profile_view
+    assert view.editor.inputs['work_authorized'].currentData() is True
+    assert view.editor.inputs['citizenship'].text() == view.editor.inputs['nationality'].text() == ''
     view.editor.inputs['first_name'].setText('Ada')
     view.editor.inputs['country'].setText('Singapore')
+    view.editor.inputs['citizenship'].setText('Malaysia')
+    view.editor.inputs['nationality'].setText('Malaysian')
     table, keys = view.editor.tables['education']
     view.editor.add_row(table, keys, {'school': 'Example University', 'degree': 'BSc'})
     assert view.save_profile()
     profile = ApplicantProfile.model_validate(window.store.get('verified_profile'))
     assert profile.first_name == 'Ada' and profile.country == 'Singapore'
+    assert profile.work_authorized is True and profile.citizenship == 'Malaysia' and profile.nationality == 'Malaysian'
     assert profile.education[0].school == 'Example University'
+
+
+@pytest.mark.parametrize('choice', [False, None])
+def test_eligibility_editor_saves_and_restores_choices_without_losing_legacy_facts(window, choice):
+    view = window.profile_view
+    view.editor.load_profile(ApplicantProfile(work_authorized_us=False))
+    combo = view.editor.inputs['work_authorized']
+    combo.setCurrentIndex(combo.findData(choice))
+    view.editor.inputs['citizenship'].setText('Singapore')
+    view.editor.inputs['nationality'].setText('Singaporean')
+    assert view.save_profile()
+    saved = window.store.profiles()['Default']
+    assert saved.work_authorized is choice and saved.work_authorized_us is False
+    view.editor.load_profile(ApplicantProfile())
+    view.editor.load_profile(saved)
+    assert combo.currentData() is choice
+    assert view.editor.inputs['citizenship'].text() == 'Singapore'
+    assert view.editor.inputs['nationality'].text() == 'Singaporean'
+    assert view.editor.profile() == saved
 
 
 def test_answers_are_saved_from_run_details_and_removed_from_the_bank(window, monkeypatch):
