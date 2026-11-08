@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.theme import form_layout, MessageBar, button, card, dot_icon, label, shortcut
+from gui.shortcuts import install_edit_shortcuts
 from gui.views.application_dialogs import AnswersView
 from gui.views.assistant_dialog import AssistWorker
 from gui.views.profile_view import ProfileView
@@ -242,6 +243,7 @@ class MainWindow(QMainWindow):
     def __init__(self, store=None):
         super().__init__()
         self.setWindowTitle("Intern-Bot")
+        install_edit_shortcuts(QGuiApplication.instance())
         self.resize(1280, 780)
         self.setMinimumSize(1040, 660)
         self.store = store or LocalStore()
