@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="docs/banner.svg" alt="Intern-Bot: fill internship applications locally, track them from saved to offer" width="100%">
+  <a href="docs/cover.png">
+    <img src="docs/banner.png" alt="Intern-Bot's current Applications, Profile and Answers views: local autofill with 28 site-specific adapters, application tracking, reusable profiles and approved answers. Screenshots use fictional demo records." width="100%">
+  </a>
 </p>
 
 # Intern-Bot
-
-![Intern-Bot's Applications view with seven internship applications at different stages and the detail panel for one that needs an answer](docs/cover.png)
 
 Intern-Bot is a local macOS desktop app (Python and PySide6) for internship applications. It keeps your profiles and approved answers, fills application forms in a visible Chromium window, and tracks every application from saved to offer.
 
