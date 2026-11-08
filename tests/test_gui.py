@@ -403,7 +403,7 @@ def test_desktop_workflow_pauses_asks_and_reaches_review_without_submitting(wind
     assert final.status == 'ready_for_review', final.interventions
     assert all(f.disposition == 'verified' for f in final.fields.values())
     assert window.store.get_run(run.id).status == 'ready_for_review'
-    assert view.table.item(0, 2).text() == 'Ready to approve'
+    assert view.table.item(0, 3).text() == 'Ready to approve'
     async def inspect_browser():
         manager, adapter = view.service.sessions[run.id]
         assert any(c['name'] == 'gui_session' and c['value'] == 'fixture-only' for c in await manager.context.cookies(url))
@@ -412,6 +412,14 @@ def test_desktop_workflow_pauses_asks_and_reaches_review_without_submitting(wind
         assert not await adapter.page.locator('input[type=checkbox]').is_checked()
     asyncio.run_coroutine_threadsafe(inspect_browser(), view.service.loop).result(timeout=10)
     assert requests == [url]
+    view.select_all_visible.click()
+    with monkeypatch.context() as confirm:
+        confirm.setattr(QMessageBox, 'question', lambda *args: QMessageBox.Yes)
+        click('Restart from beginning (1)…')
+    wait_for(lambda: not view.service.busy and view._active_id is None)
+    final = view.tasks[0]
+    assert requests == [url, url] and final.status == 'ready_for_review'
+    asyncio.run_coroutine_threadsafe(inspect_browser(), view.service.loop).result(timeout=10)
     assert not final.submission_attempted
     assert final.browser == 'chromium' and (legacy / 'preserve.txt').read_text() == 'Old browser session must remain intact'
     assert any(event['kind'] == 'browser_migration' for event in window.store.events(run.id))
@@ -433,7 +441,7 @@ def test_desktop_workflow_pauses_asks_and_reaches_review_without_submitting(wind
     wait_for(lambda: not view.service.busy and view._active_id is None)
     sent = view.tasks[0]
     assert sent.submission_attempted and not sent.submission_confirmed, sent.interventions
-    assert view.table.item(0, 2).text() == 'Sent · receipt unconfirmed'
+    assert view.table.item(0, 3).text() == 'Sent · receipt unconfirmed'
     click('Check receipt')
     wait_for(lambda: not view.service.busy and view._active_id is None)
     async def submissions():
@@ -591,7 +599,7 @@ def test_board_fits_supported_windows_and_keeps_secondary_actions_available(wind
     assert view.d_status.width() > 100
     total = sum(view.table.columnWidth(i) for i in range(view.table.columnCount()) if not view.table.isColumnHidden(i))
     assert total <= view.table.viewport().width() + 2
-    assert not view.table.isColumnHidden(2)
+    assert not view.table.isColumnHidden(3)
     assert view.secondary_actions[view.recheck_btn if state=='ready' else view.start_btn].isVisible()
     assert not view.tracking.isVisibleTo(view)
     view.tracking_toggle.click()
@@ -665,3 +673,110 @@ def test_approved_omissions_complete_progress_and_uncertain_sends_request_confir
     run.submission_attempted = True
     view.render(select_id=run.id)
     assert view.d_stage.text() == 'Check employer confirmation'
+
+
+def test_bulk_selection_tracks_ids_and_only_acts_on_eligible_tasks(window, monkeypatch):
+    view = window.tasks_view
+    failed, second, active, ready, sent = runs = [ready_run() for _ in range(5)]
+    for run, name, status in zip(runs, ['A', 'B', 'C', 'D', 'E'],
+                                 ['failed', 'failed', 'running', 'ready_for_review', 'failed']):
+        run.company, run.status = name, status
+        run.stage = 'skills'
+        window.store.save_run(run)
+    sent.submission_attempted = True
+    failed.approved_review = {'old': 'approval'}
+    view.tasks, view._active_id = runs, active.id
+    view.render()
+    window.resize(1040, 660)
+    window.show()
+    QApplication.processEvents()
+    view.select_all_visible.click()
+    assert view.selection_count.text() == '5 selected'
+    assert [b.text() for b in view.bulk_buttons.values()] == [
+        'Retry failed (2)', 'Restart from beginning (3)…', 'Cancel tasks (1)', 'Delete tasks (4)…']
+    assert window.width() == 1040
+    view.table.sortByColumn(1, Qt.AscendingOrder)
+    view.render()
+    view.table.setCurrentCell(0, 0)
+    QTest.keyClick(view.table, Qt.Key_Space)
+    assert view._checked_ids == {r.id for r in runs if r != failed}
+    assert view.select_all_visible.checkState() == Qt.PartiallyChecked
+    QTest.keyClick(view.table, Qt.Key_Space)
+    # One failure is already waiting in the queue.
+    view._queue = [second.id]
+    view.bulk_buttons['retry'].click()
+    assert view._queue == [second.id, failed.id]
+    assert view._checked_ids == {active.id, ready.id, sent.id}
+    assert failed.fields and failed.stage == 'skills' and not failed.approved_review
+
+    monkeypatch.setattr(QMessageBox, 'question', lambda *a: QMessageBox.No)
+    view.bulk_buttons['restart'].click()
+    assert ready.fields and ready.status == 'ready_for_review'
+    monkeypatch.setattr(QMessageBox, 'exec', lambda self: QMessageBox.No)
+    view.bulk_buttons['delete'].click()
+    assert len(view.tasks) == 5 and view.selection_count.text() == '3 selected'
+    view.search.setText('unmatched company')
+    assert not view._checked_ids and view.bulk_bar.isHidden()
+    view.search.clear()
+    assert not view._checked_ids
+
+
+def test_bulk_restart_cancel_and_delete_preserve_other_work(window, monkeypatch):
+    view = window.tasks_view
+    ready = ready_run(notes='Follow up', approved_review={'old': 'approval'})
+    active = ApplicationRun(job_url=URL, company='Running', status='running')
+    waiting = ApplicationRun(job_url=URL, company='Waiting')
+    verify = ApplicationRun(job_url=URL, company='Verification', status='needs_input',
+                            interventions=[InterventionRequest(kind='activation', message='Verify')])
+    view.tasks = [ready, active, waiting, verify]
+    for run in view.tasks:
+        window.store.save_run(run)
+    window.store.record_event(ready.id, 'old', 'first step')
+    view._queue, view._active_id = [waiting.id], active.id
+    view.render()
+    monkeypatch.setattr(QMessageBox, 'question', lambda *a: QMessageBox.Yes)
+    view.search.setText('Acme')
+    view.select_all_visible.click()
+    view.bulk_buttons['restart'].click()
+    reset = window.store.get_run(ready.id)
+    assert reset.status == 'queued' and reset.stage == 'start' and not reset.fields
+    assert not reset.approved_review and not reset.completed_sections and reset.step == -1
+    assert reset.notes == 'Follow up' and reset.profile_snapshot == ready.profile_snapshot
+    assert [e['kind'] for e in window.store.events(ready.id)] == ['old', 'restart']
+    assert view._queue == [waiting.id, ready.id]
+    view.search.setText('Running')
+    view.select_all_visible.click()
+    stops = []
+    monkeypatch.setattr(view.service, 'pause', lambda rid, cancel: stops.append((rid, cancel)))
+    view.bulk_buttons['cancel'].click()
+    assert stops == [(active.id, True)] and view._queue == [waiting.id, ready.id]
+    view.search.setText('Verification')
+    view.select_all_visible.click()
+    assert not view.bulk_buttons['restart'].isEnabled()
+    view.search.setText('Acme')
+    view.select_all_visible.click()
+    view.bulk_buttons['cancel'].click()
+    assert ready.status == 'cancelled' and view._queue == [waiting.id]
+    view.select_all_visible.click()
+    monkeypatch.setattr(QMessageBox, 'exec', lambda self: QMessageBox.Yes)
+    view.bulk_buttons['delete'].click()
+    assert window.store.get_run(ready.id) is None and not window.store.events(ready.id)
+    assert view._queue == [waiting.id] and view._run(active.id) == active
+
+
+@pytest.mark.parametrize('status, expected_navigation', [('failed', False), ('queued', True)])
+async def test_retry_and_restart_in_an_existing_tab(window, monkeypatch, status, expected_navigation):
+    from unittest.mock import AsyncMock, Mock
+    from core.automation.engine import ApplicationEngine
+
+    service = window.tasks_view.service
+    run = ApplicationRun(job_url=URL, status=status)
+    page = Mock(url=URL + '/later-step', is_closed=Mock(return_value=False), bring_to_front=AsyncMock())
+    service.sessions[run.id] = (Mock(stop=AsyncMock()), Mock(page=page))
+    open_job = AsyncMock(return_value=('', []))
+    monkeypatch.setattr(service, 'open_job', open_job)
+    prepare = AsyncMock()
+    monkeypatch.setattr(ApplicationEngine, 'start', prepare)
+    await service._run(run, ApplicantProfile(), None)
+    assert open_job.await_count == int(expected_navigation)
+    prepare.assert_awaited_once()

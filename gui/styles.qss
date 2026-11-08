@@ -146,6 +146,8 @@ QPushButton {
     padding: 5px 12px;
 }
 
+QWidget#bulkBar QPushButton { padding: 5px 6px; }
+
 QPushButton:hover { background: $surface2; }
 QPushButton:pressed { background: $border; }
 QPushButton:focus { border-color: $accent; }

@@ -124,6 +124,10 @@ class LocalStore:
 
 
     def delete_run(self, run_id):
+        self.delete_runs([run_id])
+
+    def delete_runs(self, run_ids):
+        keys = [(run_id,) for run_id in run_ids]
         with self.connect() as db:
-            db.execute("DELETE FROM runs WHERE id=?", (run_id,))
-            db.execute("DELETE FROM events WHERE run_id=?", (run_id,))
+            db.executemany("DELETE FROM runs WHERE id=?", keys)
+            db.executemany("DELETE FROM events WHERE run_id=?", keys)

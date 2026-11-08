@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from PySide6.QtCore import QEvent, QPointF, QRectF, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QGuiApplication, QKeySequence, QPainter, QPen
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QButtonGroup, QComboBox, QDialog, QFileDialog,
+    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QScrollArea,
     QSizePolicy, QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
@@ -20,6 +20,7 @@ from core.tracker import PIPELINE, activity, export_csv, import_csv
 from gui.theme import TOKENS, form_layout, MessageBar, button, card, dot_icon, label, more_button, restyle, shortcut
 from gui.views.application_dialogs import ProfileDialog, ReviewDialog, RunDetailsDialog
 
+BULK_LABELS = {"retry": "Retry failed", "restart": "Restart from beginning", "cancel": "Cancel tasks", "delete": "Delete tasks"}
 GROUPS = ("All", "Needs you", "In progress", "Applied", "Closed")
 STATUS = {
     "queued": ("Queued", "neutral", "In progress"),
@@ -151,7 +152,7 @@ class Item(QTableWidgetItem):
 
     def __lt__(self, other):
         mine, theirs = self.data(Qt.UserRole + 1), other.data(Qt.UserRole + 1)
-        return mine < theirs if mine is not None and theirs is not None else super().__lt__(other)
+        return mine < theirs if mine is not None and theirs is not None else self.text().casefold() < other.text().casefold()
 
 
 class TaskDialog(QDialog):
@@ -249,6 +250,7 @@ class TasksView(QWidget):
         self.service.progress.connect(self.on_progress)
         self.service.finished.connect(self.on_finished)
         self.tasks = []
+        self._checked_ids = set()
         self._queue = []
         self._active_id = None
         self._closing = False
@@ -263,6 +265,7 @@ class TasksView(QWidget):
         layout.addLayout(self._build_chips())
         self.notice = MessageBar()
         layout.addWidget(self.notice)
+        layout.addWidget(self._build_bulk_bar())
         self.body = QStackedWidget()
         self.body.addWidget(self._build_empty())
         splitter = self.splitter = QSplitter()
@@ -279,7 +282,7 @@ class TasksView(QWidget):
         for keys in (QKeySequence(Qt.Key_Return), QKeySequence(Qt.Key_Enter)):
             shortcut(keys, self.table, self.primary_action, Qt.WidgetShortcut)
         for keys in (QKeySequence.Delete, QKeySequence(Qt.Key_Backspace)):
-            shortcut(keys, self.table, self.delete_selected, Qt.WidgetShortcut)
+            shortcut(keys, self.table, lambda: self.bulk_action("delete") if self._checked_ids else self.delete_selected(), Qt.WidgetShortcut)
         self.load_state()
 
     # Layout
@@ -372,9 +375,27 @@ class TasksView(QWidget):
         outer.addStretch()
         return page
 
+    def _build_bulk_bar(self):
+        self.bulk_bar = QWidget()
+        self.bulk_bar.setObjectName("bulkBar")
+        row = QHBoxLayout(self.bulk_bar)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        self.selection_count = QLabel()
+        row.addWidget(self.selection_count)
+        self.bulk_buttons = {}
+        for action, name in BULK_LABELS.items():
+            btn = button(name, lambda _, key=action: self.bulk_action(key),
+                         "danger" if action == "delete" else "secondary")
+            self.bulk_buttons[action] = btn
+            row.addWidget(btn)
+        row.addStretch()
+        row.addWidget(button("Clear selection", lambda: self.check_visible(False), "ghost"))
+        return self.bulk_bar
+
     def _build_table(self):
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Company", "Role", "Status", "Next step", "Updated"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["", "Company", "Role", "Status", "Next step", "Updated"])
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -386,14 +407,26 @@ class TasksView(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(40)
         header = self.table.horizontalHeader()
         header.setHighlightSections(False)
-        for column, width in ((0, 130), (1, 145), (2, 160), (4, 80)):
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        self.select_all_visible = QCheckBox(header.viewport())
+        self.select_all_visible.setAccessibleName("Select all visible")
+        self.select_all_visible.setToolTip("Select all visible applications")
+        self.select_all_visible.clicked.connect(lambda: self.check_visible(len(self._checked_ids) < self.table.rowCount()))
+        def position_checkbox(*_):
+            self.select_all_visible.move(header.sectionViewportPosition(0) + 8,
+                                         (header.height() - self.select_all_visible.height()) // 2)
+        self.select_all_visible.adjustSize()
+        header.geometriesChanged.connect(position_checkbox)
+        self.table.horizontalScrollBar().valueChanged.connect(position_checkbox)
+        for column, width in ((0, 40), (1, 130), (2, 145), (3, 160), (5, 80)):
             self.table.setColumnWidth(column, width)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.table.setSortingEnabled(True)
         self.table.viewport().installEventFilter(self)
-        self.table.sortByColumn(4, Qt.DescendingOrder)
+        self.table.sortByColumn(5, Qt.DescendingOrder)
         self.table.itemSelectionChanged.connect(self.show_selected)
-        self.table.doubleClicked.connect(lambda _: self.primary_action())
+        self.table.itemChanged.connect(self.check_row)
+        self.table.doubleClicked.connect(lambda index: self.primary_action() if index.column() else None)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.context_menu)
         self.table_stack = QStackedWidget()
@@ -546,13 +579,13 @@ class TasksView(QWidget):
     def fit_columns(self):
         """Keep identity and status visible; the detail pane holds longer next-step text."""
         width = self.table.viewport().width()
-        compact = width < 620
-        self.table.setColumnHidden(3, compact)
+        compact = width < 660
+        self.table.setColumnHidden(5, compact)
         self.table.setColumnHidden(4, compact)
         header = self.table.horizontalHeader()
-        for column in (0, 1):
+        for column in (1, 2):
             header.setSectionResizeMode(column, QHeaderView.Stretch if compact else QHeaderView.Interactive)
-        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
 
     def load_state(self):
         self.tasks = self.store.runs()
@@ -598,18 +631,24 @@ class TasksView(QWidget):
         group = GROUPS[max(0, self.chips.checkedId())]
         metas = {run.id: status_meta(run) for run in self.tasks}
         visible = [r for r in self.tasks if query in f"{r.company} {r.role} {r.job_url}".casefold() and group in ("All", metas[r.id][2])]
+        self._checked_ids.intersection_update(r.id for r in visible)
         self.table.blockSignals(True)
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(visible))
         for row, run in enumerate(visible):
             text, tone, _ = metas[run.id]
-            for column, value in enumerate([run.company or site_key(run.job_url), run.role, text, self.next_step(run), ago(run.updated_at)]):
+            check = Item("")
+            check.setData(Qt.UserRole, run.id)
+            check.setData(Qt.AccessibleTextRole, f"Select {run.company or run.job_url} — {run.role}")
+            check.setCheckState(Qt.Checked if run.id in self._checked_ids else Qt.Unchecked)
+            self.table.setItem(row, 0, check)
+            for column, value in enumerate([run.company or site_key(run.job_url), run.role, text, self.next_step(run), ago(run.updated_at)], start=1):
                 item = Item(value)
                 item.setData(Qt.UserRole, run.id)
-                item.setToolTip(run.job_url if column < 2 else value)
+                item.setToolTip(run.job_url if column <= 2 else value)
                 self.table.setItem(row, column, item)
-            self.table.item(row, 2).setIcon(dot_icon(tone))
-            self.table.item(row, 4).setData(Qt.UserRole + 1, run.updated_at)
+            self.table.item(row, 3).setIcon(dot_icon(tone))
+            self.table.item(row, 5).setData(Qt.UserRole + 1, run.updated_at)
         self.table.setSortingEnabled(True)
         self.table_stack.setCurrentIndex(0 if visible else 1)
         rows = [r for r in range(self.table.rowCount()) if self.table.item(r, 0).data(Qt.UserRole) == keep] or ([0] if visible else [])
@@ -618,6 +657,7 @@ class TasksView(QWidget):
             self.table.selectRow(rows[0])
         self.table.blockSignals(False)
         self.show_selected()
+        self.refresh_bulk()
         counts = {name: sum(name in ("All", meta[2]) for meta in metas.values()) for name in GROUPS}
         for index, name in enumerate(GROUPS):
             self.chips.button(index).setText(f"{name}  {counts[name]}" if counts[name] else name)
@@ -751,7 +791,7 @@ class TasksView(QWidget):
         self.cancel_action.setEnabled(bool(run) and not done and status != "cancelled")
         self.replace_action.setEnabled(idle and not busy and not sent)
         self.edit_btn.setEnabled(idle and not busy and not run.submission_attempted)
-        self.delete_btn.setEnabled(bool(run) and not active)
+        self.delete_btn.setEnabled(bool(run) and self.eligible(run, "delete"))
         queueable = len(self._queueable())
         self.run_queue.setText(f"Run queue ({queueable})" if queueable else "Run queue")
         self.run_queue.setEnabled(bool(queueable))
@@ -838,8 +878,92 @@ class TasksView(QWidget):
         else:
             self.notify("Select an application first.", "warning")
 
+    def check_row(self, item):
+        if item.column() == 0:
+            run_id = item.data(Qt.UserRole)
+            if item.checkState() == Qt.Checked:
+                self._checked_ids.add(run_id)
+            else:
+                self._checked_ids.discard(run_id)
+            self.refresh_bulk()
+
+    def check_visible(self, checked):
+        self._checked_ids = {self.table.item(row, 0).data(Qt.UserRole)
+                             for row in range(self.table.rowCount())} if checked else set()
+        self.render()
+
+    def eligible(self, run, action):
+        active = run.id == self._active_id or run.status == "running"
+        if action == "delete":
+            return not active
+        if action == "cancel" and active:
+            return True
+        if run.submission_attempted or run.is_submitted or run.submitted_at or run.pipeline != "saved":
+            return False
+        if action == "cancel":
+            return run.status == "queued" or run.id in self._queue
+        if active or awaiting_verification(run):
+            return False
+        return action == "restart" or run.status == "failed"
+
+    def refresh_bulk(self):
+        checked = [r for r in self.tasks if r.id in self._checked_ids]
+        self.bulk_bar.setVisible(bool(checked))
+        self.selection_count.setText(f"{len(checked)} selected")
+        state = Qt.Unchecked if not checked else Qt.Checked if len(checked) == self.table.rowCount() else Qt.PartiallyChecked
+        self.select_all_visible.setCheckState(state)
+        for action, btn in self.bulk_buttons.items():
+            name = BULK_LABELS[action]
+            count = sum(self.eligible(r, action) for r in checked)
+            suffix = "…" if action in {"restart", "delete"} else ""
+            btn.setText(f"{name} ({count}){suffix}")
+            btn.setEnabled(count > 0)
+
+    def bulk_action(self, action):
+        if self._save_timer.isActive():
+            self.save_tracking(rerender=False)
+            self.render()
+        runs = [r for r in self.tasks if r.id in self._checked_ids and self.eligible(r, action)]
+        if not runs:
+            return
+        if action == "delete":
+            self.delete_runs(runs, checked_only=True)
+            return
+        if action == "restart":
+            if QMessageBox.question(self, "Restart from beginning?",
+                    f"Restart the selected tasks ({len(runs)}) from their job postings and clear local progress and send approvals? "
+                    "Your notes and answers are kept. The employer may restore its own draft.",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                return
+        ids = {r.id for r in runs}
+        affected = 0
+        for run in self.tasks:
+            # A modal confirmation can process progress signals and change eligibility.
+            if run.id not in ids or run.id not in self._checked_ids or not self.eligible(run, action):
+                continue
+            if action == "cancel":
+                self.cancel_run(run)
+            else:
+                run.approved_review = {}
+                if action == "restart":
+                    run.status, run.stage = "queued", "start"
+                    run.fields, run.interventions, run.completed_sections = {}, [], []
+                    run.steps, run.step = [], -1
+                    run.profile_revision = run.resume_digest = run.documents_digest = run.engine_version = ""
+                    run.elapsed_seconds = run.intervention_count = run.ai_requests = 0
+                    self.store.record_event(run.id, "restart", run.stage, "Restarted from the job posting.")
+                self.store.save_run(run)
+                if run.id not in self._queue:
+                    self._queue.append(run.id)
+            self._checked_ids.discard(run.id)
+            affected += 1
+        self.render()
+        result = {"retry": "Queued for retry", "restart": "Queued to restart", "cancel": "Cancellation requested"}
+        self.notify(f"{result[action]}: {affected} selected.")
+        self._start_next()
+
     def _queueable(self):
-        return [r for r in self.tasks if r.status in {"queued", "failed"} and not r.is_submitted and not r.submitted_at and r.pipeline == "saved" and r.id != self._active_id]
+        return [r for r in self.tasks if r.status in {"queued", "failed"} and self.eligible(r, "restart")]
 
     def start_all_tasks(self):
         self._queue = [r.id for r in self._queueable()]
@@ -851,7 +975,8 @@ class TasksView(QWidget):
         while self._queue and not self._active_id:
             run_id = self._queue.pop(0)
             run = self._run(run_id)
-            if run:
+            if run and run.status in {"queued", "failed"} and self.eligible(run, "restart"):
+                run.approved_review = {}
                 self._start_task(run)
 
     def _start_task(self, run, inspect_only=False):
@@ -936,16 +1061,19 @@ class TasksView(QWidget):
 
     def cancel(self):
         run = self.selected()
-        if not run:
-            return
+        if run:
+            self.cancel_run(run)
+            self.render()
+
+    def cancel_run(self, run):
         self._queue = [i for i in self._queue if i != run.id]
         if run.id == self._active_id:
             self._stopped_id = run.id
             self.service.pause(run.id, cancel=True)
         else:
             run.status = "cancelled"
+            run.approved_review = {}
             self.store.save_run(run)
-            self.render()
 
     def details(self):
         run = self.selected()
@@ -1051,16 +1179,32 @@ class TasksView(QWidget):
         if not run or run.id == self._active_id:
             self.notify("Select an inactive application to delete.", "warning")
             return
-        name = " — ".join(filter(None, [run.company, run.role])) or run.job_url
-        if QMessageBox.question(self, "Delete application?", f"Delete {name}? Its local history is removed too. Approved answers are kept.") != QMessageBox.Yes:
+        self.delete_runs([run])
+
+    def delete_runs(self, runs, checked_only=False):
+        names = "\n".join(f"• {r.company or site_key(r.job_url)} — {r.role} ({r.job_url})" for r in runs)
+        prompt = QMessageBox(QMessageBox.Question, "Delete selected tasks?",
+                             f"Delete the selected local records ({len(runs)}) and their history? Saved answers are kept.",
+                             QMessageBox.Yes | QMessageBox.No, self)
+        prompt.setTextFormat(Qt.PlainText)
+        prompt.setDefaultButton(QMessageBox.No)
+        if len(runs) > 6:
+            prompt.setDetailedText(names)
+        else:
+            prompt.setInformativeText(names)
+        if prompt.exec() != QMessageBox.Yes:
             return
-        self._save_timer.stop()
-        self._queue = [i for i in self._queue if i != run.id]
-        self.store.delete_run(run.id)
-        self.tasks = [r for r in self.tasks if r.id != run.id]
-        self._shown_id = None
+        if self._save_timer.isActive():
+            self.save_tracking(rerender=False)
+        ids = {r.id for r in runs}
+        if checked_only:
+            ids.intersection_update(self._checked_ids)
+        ids = {r.id for r in self.tasks if r.id in ids and self.eligible(r, "delete")}
+        self.store.delete_runs(ids)
+        self._queue = [i for i in self._queue if i not in ids]
+        self.tasks = [r for r in self.tasks if r.id not in ids]
         self.render()
-        self.notify("Application deleted.", "success")
+        self.notify(f"Local tasks deleted: {len(ids)}.", "success")
 
     def open_posting(self):
         run = self.selected()

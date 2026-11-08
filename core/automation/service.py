@@ -91,8 +91,10 @@ class AutomationService(QObject):
                 adapter = session[1]
                 await adapter.page.bring_to_front()
                 problem = ('', [])
-                # A replaced link: the tab still shows the old one, and nothing of this application was filled yet.
-                if not run.fields and not run.submission_attempted and not inspect_only and employer_key(adapter.page.url) != employer_key(run.job_url):
+                # Starting over must leave the old draft even on the same employer site.
+                fresh = run.status == "queued" and run.stage == "start"
+                replaced = not run.fields and employer_key(adapter.page.url) != employer_key(run.job_url)
+                if (fresh or replaced) and not run.submission_attempted and not inspect_only:
                     problem = await self.open_job(run, adapter.page)
             if problem[0]:
                 run.interventions = [InterventionRequest(kind="link", message=problem[0], options=problem[1])]
