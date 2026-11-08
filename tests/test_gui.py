@@ -484,7 +484,8 @@ def test_review_shows_the_filled_values_and_approve_sends_exactly_that(window, m
     window.store.save_answer(ApprovedAnswer(id='ai', question='Graduation year', value='2027', origin='ai', scope='global'))
     run = ready_run()
     view.add_task(run)
-    assert view.status_label(run) == 'Ready to approve' and view.review_btn.isVisibleTo(view) and view.recheck_btn.isVisibleTo(view)
+    assert view.status_label(run) == 'Ready to approve' and view.review_btn.isVisibleTo(view)
+    assert view.recheck_btn.isHidden() and view.secondary_actions[view.recheck_btn].isVisible()
     dialog = ReviewDialog(window.store, run)
     tree = dialog.findChild(QTreeWidget)
     first = tree.topLevelItem(0)
@@ -567,3 +568,100 @@ def test_answers_default_to_this_job_except_stable_facts_and_declarations_are_lo
     scopes = {a.question: (a.scope, a.scope_key) for a in window.store.answers()}
     assert scopes == {'Expected salary': ('application', run.id), 'Will you require visa sponsorship?': ('global', ''),
                       'I certify the information above is true': ('application', run.id)}
+
+
+@pytest.mark.parametrize('size', [(1040, 660), (1280, 780)])
+@pytest.mark.parametrize('state', ['ready', 'questions'])
+def test_board_fits_supported_windows_and_keeps_secondary_actions_available(window, size, state):
+    from PySide6.QtWidgets import QScrollArea
+    view = window.tasks_view
+    run = ready_run() if state == 'ready' else ApplicationRun(job_url=URL, status='needs_input',
+        interventions=[InterventionRequest(kind='answer', question='When are you available?', message='Confirm your availability.')])
+    view.add_task(run)
+    window.resize(*size)
+    window.show()
+    QApplication.processEvents()
+    view.render(select_id=run.id)
+    QApplication.processEvents()
+    visible_actions = [b for b in view.action_buttons if b.isVisibleTo(view)]
+    assert len(visible_actions) == 1
+    scroll = view.detail_body.parentWidget().parentWidget().parentWidget()
+    assert isinstance(scroll, QScrollArea)
+    assert scroll.widget().width() <= scroll.viewport().width()
+    assert view.d_status.width() > 100
+    total = sum(view.table.columnWidth(i) for i in range(view.table.columnCount()) if not view.table.isColumnHidden(i))
+    assert total <= view.table.viewport().width() + 2
+    assert not view.table.isColumnHidden(2)
+    assert view.secondary_actions[view.recheck_btn if state=='ready' else view.start_btn].isVisible()
+    assert not view.tracking.isVisibleTo(view)
+    view.tracking_toggle.click()
+    assert view.notes.isVisibleTo(view)
+
+
+def test_review_wraps_complete_answers_and_keeps_section_names(window):
+    from gui.views.application_dialogs import ReviewDialog
+    from core.automation.models import FieldAssessment
+    run = ready_run()
+    paragraph = 'I want to build dependable tools that make complex information clear and usable. ' * 6
+    run.fields = {'answer': FieldAssessment(key='answer', label='Career aspirations', section='Application questions',
+                    disposition='verified', value=paragraph, answer_ref='answer:approved')}
+    run.completed_sections = ['Application questions']
+    dialog = ReviewDialog(window.store, run)
+    dialog.show()
+    QApplication.processEvents()
+    tree = dialog.findChild(QTreeWidget)
+    section = tree.topLevelItem(1)
+    assert section.text(0) == 'Application questions'
+    item = section.child(0)
+    assert item.text(1) == paragraph
+    assert tree.textElideMode() == Qt.ElideNone
+    assert tree.visualItemRect(item).height() > tree.fontMetrics().height() * 4
+    assert dialog.send_btn.isEnabled()
+    dialog.close()
+
+
+def test_answering_exposes_the_full_question_and_discloses_options_and_reports(window):
+    question = 'Describe the dates you are available, including your earliest starting date and latest ending date.'
+    run = ApplicationRun(job_url=URL, status='needs_input', interventions=[InterventionRequest(kind='answer', question=question, required=True, message='This question needs your answer.')])
+    dialog = RunDetailsDialog(window.store, run)
+    dialog.show()
+    QApplication.processEvents()
+    assert dialog.question_text.text() == question and dialog.question_text.isVisible()
+    assert not dialog.kind.isVisible() and not dialog.scope.isVisible() and not dialog.report_tabs.isVisible()
+    dialog.answer_options.click()
+    assert dialog.kind.isVisible() and dialog.scope.isVisible()
+    dialog.report_toggle.click()
+    assert dialog.report_tabs.isVisible()
+    assert dialog.kind.model().item(3).isEnabled() is False
+    dialog.close()
+
+
+def test_secondary_recheck_action_still_rechecks_the_selected_application(window, monkeypatch):
+    view = window.tasks_view
+    started = capture_starts(view, monkeypatch)
+    run = ready_run()
+    view.add_task(run)
+    view.secondary_actions[view.recheck_btn].trigger()
+    assert started[-1][0].id == run.id and not started[-1][0].approved_review
+
+
+def test_no_search_results_has_a_working_recovery_action(window):
+    view = window.tasks_view
+    view.add_task(ready_run())
+    view.search.setText('no such company')
+    assert view.table.rowCount() == 0 and view.table_stack.currentIndex() == 1
+    clear = next(b for b in view.table_stack.findChildren(QPushButton) if b.text()=='Show all applications')
+    clear.click()
+    assert view.search.text() == '' and view.table_stack.currentIndex() == 0 and view.table.rowCount() == 1
+
+
+def test_approved_omissions_complete_progress_and_uncertain_sends_request_confirmation(window):
+    from core.automation.models import FieldAssessment
+    view = window.tasks_view
+    run = ready_run()
+    run.fields['optional'] = FieldAssessment(key='optional', label='Middle name', section='s', disposition='intentionally_omitted')
+    view.add_task(run)
+    assert view.d_bar.value() == view.d_bar.maximum()
+    run.submission_attempted = True
+    view.render(select_id=run.id)
+    assert view.d_stage.text() == 'Check employer confirmation'

@@ -3,9 +3,9 @@ from functools import lru_cache
 from pathlib import Path
 from string import Template
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QPixmap, QShortcut
-from PySide6.QtWidgets import QFormLayout, QFrame, QLabel, QPushButton, QToolButton, QVBoxLayout
+from PySide6.QtWidgets import QFormLayout, QFrame, QLabel, QPushButton, QStyledItemDelegate, QToolButton, QTreeWidget, QVBoxLayout
 
 LIGHT = {
     "bg": "#f6f7f9", "surface": "#ffffff", "surface2": "#eef0f3", "border": "#dcdfe5",
@@ -122,6 +122,28 @@ def card(spacing=12):
     layout.setContentsMargins(18, 16, 18, 18)
     layout.setSpacing(spacing)
     return frame, layout
+
+
+class ReadableTree(QTreeWidget):
+    """Size read-only rows to their full text, including paragraphs and long URLs."""
+
+    class Delegate(QStyledItemDelegate):
+        def sizeHint(self, option, index):
+            tree = self.parent()
+            width = tree.columnWidth(index.column()) - 20
+            if index.column() == 0:
+                width -= tree.indentation() * (2 if index.parent().isValid() else 1)
+            text = str(index.data(Qt.DisplayRole) or "")
+            bounds = option.fontMetrics.boundingRect(QRect(0, 0, max(40, width), 0), Qt.TextWordWrap | Qt.TextWrapAnywhere, text)
+            return QSize(width, max(30, bounds.height() + 12))
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setItemDelegate(self.Delegate(self))
+        self.setWordWrap(True)
+        self.setTextElideMode(Qt.ElideNone)
+        self.setEditTriggers(QTreeWidget.NoEditTriggers)
+        self.header().sectionResized.connect(lambda *_: self.scheduleDelayedItemsLayout())
 
 
 class MessageBar(QLabel):

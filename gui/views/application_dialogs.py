@@ -6,13 +6,13 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QHeaderView, QLineEdit, QListWidget,
     QMessageBox, QPlainTextEdit, QScrollArea, QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget,
-    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QTreeWidget, QTreeWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
 from core.automation.answers import applicable, asks, fact_name
 from core.automation.models import ApplicantProfile, ApprovedAnswer, Education, Experience, Language, ats_name, employer_key, normalized, site_key
 from core.automation.review import shown_value
-from gui.theme import form_layout, MessageBar, button, card, dot_icon, label, restyle, shortcut
+from gui.theme import form_layout, MessageBar, ReadableTree, button, card, dot_icon, label, restyle, shortcut
 
 BOOLEAN_FIELDS = {"work_authorized_us", "requires_sponsorship", "hispanic_or_latino"}
 ROW_BOOLEANS = {"current", "fluent"}
@@ -271,7 +271,7 @@ class RunDetailsDialog(QDialog):
         self.store, self.run = store, run
         name = run.company or site_key(run.job_url)
         self.setWindowTitle(f"Answer questions — {name}")
-        self.resize(800, 740)
+        self.resize(800, 680)
         self.pending = list(dict.fromkeys(i.question for i in run.interventions if i.question))
         self.answered = set()
         layout = QVBoxLayout(self)
@@ -287,12 +287,22 @@ class RunDetailsDialog(QDialog):
         self.questions.setEditable(True)
         self.questions.addItems(self.pending)
         self.questions.setToolTip("Use the form's exact wording. Approvals match the normalized question text.")
-        self.form.addRow("Question", self.questions)
+        self.form.addRow("Jump to question", self.questions)
+        self.question_text = label(role="section")
+        self.question_text.setTextFormat(Qt.PlainText)
+        self.question_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.form.addRow(self.question_text)
         self.why = label(role="caption")
         self.form.addRow("Why", self.why)
         self.declaration = label()
         self.declaration.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.form.addRow("Declaration", self.declaration)
+        self.answer_options = QToolButton()
+        self.answer_options.setText("Answer options")
+        self.answer_options.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.answer_options.setArrowType(Qt.RightArrow)
+        self.answer_options.setCheckable(True)
+        self.form.addRow(self.answer_options)
         # A reworded question can reuse an answer you already gave instead of a new one.
         self.same = QComboBox()
         self.same.setToolTip("Closest saved answers first. This wording is added to the chosen answer.")
@@ -326,17 +336,33 @@ class RunDetailsDialog(QDialog):
         self.scope = QComboBox()
         self.scope.addItems(["Only this application", f"All applications to {name}", "Every application asking this question"])
         self.form.addRow("Remember for", self.scope)
+        self.remember_hint = label(role="caption")
+        self.form.addRow(self.remember_hint)
+        self.scope.currentTextChanged.connect(lambda text: self.remember_hint.setText("Remember for: " + text))
         box.addLayout(self.form)
         save_row = QHBoxLayout()
         save_row.addStretch()
         self.save_btn = button("Save approved answer", self.save_answer, "primary")
         save_row.addWidget(self.save_btn)
         box.addLayout(save_row)
-        layout.addWidget(frame)
+        self.answer_scroll = QScrollArea()
+        self.answer_scroll.setWidgetResizable(True)
+        self.answer_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.answer_scroll.setWidget(frame)
+        layout.addWidget(self.answer_scroll, 1)
         self.notice = MessageBar()
         layout.addWidget(self.notice)
 
-        tabs = QTabWidget()
+        self.report_toggle = QToolButton()
+        self.report_toggle.setText(f"Field report ({len(run.fields)}) and history")
+        self.report_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.report_toggle.setArrowType(Qt.RightArrow)
+        self.report_toggle.setCheckable(True)
+        layout.addWidget(self.report_toggle, 0, Qt.AlignLeft)
+        tabs = self.report_tabs = QTabWidget()
+        tabs.hide()
+        self.report_toggle.toggled.connect(tabs.setVisible)
+        self.report_toggle.toggled.connect(lambda expanded: self.report_toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow))
         fields = QTreeWidget()
         fields.setHeaderLabels(["Field", "Result", "Detail"])
         fields.setColumnWidth(0, 240)
@@ -378,6 +404,7 @@ class RunDetailsDialog(QDialog):
         self.questions.currentTextChanged.connect(self.question_changed)
         self.kind.currentIndexChanged.connect(self.kind_changed)
         self.same.currentIndexChanged.connect(self.kind_changed)
+        self.answer_options.toggled.connect(self.kind_changed)
         self.question_changed()
         self.update_progress()
 
@@ -387,6 +414,9 @@ class RunDetailsDialog(QDialog):
 
     def question_changed(self):
         request = self.request()
+        self.question_text.setText(self.questions.currentText())
+        self.form.setRowVisible(self.questions, len(self.pending) > 1 or not self.pending)
+        self.form.setRowVisible(self.question_text, bool(self.pending))
         self.choices.clear()
         self.choices.addItems(request.options if request else [])
         self.choices.setCurrentIndex(-1)
@@ -404,6 +434,7 @@ class RunDetailsDialog(QDialog):
         self.why.setText(request.message if request else "")
         self.form.setRowVisible(self.why, bool(request))
         declaration = bool(DECLARATION.search(self.questions.currentText()))
+        self.form.setRowVisible(self.question_text, bool(self.pending) and not declaration)
         self.declaration.setText(self.questions.currentText() + "\n\nYour answer applies to this application and this exact wording only.")
         self.form.setRowVisible(self.declaration, declaration)
         # Reuse what stays true (eligibility, education, links); keep one job's specifics, and every declaration, to this job.
@@ -422,9 +453,13 @@ class RunDetailsDialog(QDialog):
     def kind_changed(self):
         new = not self.same.currentData()
         index = self.kind.currentIndex()
-        self.form.setRowVisible(self.same, self.same.count() > 1)
-        for row in (self.kind, self.scope):
-            self.form.setRowVisible(row, new)
+        advanced = self.answer_options.isChecked()
+        self.answer_options.setArrowType(Qt.DownArrow if advanced else Qt.RightArrow)
+        self.form.setRowVisible(self.same, advanced and self.same.count() > 1)
+        self.form.setRowVisible(self.kind, new and (advanced or index in (1, 2)))
+        self.form.setRowVisible(self.scope, new and advanced)
+        self.remember_hint.setText("Remember for: " + self.scope.currentText())
+        self.form.setRowVisible(self.remember_hint, new and not advanced)
         self.form.setRowVisible(self.answer_box, new and index == 0)
         self.form.setRowVisible(self.choices, new and index == 4)
         self.form.setRowVisible(self.file_box, new and index == 5)
@@ -530,11 +565,13 @@ class ReviewDialog(QDialog):
 
         ai = {"answer:" + a.id for a in store.answers() if a.origin == "ai"}
         self.ai_ids = {a.answer_ref.removeprefix("answer:") for a in run.fields.values() if a.answer_ref in ai}
-        tree = QTreeWidget()
+        tree = ReadableTree()
+        tree.setAccessibleName("Filled application answers")
         tree.setHeaderLabels(["Field", "Value", "Note"])
-        tree.setColumnWidth(0, 260)
-        tree.setColumnWidth(1, 260)
-        tree.setWordWrap(True)
+        tree.header().setStretchLastSection(False)
+        tree.setColumnWidth(0, 210)
+        tree.header().setSectionResizeMode(1, QHeaderView.Stretch)
+        tree.setColumnWidth(2, 190)
         first = QTreeWidgetItem(tree, ["Check these first"])
         pages, seen = {}, set()
         sections = list(dict.fromkeys([*run.completed_sections, *(a.section for a in run.fields.values())]))
@@ -548,7 +585,8 @@ class ReviewDialog(QDialog):
                 continue
             seen.add(identity)
             value = assessment.option if assessment.kind == "radio" and assessment.value is True else shown_value(assessment)
-            field = assessment.label + (f" ({assessment.group} {assessment.row + 1})" if assessment.group else "")
+            group_name = {"experience": "job", "education": "education", "language_proficiency": "language"}.get(assessment.group, assessment.group)
+            field = assessment.label + (f" ({group_name} {assessment.row + 1})" if assessment.group else "")
             note, flagged = ("Document", False) if assessment.kind == "file" else ("Profile", False) if assessment.answer_ref.startswith("profile:") else ("Your saved answer", False)
             if assessment.answer_ref in ai:
                 note, flagged = "AI answer · approving confirms it as yours", True
@@ -559,7 +597,10 @@ class ReviewDialog(QDialog):
             if not flagged:
                 index = sections.index(assessment.section) + 1 if assessment.section in sections else 1
                 if index not in pages:
-                    pages[index] = QTreeWidgetItem(tree, [f"Page {index}"])
+                    title = run.steps[index - 1] if len(run.steps) == len(sections) else assessment.section
+                    if not title or re.fullmatch(r"[\w -]+:[0-9a-f]{10}|form_.*", title):
+                        title = f"Application section {index}"
+                    pages[index] = QTreeWidgetItem(tree, [title])
             item = QTreeWidgetItem(first if flagged else pages[index], [field, value, note])
             for column in range(3):
                 item.setToolTip(column, item.text(column))

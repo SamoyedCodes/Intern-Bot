@@ -79,7 +79,7 @@ QLabel#messageBar,
 QLabel#callout {
     background: $surface;
     border: 1px solid $border;
-    border-left: 3px solid $info;
+    border-left: 1px solid $info;
     border-radius: 6px;
     color: $text;
     padding: 8px 12px;
