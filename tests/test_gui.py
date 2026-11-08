@@ -189,21 +189,32 @@ def test_new_task_uses_only_the_saved_structured_profile(window, monkeypatch):
     assert view._active_id == run.id
 
 
-def test_catchall_login_is_generated_and_its_password_never_reaches_sqlite(window):
-    view = window.profile_view
+def test_catchall_login_is_created_in_1password_and_its_password_never_reaches_sqlite(window):
+    view, vault = window.profile_view, window.store._vault()
     view.site.setText('company.wd1.myworkdayjobs.com')
     view.catchall.setText('applications.example.test')
-    view.generate_credential()
-    assert view.username.text() == 'company_intern@applications.example.test'
-    password = view.password.text()
-    assert len(password) == 18
-    view.save_credential()
-    assert view.password.text() == ''
-    assert password.encode() not in window.store.path.read_bytes()
-    view.load_credential()
-    assert view.password.text() == password
+    view.create_credential()
+    login = vault.credential('company.wd1.myworkdayjobs.com')
+    assert login['username'] == 'company_intern@applications.example.test' and login['state'] == 'new'
+    assert login['password'].encode() not in window.store.path.read_bytes()
     assert window.store.get('catchall_domain') == 'applications.example.test'
+    view.check_credential()
+    assert 'company_intern@applications.example.test' in view.notice.text() and login['password'] not in view.notice.text()
 
+
+def test_service_account_token_goes_to_the_keychain_and_old_keychain_logins_import(window):
+    view, vault = window.profile_view, window.store._vault()
+    view.token.setText('ops_secret')
+    view.save_token()
+    assert vault.get('op-service-account-token') == 'ops_secret' and view.token.text() == ''
+    assert b'ops_secret' not in window.store.path.read_bytes() and 'saved' in view.token_status.text()
+    url = 'https://legacy.wd1.myworkdayjobs.com/job/R1'
+    window.store.save_run(ApplicationRun(job_url=url))
+    vault.set('workday:legacy.wd1.myworkdayjobs.com', '{"username": "u", "password": "OldSecret1", "state": "verified"}')
+    view.import_keychain_logins()
+    assert vault.credential(url) == {'username': 'u', 'password': 'OldSecret1', 'state': 'verified'}
+    view.import_keychain_logins()  # Running it again never duplicates.
+    assert 'already there' in view.notice.text()
 
 def test_logins_are_not_invented_unless_auto_create_is_enabled(window, monkeypatch):
     view = window.tasks_view

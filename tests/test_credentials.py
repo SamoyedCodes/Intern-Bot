@@ -1,18 +1,17 @@
 import json
-import string
 
 import keyring
 import pytest
 
-from core.automation.accounts import SYMBOLS, generate_login, generate_password
+from core.automation.accounts import login_address
 from core.storage.vault import CredentialVault
 
 SITE = 'acme-corp.wd5.myworkdayjobs.com'
 
 
-def test_logins_saved_before_account_creation_read_as_verified(vault):
+def test_keychain_logins_from_older_versions_read_as_verified_for_import(vault):
     vault.backend.set_password('intern-bot', 'workday:a.wd1.myworkdayjobs.com', json.dumps({'username': 'u', 'password': 'p'}))
-    assert vault.credential('a.wd1.myworkdayjobs.com')['state'] == 'verified'
+    assert vault.keychain_login('a.wd1.myworkdayjobs.com') == {'username': 'u', 'password': 'p', 'state': 'verified'}
 
 
 def test_account_state_changes_keep_the_login(vault):
@@ -43,7 +42,7 @@ def test_vault_refuses_plaintext_keyring_backends(monkeypatch, module, accepted)
     ('', 'ignored', 'me@example.test'),
 ])
 def test_login_address_uses_the_catchall_format_or_the_profile_email(catchall, fmt, expected):
-    assert generate_login(SITE, 'me@example.test', catchall, fmt)[0] == expected
+    assert login_address(SITE, 'me@example.test', catchall, fmt) == expected
 
 
 @pytest.mark.parametrize('email, catchall, fmt', [
@@ -55,11 +54,5 @@ def test_login_address_uses_the_catchall_format_or_the_profile_email(catchall, f
 ])
 def test_invalid_login_addresses_are_rejected(email, catchall, fmt):
     with pytest.raises(ValueError):
-        generate_login(SITE, email, catchall, fmt)
+        login_address(SITE, email, catchall, fmt)
 
-
-def test_generated_password_mixes_every_character_class():
-    password = generate_password()
-    assert len(password) == 18
-    for pool in (string.ascii_lowercase, string.ascii_uppercase, string.digits, SYMBOLS):
-        assert any(c in pool for c in password)

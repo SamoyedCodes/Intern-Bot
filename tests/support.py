@@ -7,7 +7,7 @@ from pathlib import Path
 from core.automation.engine import ApplicationEngine
 from core.automation.extension_bridge import ExtensionBridge
 from core.automation.fields import FormField
-from core.automation.models import ApplicantProfile, ApplicationRun, Experience
+from core.automation.models import ApplicantProfile, ApplicationRun, Experience, site_key
 from core.automation.speedy_profile import translate
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'speedyapply'
@@ -25,6 +25,28 @@ class MemoryKeychain:
 
     def get_password(self, service, key):
         return self.values.get((service, key))
+
+
+class MemoryLogins:
+    """Stands in for 1Password: same create-only, generate-when-no-password behaviour, kept in memory."""
+    def __init__(self):
+        self.items = {}
+
+    def check(self):
+        pass
+
+    def credential(self, site):
+        return dict(self.items.get(site_key(site), {}))
+
+    def save_credential(self, site, username, password=None, state='verified'):
+        if site_key(site) in self.items:
+            raise ValueError('A login for this employer is already in 1Password; edit it there.')
+        self.items[site_key(site)] = {'username': username, 'password': password or 'Generated-by-1Password-1', 'state': state}
+
+    def set_account_state(self, site, state):
+        if site_key(site) not in self.items:
+            raise ValueError('No saved login for this employer.')
+        self.items[site_key(site)]['state'] = state
 
 
 async def until(predicate, timeout=5):

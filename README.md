@@ -52,9 +52,18 @@ Use the profile switcher and its ⋯ menu to create, import or export named prof
 
 ### 2. Workday logins (optional)
 
-Under **Profile → Workday logins**, save employer credentials to the macOS keychain. Each login is used only for its own employer.
+Employer logins live in a 1Password vault named **Job Sites**. The bot reads them through the 1Password CLI with a service account, so the 1Password app doesn't need to be open and you won't see a prompt. Setup:
 
-With **Create Workday accounts automatically** on, an employer with no saved login gets one generated from your profile email or a catch-all address such as `{company}_intern@yourdomain.com`. The bot saves it to the keychain, creates the account once and waits. Open Workday's verification email yourself, click **I've verified my account**, and the bot signs in once. Approve the Create Account terms checkbox with **Employer** scope so you're asked once per employer. CAPTCHAs, mailbox access and unfamiliar sign-in flows stay manual.
+1. `brew install 1password-cli`
+2. Create a vault named **Job Sites** in 1Password.
+3. On 1Password.com, open **Developer → Service Accounts** and create one with read and write access to **Job Sites** only. Set an expiry.
+4. Paste the token under **Profile → Workday logins** and click **Save token**. The token is stored in the macOS keychain and checked against the vault right away.
+
+The bot matches a login to an employer by the Workday address on the 1Password item, so logins you add to **Job Sites** yourself are picked up too. Each login is used only for its own employer. **Check login** shows which account the bot will use and never shows the password. If you used the keychain-only version before, **Import keychain logins** copies the saved logins for your existing applications into 1Password and leaves the keychain copies as a backup.
+
+Anyone with the token can read and write **Job Sites** without a prompt. If it leaks, revoke it in 1Password.
+
+With **Create Workday accounts automatically** on, an employer with no saved login gets one with your profile email or a catch-all address such as `{company}_intern@yourdomain.com`. 1Password generates the password and stores the login before the browser sees it. The bot then creates the account once and waits. Open Workday's verification email yourself, click **I've verified my account**, and the bot signs in once. Approve the Create Account terms checkbox with **Employer** scope so you're asked once per employer. CAPTCHAs, mailbox access and unfamiliar sign-in flows stay manual.
 
 ### 3. Add and run applications
 
@@ -98,7 +107,7 @@ The app follows the macOS light or dark appearance. Closing it closes the browse
 ## Data and privacy
 
 - `data/intern-bot.sqlite3` holds profiles, answers, application snapshots, assessments and history. It has owner-only permissions but is not encrypted.
-- Employer credentials and Gemini/OpenAI keys live only in the macOS keychain. There is no plaintext fallback.
+- Employer logins live only in your 1Password **Job Sites** vault. The service account token and Gemini/OpenAI keys live only in the macOS keychain. There is no plaintext fallback.
 - `data/browser/<run-hash>/` holds isolated, exclusively locked Chromium sessions. Older browser directories are preserved.
 - The extension keeps run, tab and document bindings in memory-only `storage.session`. It never persists profile facts, documents, credentials or approvals.
 - Normal autofill makes no SpeedyApply, Supabase, telemetry or local HTTP-server calls.

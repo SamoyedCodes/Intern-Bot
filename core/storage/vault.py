@@ -1,13 +1,15 @@
 """Fail closed when an OS credential vault is unavailable."""
 import json
 
-from core.automation.models import site_key
+from core.storage.onepassword import OnePasswordLogins
+
+TOKEN_KEY = "op-service-account-token"
 
 
 class CredentialVault:
     service = "intern-bot"
 
-    def __init__(self, backend=None):
+    def __init__(self, backend=None, logins=None):
         if backend is None:
             import keyring
             backend = keyring.get_keyring()
@@ -15,6 +17,8 @@ class CredentialVault:
             if not backend.__class__.__module__.startswith(("keyring.backends.macOS", "keyring.backends.Windows", "keyring.backends.SecretService")):
                 raise RuntimeError("A supported operating-system keychain is required; no plaintext fallback is allowed.")
         self.backend = backend
+        # Employer logins live in 1Password; the keychain keeps only its token and the AI API keys.
+        self.logins = logins or OnePasswordLogins(lambda: self.get(TOKEN_KEY))
 
     def set(self, key: str, value: str):
         self.backend.set_password(self.service, key, value)
@@ -23,16 +27,16 @@ class CredentialVault:
         return self.backend.get_password(self.service, key) or ""
 
     # Account lifecycle: "new" (not yet created), "pending_verification" (created, email unverified), "verified".
-    def save_credential(self, site: str, username: str, password: str, state: str = "verified"):
-        self.set("workday:" + site_key(site), json.dumps({"username": username, "password": password, "state": state}))
+    def save_credential(self, site: str, username: str, password: str | None = None, state: str = "verified"):
+        self.logins.save_credential(site, username, password, state)
 
     def credential(self, site: str) -> dict:
-        value = self.get("workday:" + site_key(site))
-        # Logins saved before account creation existed were entered by hand, so they are already verified.
-        return {"state": "verified", **json.loads(value)} if value else {}
+        return self.logins.credential(site)
 
     def set_account_state(self, site: str, state: str):
-        value = self.credential(site)
-        if not value:
-            raise ValueError("No saved login for this employer.")
-        self.save_credential(site, value["username"], value["password"], state)
+        self.logins.set_account_state(site, state)
+
+    def keychain_login(self, site: str) -> dict:
+        """A login saved by the keychain-only versions, for the one-time import into 1Password."""
+        value = self.get("workday:" + site)
+        return {"state": "verified", **json.loads(value)} if value else {}

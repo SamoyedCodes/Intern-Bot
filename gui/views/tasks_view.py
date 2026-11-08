@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QSizePolicy, QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
-from core.automation.accounts import generate_login
+from core.automation.accounts import login_address
 from core.automation.models import ApplicantProfile, ApplicationRun, InterventionRequest, ats_name, canonical_url, job_identity, now, site_key
 from core.automation.review import review_values
 from core.automation.service import AutomationService
@@ -998,12 +998,13 @@ class TasksView(QWidget):
                     vault.set_account_state(run.job_url, "verified")
                     run.authentication_attempted = False
                     self.store.save_run(run)
+                # ponytail: op runs on the GUI thread (about a second of network), move to a worker if it gets noticeable.
                 credential = vault.credential(run.job_url)
                 # Request mode only signs in; it never creates accounts.
                 if not credential and run.mode == "classic" and self.store.get("auto_create_workday_accounts", False):
-                    # Saved before the browser sees it, so a generated password can never be lost.
-                    username, password = generate_login(site_key(run.job_url), profile.email, self.store.get("catchall_domain", ""), self.store.get("catchall_format", ""))
-                    vault.save_credential(run.job_url, username, password, "new")
+                    # 1Password generates and stores the password before the browser sees it, so it can never be lost.
+                    username = login_address(site_key(run.job_url), profile.email, self.store.get("catchall_domain", ""), self.store.get("catchall_format", ""))
+                    vault.save_credential(run.job_url, username, None, "new")
                     credential = vault.credential(run.job_url)
             if self.service.start(run.model_copy(deep=True), profile, credential, inspect_only=inspect_only):
                 self._active_id = run.id
@@ -1015,7 +1016,9 @@ class TasksView(QWidget):
                             "Preparing the application in Chromium. The employer may ask you to sign in again. Nothing is sent until you approve it.")
         except Exception as exc:
             run.status = "failed"
-            run.interventions = [InterventionRequest(kind="browser", message=f"Check the profile, URL and operating-system keychain ({type(exc).__name__}).")]
+            # RuntimeErrors carry 1Password or keychain setup steps and never contain secrets.
+            message = str(exc) if isinstance(exc, RuntimeError) else f"Check the profile, URL and operating-system keychain ({type(exc).__name__})."
+            run.interventions = [InterventionRequest(kind="browser", message=message)]
             self.store.save_run(run)
             self.render()
 

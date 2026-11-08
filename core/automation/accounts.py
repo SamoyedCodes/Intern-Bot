@@ -1,10 +1,7 @@
-"""Generated employer logins: a per-employer address and a strong random password."""
+"""Per-employer login addresses; 1Password generates the passwords."""
 import re
-import secrets
-import string
 
 DEFAULT_CATCHALL_FORMAT = "{company}_intern"
-SYMBOLS = "!@#$%^&*"
 
 
 def login_address(site: str, email: str, catchall: str = "", catchall_format: str = "") -> str:
@@ -20,13 +17,3 @@ def login_address(site: str, email: str, catchall: str = "", catchall_format: st
         raise ValueError("Invalid catch-all address format")
     return local + "@" + domain
 
-
-def generate_password() -> str:
-    chars = [secrets.choice(pool) for pool in (string.ascii_lowercase, string.ascii_uppercase, string.digits, SYMBOLS)]
-    chars += [secrets.choice(string.ascii_letters + string.digits + SYMBOLS) for _ in range(14)]
-    secrets.SystemRandom().shuffle(chars)
-    return "".join(chars)
-
-
-def generate_login(site: str, email: str, catchall: str = "", catchall_format: str = "") -> tuple[str, str]:
-    return login_address(site, email, catchall, catchall_format), generate_password()

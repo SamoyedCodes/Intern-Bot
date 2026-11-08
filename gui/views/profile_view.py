@@ -7,9 +7,11 @@ from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLineEdit, QMenu, QVBoxLayout, QWidget,
 )
 
-from core.automation.accounts import DEFAULT_CATCHALL_FORMAT, generate_login, login_address
+from core.automation.accounts import DEFAULT_CATCHALL_FORMAT, login_address
 from core.automation.models import ApplicantProfile, ats_name, canonical_url, site_key
 from core.storage.local_store import LocalStore
+from core.storage.onepassword import VAULT
+from core.storage.vault import TOKEN_KEY
 from gui.theme import form_layout, MessageBar, button, card, label, more_button, shortcut
 from gui.views.application_dialogs import ProfileEditor
 
@@ -139,25 +141,29 @@ class ProfileView(QWidget):
     def _credentials_page(self):
         frame, box = card()
         box.addWidget(label("Workday logins", "section"))
-        box.addWidget(label("Saved per employer in the system keychain and used only for that employer's Workday sign-in. CAPTCHA, activation and unfamiliar sign-in steps stay manual.", "muted"))
+        box.addWidget(label(f"Stored in your 1Password “{VAULT}” vault and matched by the employer's Workday address, so you can add or edit logins in 1Password. "
+                            "Each login is used only for that employer's sign-in. CAPTCHA, activation and unfamiliar sign-in steps stay manual.", "muted"))
         form = form_layout(10)
+        self.token = QLineEdit()
+        self.token.setEchoMode(QLineEdit.Password)
+        self.token.setPlaceholderText("ops_… (saved to the macOS keychain)")
         self.site = QLineEdit()
         self.site.setPlaceholderText("company.wd1.myworkdayjobs.com")
-        self.username = QLineEdit()
-        self.password = QLineEdit()
-        self.password.setEchoMode(QLineEdit.Password)
         self.catchall = QLineEdit(self.store.get("catchall_domain", ""))
         self.catchall.setPlaceholderText("applications.example.com (optional)")
         self.catchall_format = QLineEdit(self.store.get("catchall_format", ""))
         self.catchall_format.setPlaceholderText(DEFAULT_CATCHALL_FORMAT)
-        for text, widget in [("Employer site", self.site), ("Username or email", self.username), ("Password", self.password), ("Catch-all domain", self.catchall), ("Catch-all address", self.catchall_format)]:
+        for text, widget in [("Service account token", self.token), ("Employer site", self.site), ("Catch-all domain", self.catchall), ("Catch-all address", self.catchall_format)]:
             form.addRow(text, widget)
         box.addLayout(form)
+        self.token_status = label(role="caption")
+        box.addWidget(self.token_status)
+        self.show_token_status()
         self.address_preview = label(role="caption")
         box.addWidget(self.address_preview)
         self.auto_create = QCheckBox("Create Workday accounts automatically when no login is saved")
         self.auto_create.setChecked(self.store.get("auto_create_workday_accounts", False))
-        self.auto_create.setToolTip("The bot generates a login, saves it to the keychain, creates the account, then waits for you to verify the email.")
+        self.auto_create.setToolTip("1Password generates and stores the login, the bot creates the account, then waits for you to verify the email.")
         box.addWidget(self.auto_create)
         for widget in (self.catchall, self.catchall_format):
             widget.textChanged.connect(self.preview_address)
@@ -165,10 +171,11 @@ class ProfileView(QWidget):
         self.auto_create.toggled.connect(self.save_account_settings)
         self.preview_address()
         buttons = QHBoxLayout()
-        buttons.addWidget(button("Load saved login", self.load_credential))
-        buttons.addWidget(button("Generate login", self.generate_credential))
+        buttons.addWidget(button("Save token", self.save_token))
+        buttons.addWidget(button("Check login", self.check_credential))
+        buttons.addWidget(button("Import keychain logins", self.import_keychain_logins))
         buttons.addStretch()
-        buttons.addWidget(button("Save login", self.save_credential, "primary"))
+        buttons.addWidget(button("Create login in 1Password", self.create_credential, "primary"))
         box.addLayout(buttons)
         box.addStretch()
         return frame
@@ -193,34 +200,71 @@ class ProfileView(QWidget):
         self.store.put("catchall_format", self.catchall_format.text().strip())
         self.store.put("auto_create_workday_accounts", self.auto_create.isChecked())
 
-    def load_credential(self):
+    def show_token_status(self):
+        saved = bool(self.store._vault().get(TOKEN_KEY))
+        self.token_status.setText("Service account token saved." if saved else
+                                  f"No token yet. Create a 1Password service account with access to “{VAULT}” only, then paste its token.")
+
+    def save_token(self):
+        token = self.token.text().strip()
+        self.token.clear()
+        if not token:
+            self.notice.notify("Paste a 1Password service account token first.", "warning")
+            return
+        vault = self.store._vault()
+        previous = vault.get(TOKEN_KEY)
+        try:
+            vault.set(TOKEN_KEY, token)
+            vault.logins.check()
+        except Exception as exc:
+            vault.set(TOKEN_KEY, previous)  # Keep the last working token rather than a bad one.
+            self.notice.notify(str(exc) if isinstance(exc, RuntimeError) else "Couldn't save the token to the keychain.", "danger")
+            return
+        self.show_token_status()
+        self.notice.notify(f"Token saved. It can reach the “{VAULT}” vault.", "success")
+
+    def check_credential(self):
         try:
             value = self.store._vault().credential(self.credential_site())
-            self.username.setText(value.get("username", ""))
-            self.password.setText(value.get("password", ""))
-            state = {"new": " The account hasn't been created yet.", "pending_verification": " Workday is waiting for you to verify the email."}.get(value.get("state"), "")
-            self.notice.notify("Login loaded from the keychain." + state if value else "No saved login for this employer.", "success" if value else "info")
-        except Exception:
-            self.notice.notify("Couldn't load the login. Check the employer site and keychain access.", "danger")
-
-    def generate_credential(self):
-        try:
-            username, password = generate_login(self.credential_site(), self.editor.profile().email, self.catchall.text(), self.catchall_format.text())
-            self.username.setText(username)
-            self.password.setText(password)
-            self.notice.notify("Login generated on this Mac. Save it before starting this employer's application.", "warning")
+        except RuntimeError as exc:
+            self.notice.notify(str(exc), "danger")
+            return
         except ValueError:
-            self.notice.notify("Enter a valid Workday employer site and your email or catch-all domain first.", "warning")
+            self.notice.notify("Enter a Workday employer site first.", "warning")
+            return
+        state = {"new": " The account hasn't been created yet.", "pending_verification": " Workday is waiting for you to verify the email."}.get(value.get("state"), "")
+        self.notice.notify(f"1Password has a login for {value['username']}." + state if value else "No login for this employer in 1Password.",
+                           "success" if value else "info")
 
-    def save_credential(self):
+    def create_credential(self):
         try:
             site = self.credential_site()
-            username, password = self.username.text().strip(), self.password.text()
-            if not username or not password:
-                raise ValueError("Missing login")
-            self.store._vault().save_credential(site, username, password)
+            username = login_address(site, self.editor.profile().email, self.catchall.text(), self.catchall_format.text())
+            self.store._vault().save_credential(site, username, None, "new")
             self.save_account_settings()
-            self.password.clear()
-            self.notice.notify("Login saved to the system keychain.", "success")
-        except Exception:
-            self.notice.notify("Couldn't save the login. Check the site, username, password and keychain access.", "danger")
+            self.notice.notify(f"1Password generated and saved a login for {username}. The bot creates the Workday account on the next run.", "success")
+        except RuntimeError as exc:
+            self.notice.notify(str(exc), "danger")
+        except ValueError as exc:
+            self.notice.notify(str(exc) if "1Password" in str(exc) else "Enter a valid Workday employer site and your email or catch-all domain first.", "warning")
+
+    def import_keychain_logins(self):
+        vault = self.store._vault()
+        # ponytail: the keychain can't list its keys, so only employers with a saved application are found.
+        sites = sorted({site_key(run.job_url) for run in self.store.runs() if ats_name(run.job_url) == "Workday"})
+        imported = skipped = 0
+        try:
+            for site in sites:
+                old = vault.keychain_login(site)
+                if not old:
+                    continue
+                if vault.credential(site):
+                    skipped += 1
+                    continue
+                vault.save_credential(site, old["username"], old["password"], old["state"])
+                imported += 1
+        except RuntimeError as exc:
+            self.notice.notify(f"Imported {imported} before stopping. {exc}", "danger")
+            return
+        self.notice.notify(f"Imported {imported} keychain login(s) into 1Password; {skipped} already there. The keychain copies stay as a backup.",
+                           "success" if imported else "info")

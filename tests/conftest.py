@@ -10,7 +10,7 @@ import pytest
 from core.browser.playwright_mgr import AsyncPlaywrightManager
 from core.storage.local_store import LocalStore
 from core.storage.vault import CredentialVault
-from tests.support import EXTENSION, MemoryKeychain
+from tests.support import EXTENSION, MemoryKeychain, MemoryLogins
 
 # One loop runs every async test and browser fixture: Playwright objects belong to the loop that created them.
 LOOP = asyncio.new_event_loop()
@@ -41,7 +41,7 @@ def no_real_keychain(monkeypatch):
 
 @pytest.fixture
 def vault():
-    return CredentialVault(MemoryKeychain())
+    return CredentialVault(MemoryKeychain(), MemoryLogins())
 
 
 @pytest.fixture
