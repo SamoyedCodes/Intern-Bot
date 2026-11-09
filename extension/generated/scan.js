@@ -25,12 +25,15 @@ globalThis.scanInternFields = (rootSelector) => {
     const resumeUpload = (e.type === 'file' || uploaded) && uploadContainer;
     // Workday listbox aria-labels include the selection; use the stable associated label.
     const listboxLabel = e.getAttribute('aria-haspopup') === 'listbox' ? ownLabel || text(fieldset?.querySelector('legend')) : '';
+    // Greenhouse labels every upload input "Attach"; its group names the document ("Resume/CV", "Cover Letter").
+    const uploadGroup = e.type === 'file' && e.closest('[role=group][aria-labelledby]');
+    const uploadLabel = uploadGroup ? text((root.getElementById ? root : document).getElementById(uploadGroup.getAttribute('aria-labelledby'))) : '';
     // A question's own label beside its options or unlabelled input (Chakra forms such as FormSG, Lever's custom questions, Ashby's field entries).
     const choiceGroup = e.closest('[role=group],.application-question,[data-field-path]');
     const question = choiceGroup && [...choiceGroup.querySelectorAll('legend,label,.application-label')].find(l => !l.querySelector('input'));
     const groupQuestion = question ? labelText(question).replace(/\s*[*✱]\s*$/, '') : '';
     // A native adapter names controls the generic rules cannot (data-intern-label/-kind/-value).
-    let label = e.getAttribute('data-intern-label') || listboxLabel || labelled || e.getAttribute('aria-label') || ownLabel || text(fieldset?.querySelector('legend,label')) || (resumeUpload ? 'Resume' : '') || groupQuestion || e.getAttribute('data-automation-id') || e.name || '';
+    let label = e.getAttribute('data-intern-label') || listboxLabel || labelled || uploadLabel || e.getAttribute('aria-label') || ownLabel || text(fieldset?.querySelector('legend,label')) || (resumeUpload ? 'Resume' : '') || groupQuestion || e.getAttribute('data-automation-id') || e.name || '';
     if (e.type === 'checkbox' && e.closest('[data-automation-id$="-CheckboxGroup"]')) {
       const question = text(e.closest('[data-automation-id^="formField-"]')?.querySelector('legend'));
       if (question) label = question + ' — ' + label;
@@ -71,7 +74,11 @@ globalThis.scanInternFields = (rootSelector) => {
     if (type === 'combobox' && e.tagName === 'BUTTON') value = text(e);
     // react-select shows its choice beside the input, which only holds search text.
     // Its input sits in a [data-value] container; unchosen, typed search text is not an answer.
-    if (type === 'combobox' && e.parentElement?.matches('[data-value]')) value = text(e.parentElement.parentElement.querySelector('[class*="-singleValue"]'));
+    if (type === 'combobox' && e.parentElement?.matches('[data-value]')) {
+      value = text(e.parentElement.parentElement.querySelector('[class*="-singleValue"]'));
+      // The runtime notes the option it picked, which may show abbreviated ("Singapore +65" shows "+65"), while that display stands.
+      if (value && e.getAttribute('data-intern-shown') === value) value = e.getAttribute('data-intern-chosen');
+    }
     if (prompt) value = selected.join(', ');
     if (e.tagName === 'SELECT') value = e.value ? e.selectedOptions[0]?.text.trim() || '' : '';
     if (type === 'combobox' && /^(select one|select an option|choose|select\.\.\.)$/i.test(value.trim())) value = '';

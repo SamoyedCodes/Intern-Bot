@@ -17,6 +17,7 @@ QLabel {
 
 QLabel[role="pageTitle"] { font-size: 20px; font-weight: 700; }
 QLabel[role="section"] { font-size: 15px; font-weight: 600; }
+QLabel[role="question"] { font-size: 15px; font-weight: 600; }
 QLabel[role="muted"] { color: $text2; }
 QLabel[role="caption"] { color: $text3; font-size: 11px; }
 QLabel[role="overline"] { color: $text3; font-size: 11px; font-weight: 600; }

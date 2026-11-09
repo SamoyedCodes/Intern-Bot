@@ -4,12 +4,12 @@ from difflib import SequenceMatcher
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QHeaderView, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QPlainTextEdit, QScrollArea, QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget,
+    QButtonGroup, QCheckBox, QComboBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLineEdit,
+    QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QScrollArea, QSizePolicy, QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget,
     QTreeWidget, QTreeWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
-from core.automation.answers import applicable, asks, fact_name
+from core.automation.answers import UNANSWERED, applicable, asks, fact_name
 from core.automation.models import ApplicantProfile, ApprovedAnswer, Education, Experience, Language, ats_name, employer_key, normalized, site_key
 from core.automation.recipes import save_recipe
 from core.automation.review import shown_value
@@ -268,15 +268,188 @@ class ProfileDialog(QDialog):
         self.accept()
 
 
+SCOPES = (("application", "This application", "Used for this application only."),
+          ("employer", "This employer", "Reused for every application to {employer}."),
+          ("global", "Every application", "Reused whenever a form asks this question."))
+OMIT = "__omit__"
+
+
+class QuestionCard(QFrame):
+    """One open question: the employer's wording, an answer in the form's own control type, and how widely it is remembered."""
+    changed = Signal()
+
+    def __init__(self, question, request, members=(), known=(), employer="", draft=None, editable=False):
+        super().__init__()
+        self.setObjectName("card")
+        self.question, self.request, self.members = question, request, list(members)
+        self.required = bool(request and request.required)
+        control = request.field_kind if request else ""
+        options = list(request.options) if request else []
+        self.declaration = bool(DECLARATION.search(question))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 14, 18, 16)
+        layout.setSpacing(8)
+        self.wording = None
+        if editable:
+            # No open question: approve an answer for one you expect, in the form's exact wording.
+            self.wording = QLineEdit()
+            self.wording.setPlaceholderText("The form's exact question")
+            self.wording.textChanged.connect(lambda *_: self.changed.emit())
+            layout.addWidget(self.wording)
+        else:
+            title = label(question, "question")
+            title.setTextFormat(Qt.PlainText)
+            title.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            layout.addWidget(title)
+        notes = ["Required" if self.required else "Optional"] if request else []
+        if request and request.message and request.message != UNANSWERED:
+            notes.append(request.message)
+        if self.declaration:
+            notes.append("Declaration: saved for this application and this exact wording only")
+        if notes:
+            layout.addWidget(label(" · ".join(notes), "caption"))
+
+        self.text = self.choice = self.file = self.checklist = self.blank = None
+        if self.members:
+            self.checklist = QListWidget()
+            for member in self.members:
+                item = QListWidgetItem(member.rsplit(" — ", 1)[1])
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(Qt.Unchecked)
+                item.setData(Qt.UserRole, member)
+                self.checklist.addItem(item)
+            self.checklist.setFixedHeight(self.checklist.sizeHintForRow(0) * self.checklist.count() + 2 * self.checklist.frameWidth())
+            self.checklist.itemChanged.connect(lambda *_: self.changed.emit())
+            layout.addWidget(self.checklist)
+        elif control == "file":
+            self.file = QLineEdit()
+            self.file.setReadOnly(True)
+            self.file.setPlaceholderText("The document to upload")
+            self.file.textChanged.connect(lambda *_: self.changed.emit())
+            row = QHBoxLayout()
+            row.addWidget(self.file, 1)
+            row.addWidget(button("Choose…", self.pick_file, "ghost"))
+            layout.addLayout(row)
+        elif options or control == "checkbox":
+            self.choice = QComboBox()
+            if options:
+                # Type to filter long lists; only an actual option is accepted.
+                self.choice.setEditable(True)
+                self.choice.setInsertPolicy(QComboBox.NoInsert)
+                self.choice.lineEdit().setPlaceholderText("Choose one of the form's options")
+                self.choice.completer().setFilterMode(Qt.MatchContains)
+                self.choice.completer().setCompletionMode(QCompleter.PopupCompletion)
+                for option in options:
+                    self.choice.addItem(option, option)
+            else:
+                self.choice.addItem("Choose…", None)
+                self.choice.addItem("Yes", True)
+                self.choice.addItem("No", False)
+            if not self.required:
+                self.choice.addItem("Leave blank", OMIT)
+            self.choice.setCurrentIndex(-1 if options else 0)
+            self.choice.currentTextChanged.connect(lambda *_: self.changed.emit())
+            layout.addWidget(self.choice)
+        else:
+            self.text = QPlainTextEdit()
+            self.text.setFixedHeight(64)
+            self.text.setPlaceholderText("The exact answer to fill in")
+            self.text.textChanged.connect(lambda *_: self.changed.emit())
+            layout.addWidget(self.text)
+            if draft:
+                layout.addWidget(button("Draft with AI…", lambda: draft(self), "ghost"), 0, Qt.AlignLeft)
+        if not self.required and request and (self.text or self.file):
+            self.blank = QCheckBox("Leave blank")
+            self.blank.toggled.connect(lambda *_: self.changed.emit())
+            layout.addWidget(self.blank)
+
+        # A reworded question can reuse an answer you already gave; only close matches are offered.
+        wording = normalized(question)
+        close = sorted(((SequenceMatcher(None, wording, normalized(a.question)).ratio(), a) for a in known if not asks(a, question)),
+                       key=lambda pair: -pair[0])
+        close = [a for ratio, a in close if ratio >= .55][:8]
+        self.same = None
+        if close and not self.members and not editable:
+            self.same = QComboBox()
+            self.same.setToolTip("This wording is added to the chosen answer.")
+            self.same.addItem("Not the same as a saved answer", "")
+            for answer in close:
+                self.same.addItem(f"Same as “{answer.question}” → {shown(answer)}", answer.id)
+            self.same.currentIndexChanged.connect(lambda *_: self.changed.emit())
+            layout.addWidget(self.same)
+
+        # Reuse what stays true (eligibility, education, links); keep one job's specifics, and every declaration, to this job.
+        self.scopes = QButtonGroup(self)
+        self.scope_row = QWidget()
+        row = QHBoxLayout(self.scope_row)
+        row.setContentsMargins(0, 4, 0, 0)
+        row.setSpacing(8)
+        row.addWidget(label("Remember for", "caption", wrap=False))
+        segments = QFrame()
+        segments.setObjectName("segments")
+        segments.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        segment_row = QHBoxLayout(segments)
+        segment_row.setContentsMargins(3, 3, 3, 3)
+        segment_row.setSpacing(2)
+        for index, (_, text, tip) in enumerate(SCOPES):
+            choice = button(text, variant="segment", tip=tip.format(employer=employer))
+            choice.setCheckable(True)
+            self.scopes.addButton(choice, index)
+            segment_row.addWidget(choice)
+        row.addWidget(segments)
+        row.addStretch()
+        self.scopes.button(0 if self.declaration or not STABLE_FACT.search(question) else 2).setChecked(True)
+        self.scope_row.setVisible(not self.declaration)
+        layout.addWidget(self.scope_row)
+        self.changed.connect(self.sync)
+        self.sync()
+
+    def sync(self):
+        reused = bool(self.same and self.same.currentData())
+        for widget in (self.text, self.choice, self.file, self.checklist):
+            if widget:
+                widget.setEnabled(not reused and not (self.blank and self.blank.isChecked()))
+        if self.blank:
+            self.blank.setEnabled(not reused)
+        self.scope_row.setEnabled(not reused)
+
+    def pick_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Choose file", "", "Documents (*.pdf *.doc *.docx *.txt *.rtf)")
+        if path:
+            self.file.setText(path)
+
+    def scope(self):
+        return "application" if self.declaration else SCOPES[max(self.scopes.checkedId(), 0)][0]
+
+    def answer(self):
+        """("same", id), ("checklist", {question: ticked}), ("value", value, omit), ("invalid", reason), or None while unanswered."""
+        if self.same and self.same.currentData():
+            return ("same", self.same.currentData())
+        if self.blank and self.blank.isChecked():
+            return ("value", "", True)
+        if self.checklist:
+            ticks = {self.checklist.item(r).data(Qt.UserRole): self.checklist.item(r).checkState() == Qt.Checked for r in range(self.checklist.count())}
+            return ("checklist", ticks) if any(ticks.values()) else None
+        if self.choice:
+            text = self.choice.currentText().strip()
+            index = self.choice.findText(text)
+            data = self.choice.itemData(index) if index >= 0 else None
+            if not text or data is None:
+                return ("invalid", "Pick one of the form's options.") if text and index < 0 else None
+            return ("value", "", True) if data == OMIT else ("value", data, False)
+        value = (self.file.text() if self.file else self.text.toPlainText()).strip()
+        return ("value", value, False) if value else None
+
+
 class RunDetailsDialog(QDialog):
-    """Answer the questions an application is blocked on, one after another, then resume it."""
+    """Every question an application is blocked on, in one scrolling form; saving them resumes it."""
 
     def __init__(self, store, run, parent=None):
         super().__init__(parent)
         self.store, self.run = store, run
         name = run.company or site_key(run.job_url)
         self.setWindowTitle(f"Answer questions — {name}")
-        self.resize(800, 680)
+        self.resize(820, 760)
         # A form's tick-all-that-apply list arrives as one checkbox per option ("Question — Option"); ask it as one checklist.
         prefix = lambda q: q.rsplit(" — ", 1)[0]
         boxes = [i.question for i in run.interventions if i.field_kind == "checkbox" and " — " in i.question]
@@ -293,78 +466,29 @@ class RunDetailsDialog(QDialog):
         layout.addWidget(station_heading("Application questions", "verify", f"{name} · {run.role}", compact=True))
         self.progress = label(role="muted")
         layout.addWidget(self.progress)
+        layout.addWidget(label("Answer everything here, then save once. “Remember for” sets how widely each answer is reused: "
+                               "stable facts start at every application, this job's specifics at this application.", "caption"))
 
-        frame, box = card(10)
-        self.form = form_layout(10)
-        self.questions = QComboBox()
-        self.questions.setEditable(True)
-        self.questions.addItems(self.pending)
-        self.questions.setToolTip("Use the form's exact wording. Approvals match the normalized question text.")
-        self.form.addRow("Jump to question", self.questions)
-        self.question_text = label(role="section")
-        self.question_text.setTextFormat(Qt.PlainText)
-        self.question_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.form.addRow(self.question_text)
-        self.why = label(role="caption")
-        self.form.addRow("Why", self.why)
-        self.declaration = label()
-        self.declaration.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.form.addRow("Declaration", self.declaration)
-        self.answer_options = QToolButton()
-        self.answer_options.setText("Answer options")
-        self.answer_options.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.answer_options.setArrowType(Qt.RightArrow)
-        self.answer_options.setCheckable(True)
-        self.form.addRow(self.answer_options)
-        # A reworded question can reuse an answer you already gave instead of a new one.
-        self.same = QComboBox()
-        self.same.setToolTip("Closest saved answers first. This wording is added to the chosen answer.")
-        self.form.addRow("Same as", self.same)
-        self.kind = QComboBox()
-        self.kind.addItems(["Text answer", "Yes", "No", "Leave blank (optional questions only)", "One of the form's options", "File"])
-        self.form.addRow("Answer type", self.kind)
-        # Type to filter long lists; only picking an actual option fills the answer.
-        self.choices = QComboBox()
-        self.choices.setEditable(True)
-        self.choices.setInsertPolicy(QComboBox.NoInsert)
-        self.choices.lineEdit().setPlaceholderText("Type to filter the form's options")
-        self.choices.completer().setFilterMode(Qt.MatchContains)
-        self.choices.completer().setCompletionMode(QCompleter.PopupCompletion)
-        self.form.addRow("Form choices", self.choices)
-        self.checklist = QListWidget()
-        self.form.addRow("Tick all that apply", self.checklist)
-        self.file = QLineEdit()
-        self.file.setReadOnly(True)
-        self.file.setPlaceholderText("The document to upload")
-        self.file_box = QHBoxLayout()
-        self.file_box.addWidget(self.file, 1)
-        self.file_box.addWidget(button("Choose…", self.pick_file, "ghost"))
-        self.form.addRow("File", self.file_box)
-        self.answer = QPlainTextEdit()
-        self.answer.setFixedHeight(90)
-        self.answer.setPlaceholderText("The exact answer to fill in")
-        self.answer_box = QVBoxLayout()
-        self.answer_box.setSpacing(4)
-        self.answer_box.addWidget(self.answer)
-        self.answer_box.addWidget(button("Draft with AI…", self.draft_answer, "ghost"), 0, Qt.AlignLeft)
-        self.form.addRow("Answer", self.answer_box)
-        self.scope = QComboBox()
-        self.scope.addItems(["Only this application", f"All applications to {name}", "Every application asking this question"])
-        self.form.addRow("Remember for", self.scope)
-        self.remember_hint = label(role="caption")
-        self.form.addRow(self.remember_hint)
-        self.scope.currentTextChanged.connect(lambda text: self.remember_hint.setText("Remember for: " + text))
-        box.addLayout(self.form)
-        save_row = QHBoxLayout()
-        save_row.addStretch()
-        self.save_btn = button("Save approved answer", self.save_answer, "primary")
-        save_row.addWidget(self.save_btn)
-        box.addLayout(save_row)
-        self.answer_scroll = QScrollArea()
-        self.answer_scroll.setWidgetResizable(True)
-        self.answer_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.answer_scroll.setWidget(frame)
-        layout.addWidget(self.answer_scroll, 1)
+        known = applicable(store.answers(), run.profile_snapshot or ApplicantProfile(), run)
+        cards = QWidget()
+        column = QVBoxLayout(cards)
+        column.setContentsMargins(0, 0, 6, 0)
+        column.setSpacing(12)
+        self.cards = []
+        for question in self.pending or [""]:
+            members = self.groups.get(question, [])
+            card = QuestionCard(question, self.request(members[0] if members else question), members, known, name,
+                                self.draft_answer, editable=not self.pending)
+            card.changed.connect(self.update_progress)
+            column.addWidget(card)
+            self.cards.append(card)
+        column.addStretch()
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setWidget(cards)
+        layout.addWidget(self.scroll, 1)
         self.notice = MessageBar()
         layout.addWidget(self.notice)
 
@@ -407,155 +531,77 @@ class RunDetailsDialog(QDialog):
                                f"{run.elapsed_seconds:.0f} s active · {run.intervention_count} interventions · {run.ai_requests} AI requests", "caption"))
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        self.resume_btn = buttons.addButton("Continue application", QDialogButtonBox.AcceptRole)
-        restyle(self.resume_btn, variant="primary")
-        buttons.accepted.connect(self.accept)
+        self.save_btn = buttons.addButton("Save answers", QDialogButtonBox.ActionRole)
+        restyle(self.save_btn, variant="primary")
+        self.save_btn.clicked.connect(self.save_answers)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         # Saved answers can be paragraphs; size the lists by a short width, not their longest item, or the dialog outgrows the screen.
         for combo in self.findChildren(QComboBox):
             combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(30)
-        self.questions.currentTextChanged.connect(self.question_changed)
-        self.kind.currentIndexChanged.connect(self.kind_changed)
-        self.same.currentIndexChanged.connect(self.kind_changed)
-        self.answer_options.toggled.connect(self.kind_changed)
-        self.question_changed()
         self.update_progress()
 
-    def group(self):
-        return self.groups.get(self.questions.currentText().strip(), [])
-
-    def request(self):
-        members = self.group()
-        question = normalized(members[0] if members else self.questions.currentText())
+    def request(self, question):
+        question = normalized(question)
         return next((i for i in self.run.interventions if i.question and normalized(i.question) == question), None)
 
-    def question_changed(self):
-        request = self.request()
-        self.question_text.setText(self.questions.currentText())
-        self.form.setRowVisible(self.questions, len(self.pending) > 1 or not self.pending)
-        self.form.setRowVisible(self.question_text, bool(self.pending))
-        self.choices.clear()
-        self.choices.addItems(request.options if request else [])
-        self.choices.setCurrentIndex(-1)
-        self.checklist.clear()
-        for member in self.group():
-            item = QListWidgetItem(member.rsplit(" — ", 1)[1])
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Unchecked)
-            item.setData(Qt.UserRole, member)
-            self.checklist.addItem(item)
-        if self.checklist.count():
-            self.checklist.setFixedHeight(self.checklist.sizeHintForRow(0) * self.checklist.count() + 2 * self.checklist.frameWidth())
-        question = normalized(self.questions.currentText())
-        known = [a for a in applicable(self.store.answers(), self.run.profile_snapshot or ApplicantProfile(), self.run) if not asks(a, question)]
-        known.sort(key=lambda a: -SequenceMatcher(None, question, normalized(a.question)).ratio())
-        self.same.blockSignals(True)
-        self.same.clear()
-        self.same.addItem("Nothing saved — a new answer", "")
-        for answer in known:
-            self.same.addItem(f"{answer.question} → {shown(answer)}", answer.id)
-        self.same.blockSignals(False)
-        required = bool(request and request.required)
-        control = request.field_kind if request else ""
-        self.why.setText(request.message if request else "")
-        self.form.setRowVisible(self.why, bool(request))
-        declaration = bool(DECLARATION.search(self.questions.currentText()))
-        self.form.setRowVisible(self.question_text, bool(self.pending) and not declaration)
-        self.declaration.setText(self.questions.currentText() + "\n\nYour answer applies to this application and this exact wording only.")
-        self.form.setRowVisible(self.declaration, declaration)
-        # Reuse what stays true (eligibility, education, links); keep one job's specifics, and every declaration, to this job.
-        self.scope.setCurrentIndex(0 if declaration or not STABLE_FACT.search(self.questions.currentText()) else 2)
-        self.scope.setEnabled(not declaration)
-        options = self.choices.count() > 0
-        self.file.clear()
-        # Required questions can't be omitted, so the option is unavailable rather than an error after saving.
-        self.kind.model().item(3).setEnabled(not required)
-        self.kind.model().item(4).setEnabled(options)
-        self.kind.model().item(5).setEnabled(control == "file")
-        # Start with the form control's own type; one kept from the previous question would save a boolean for a dropdown.
-        self.kind.setCurrentIndex(5 if control == "file" else 4 if options else 1 if control == "checkbox" else 0)
-        self.kind_changed()
-
-    def kind_changed(self):
-        checklist = bool(self.group())
-        new = checklist or not self.same.currentData()
-        single = new and not checklist
-        index = self.kind.currentIndex()
-        advanced = self.answer_options.isChecked()
-        self.answer_options.setArrowType(Qt.DownArrow if advanced else Qt.RightArrow)
-        self.form.setRowVisible(self.same, advanced and self.same.count() > 1 and not checklist)
-        self.form.setRowVisible(self.kind, single and (advanced or index in (1, 2)))
-        self.form.setRowVisible(self.scope, new and advanced)
-        self.remember_hint.setText("Remember for: " + self.scope.currentText())
-        self.form.setRowVisible(self.remember_hint, new and not advanced)
-        self.form.setRowVisible(self.answer_box, single and index == 0)
-        self.form.setRowVisible(self.choices, single and index == 4)
-        self.form.setRowVisible(self.file_box, single and index == 5)
-        self.form.setRowVisible(self.checklist, checklist)
-
-    def pick_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Choose file", "", "Documents (*.pdf *.doc *.docx *.txt *.rtf)")
-        if path:
-            self.file.setText(path)
+    def unanswered_required(self):
+        return [c for c in self.cards if c.required and c.answer() is None]
 
     def update_progress(self):
-        done = sum(normalized(q) in self.answered for q in self.pending)
-        self.progress.setText(f"{done} of {len(self.pending)} questions answered" if self.pending
-                              else "No open questions. You can still approve an answer to a question you expect.")
-        required_left = any(i.required and i.question and normalized(i.question) not in self.answered for i in self.run.interventions)
-        self.resume_btn.setVisible(bool(self.answered) and not required_left)
-        left = [q for q in self.pending if normalized(q) not in self.answered]
-        self.save_btn.setText("Save answers && continue" if len(left) == 1 else "Save and next" if left else "Save approved answer")
+        if not self.pending:
+            self.progress.setText("No open questions. You can still approve an answer to a question you expect.")
+            return
+        done = sum(c.answer() is not None for c in self.cards)
+        left = len(self.unanswered_required())
+        self.progress.setText(f"{done} of {len(self.cards)} questions answered" + (f" · {left} required still open" if left else ""))
+        self.save_btn.setText("Save answers" if left else "Save answers && continue")
 
-    def draft_answer(self):
+    def draft_answer(self, card):
         from gui.views.assistant_dialog import AssistantDialog
-        question = self.questions.currentText().strip()
-        if not question:
-            self.notice.notify("Choose or enter the exact question first.", "warning")
-            return
-        dialog = AssistantDialog(self.store, self.run, question, parent=self)
+        dialog = AssistantDialog(self.store, self.run, card.question, parent=self)
         if dialog.exec() == QDialog.Accepted:
-            self.answer.setPlainText(dialog.output.toPlainText())
-            self.kind.setCurrentIndex(0)
-            self.notice.notify("Draft inserted. Review it, then save it as your approved answer.", "warning")
+            card.text.setPlainText(dialog.output.toPlainText())
+            self.notice.notify("Draft inserted. Review it before saving it as your approved answer.", "warning")
 
-    def save_answer(self):
-        question = self.questions.currentText().strip()
-        if not question:
-            self.notice.notify("Enter the exact question first.", "warning")
+    def save_answers(self):
+        """Save every answered question; continue the application once no required question is left open."""
+        for card in self.cards:
+            if (answer := card.answer()) and answer[0] == "invalid":
+                self.scroll.ensureWidgetVisible(card)
+                self.notice.notify(f"{answer[1]} ({card.question})", "warning")
+                return
+        saved = 0
+        for card in self.cards:
+            answer = card.answer()
+            question = card.wording.text().strip() if card.wording else card.question
+            if answer is None or not question:
+                continue
+            if answer[0] == "same":
+                existing = next(a for a in self.store.answers() if a.id == answer[1])
+                existing.variants.append(question)
+                self.store.save_answer(existing)
+            elif answer[0] == "checklist":
+                for member, ticked in answer[1].items():
+                    self.store_answer(member, ticked, scope=card.scope())
+            else:
+                self.store_answer(question, answer[1], answer[2], card.scope())
+            self.answered.add(normalized(question))
+            saved += 1
+        if not saved:
+            self.notice.notify("Answer a question first." if self.pending else "Enter the exact question and its answer first.", "warning")
             return
-        if self.group():
-            for row in range(self.checklist.count()):
-                item = self.checklist.item(row)
-                self.store_answer(item.data(Qt.UserRole), item.checkState() == Qt.Checked)
-                self.answered.add(normalized(item.data(Qt.UserRole)))
-            self.saved(question)
-            return
-        if self.same.currentData():
-            answer = next(a for a in self.store.answers() if a.id == self.same.currentData())
-            answer.variants.append(question)
-            self.store.save_answer(answer)
-            self.saved(question)
-            return
-        omit = self.kind.currentIndex() == 3
-        if omit and any(i.required and i.question == question for i in self.run.interventions):
-            self.notice.notify("Required questions can't be left blank.", "warning")
-            return
-        index = self.kind.currentIndex()
-        value = {0: self.answer.toPlainText().strip(), 4: self.choices.currentText().strip(), 5: self.file.text()}.get(index, index == 1)
-        if not omit and value == "":
-            self.notice.notify("Enter, pick or choose an answer first.", "warning")
-            return
-        if index == 4 and self.choices.findText(value) < 0:
-            self.notice.notify("Pick one of the form's options, or switch to a text answer.", "warning")
-            return
-        self.store_answer(question, value, omit)
-        self.saved(question)
+        left = self.unanswered_required()
+        if left:
+            self.scroll.ensureWidgetVisible(left[0])
+            self.notice.notify(f"Saved {saved} answer{'s' if saved > 1 else ''}. {len(left)} required question{'s' if len(left) > 1 else ''} still need{'' if len(left) > 1 else 's'} an answer.", "warning")
+        elif self.pending:
+            self.accept()  # Every required question is answered: carry on without a separate Resume step.
+        else:
+            self.notice.notify("Answer saved. It applies the next time a form asks this question.", "success")
 
-    def store_answer(self, question, value, omit=False):
-        scope = ["application", "employer", "global"][self.scope.currentIndex()]
+    def store_answer(self, question, value, omit=False, scope="application"):
         key = self.run.id if scope == "application" else employer_key(self.run.job_url) if scope == "employer" else ""
         country = self.run.profile_snapshot.country if self.run.profile_snapshot else ""
         answer = ApprovedAnswer(question=question, profile_name=self.run.profile_name, value=value, scope=scope, scope_key=key, country=country, omit=omit)
@@ -564,19 +610,6 @@ class RunDetailsDialog(QDialog):
         if existing:
             answer.id, answer.question, answer.variants = existing[-1].id, existing[-1].question, existing[-1].variants
         self.store.save_answer(answer)
-
-    def saved(self, question):
-        self.answered.add(normalized(question))
-        self.update_progress()
-        remaining = [q for q in self.pending if normalized(q) not in self.answered]
-        if remaining:
-            self.questions.setCurrentText(remaining[0])
-            self.answer.clear()
-            self.notice.notify(f"Answer saved. Next: {remaining[0]}", "success")
-        elif self.pending and not any(i.required and i.question and normalized(i.question) not in self.answered for i in self.run.interventions):
-            self.accept()  # Every open question is answered: carry on without a separate Resume step.
-        else:
-            self.notice.notify("Answer saved. Resume the application when you're ready.", "success")
 
 
 class ReviewDialog(QDialog):

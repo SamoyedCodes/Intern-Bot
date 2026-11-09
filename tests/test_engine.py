@@ -470,6 +470,37 @@ async def test_greenhouse_boolean_question_selects_the_profile_fact(context, sto
     assert await page.locator('select').input_value() == 'No'
 
 
+# A react-select dropdown like Greenhouse's: options appear only when pressed, and the choice shows abbreviated beside the input.
+REACT_SELECT = """<div class="field"><label id="gd-label" for="gd">GDPR Notice</label>
+<div class="x-control"><div class="x-valueContainer"><div class="x-placeholder">Select...</div>
+<div data-value=""><input id="gd" role="combobox" aria-labelledby="gd-label" aria-required="true"></div></div></div>
+<input required tabindex="-1" aria-hidden="true" value=""></div>
+<script>
+const gd = document.getElementById('gd');
+gd.addEventListener('mousedown', () => {
+  if (document.getElementById('gd-list')) return;
+  const list = document.createElement('div');
+  list.id = 'gd-list'; list.setAttribute('role', 'listbox'); list.innerHTML = '<div role="option">Acknowledge/Confirm</div>';
+  gd.setAttribute('aria-controls', 'gd-list'); gd.closest('.field').append(list);
+  list.firstChild.addEventListener('click', () => {
+    gd.closest('.x-control').querySelector('.x-placeholder').outerHTML = '<div class="x-singleValue">Acknowledged</div>';
+    list.remove(); gd.removeAttribute('aria-controls');
+    document.querySelector('[aria-hidden=true][tabindex="-1"]').remove();
+  });
+});
+</script>"""
+
+
+async def test_greenhouse_dropdown_picks_the_approved_option_and_reads_it_back(context, store):
+    page = await open_fixture(context, 'greenhouse', greenhouse(extra=REACT_SELECT))
+    run = ApplicationRun(job_url=page.url)
+    store.save_answer(ApprovedAnswer(question='GDPR Notice', value='Acknowledge/Confirm', scope_key=run.id))
+    run = await apply(store, page, run, profile_for('greenhouse'))
+    assert run.status == 'ready_for_review' and not run.submission_attempted, run.interventions
+    assert await page.locator('.x-singleValue').inner_text() == 'Acknowledged'
+    assert next(f for f in run.fields.values() if f.label == 'GDPR Notice').value == 'Acknowledge/Confirm'
+
+
 async def test_workday_fills_singapore_eligibility_citizenship_and_nationality(context, store):
     page = await open_fixture(context, 'workday', '''<form>
         <label>Are you legally authorized to work in Singapore?<select id=authorized required>

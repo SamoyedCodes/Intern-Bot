@@ -8,7 +8,7 @@ import time
 import pytest
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QMessageBox, QPushButton, QTreeWidget
+from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QLabel, QMessageBox, QPushButton, QTreeWidget
 
 import core.automation.service as service_module
 import gui.views.tasks_view as tasks_module
@@ -69,10 +69,10 @@ def test_eligibility_editor_saves_and_restores_choices_without_losing_legacy_fac
 def test_answers_are_saved_from_run_details_and_removed_from_the_bank(window, monkeypatch):
     run = ApplicationRun(company='Example', job_url=URL, profile_snapshot=ApplicantProfile(), status='running')
     details = RunDetailsDialog(window.store, run)
-    details.questions.setCurrentText('Require sponsorship?')
-    details.kind.setCurrentIndex(2)
-    details.save_answer()
-    assert window.store.answers()[0].value is False
+    details.cards[0].wording.setText('Require sponsorship?')
+    details.cards[0].text.setPlainText('No')
+    details.save_answers()
+    assert window.store.answers()[0].value == 'No' and details.result() != QDialog.Accepted  # No open question: nothing resumes.
     monkeypatch.setattr(QMessageBox, 'question', lambda *args, **kwargs: QMessageBox.Yes)
     bank = window.answers_view
     bank.refresh()
@@ -83,26 +83,28 @@ def test_answers_are_saved_from_run_details_and_removed_from_the_bank(window, mo
 
 
 def test_a_paragraph_long_saved_answer_does_not_widen_the_answer_dialog(window):
-    window.store.save_answer(ApprovedAnswer(question='Are you fully vaccinated? ' + 'Fully vaccinated means the full approved regime. ' * 40, value=True, scope='global'))
+    window.store.save_answer(ApprovedAnswer(question='Are you fully vaccinated?', value='Fully vaccinated means the full approved regime. ' * 40, scope='global'))
     run = ApplicationRun(company='Example', job_url=URL, profile_snapshot=ApplicantProfile(), status='needs_input',
-                         interventions=[InterventionRequest(kind='answer', message='', question='Year of study')])
+                         interventions=[InterventionRequest(kind='answer', message='', question='Are you vaccinated?')])
     details = RunDetailsDialog(window.store, run)
-    assert details.same.count() == 2
+    assert details.cards[0].same.count() == 2
     assert details.minimumSizeHint().width() < 900
 
 def test_a_reworded_question_joins_a_saved_answer_and_the_wording_can_be_removed(window, monkeypatch):
     run = ApplicationRun(company='Example', job_url=URL, profile_snapshot=ApplicantProfile(), status='needs_input',
-                         interventions=[InterventionRequest(kind='answer', message='', question='Internship period')])
+                         interventions=[InterventionRequest(kind='answer', message='', question='What is your intended period of internship?')])
     window.store.save_answer(ApprovedAnswer(question='When is your intended period of internship?', value='Jan - May 2027', scope='global'))
     details = RunDetailsDialog(window.store, run)
-    assert details.scope.currentIndex() == 0  # A job's own specifics (an internship period) stay with this application.
-    details.same.setCurrentIndex(1)
-    details.save_answer()
-    assert window.store.answers()[0].variants == ['Internship period'] and len(window.store.answers()) == 1
+    card = details.cards[0]
+    assert card.scope() == 'application'  # A job's own specifics (an internship period) stay with this application.
+    card.same.setCurrentIndex(1)
+    assert not card.text.isEnabled() and not card.scope_row.isEnabled()
+    details.save_answers()
+    assert window.store.answers()[0].variants == ['What is your intended period of internship?'] and len(window.store.answers()) == 1
     bank = window.answers_view
     bank.refresh()
     answer = bank.tree.topLevelItem(0)
-    assert answer.childCount() == 1 and answer.child(0).text(0) == 'Internship period'
+    assert answer.childCount() == 1 and answer.child(0).text(0) == 'What is your intended period of internship?'
     monkeypatch.setattr(QMessageBox, 'question', lambda *args, **kwargs: QMessageBox.Yes)
     bank.tree.setCurrentItem(answer.child(0))
     assert bank.remove_btn.text() == 'Remove wording…'
@@ -118,19 +120,16 @@ def test_each_question_starts_with_its_form_control_type(window, tmp_path):
         InterventionRequest(kind='answer', message='', question='Degree', options=['Bachelor Degree'], field_kind='combobox'),
         InterventionRequest(kind='answer', message='', question='Resume', field_kind='file')])
     details = RunDetailsDialog(window.store, run)
-    details.kind.setCurrentIndex(1)
-    details.questions.setCurrentIndex(2)  # Picked from the list, not reached by saving.
-    assert details.kind.currentText() == 'File'
-    details.file.setText(str(resume))
-    details.save_answer()
-    assert details.questions.currentText() == 'Have you worked with us before?' and details.kind.currentText() == 'Text answer'
-    details.questions.setCurrentIndex(1)
-    assert details.kind.currentText() == "One of the form's options"
-    details.choices.setCurrentText('Master')
-    details.save_answer()
-    assert len(window.store.answers()) == 1  # Only the form's own options are accepted.
-    details.choices.setCurrentIndex(0)
-    details.save_answer()
+    text, choice, upload = details.cards
+    assert text.text and not text.choice and choice.choice and upload.file
+    assert [choice.choice.itemText(i) for i in range(choice.choice.count())] == ['Bachelor Degree', 'Leave blank']
+    upload.file.setText(str(resume))
+    choice.choice.setCurrentText('Master')
+    details.save_answers()
+    assert window.store.answers() == []  # Only the form's own options are accepted, and nothing is saved until they are.
+    choice.choice.setCurrentIndex(0)
+    details.save_answers()
+    assert details.result() == QDialog.Accepted  # The open question is optional, so the application continues.
     assert {a.question: a.value for a in window.store.answers()} == {'Resume': str(resume), 'Degree': 'Bachelor Degree'}
     assert str(resume) in translate(ApplicantProfile(), run, window.store.answers())['files']
 
@@ -143,12 +142,13 @@ def test_tick_all_that_apply_options_are_asked_as_one_checklist(window):
         InterventionRequest(kind='answer', message='', question='Expected salary', field_kind='text')])
     details = RunDetailsDialog(window.store, run)
     assert details.pending == [asked, 'Expected salary']
-    assert [details.checklist.item(r).text() for r in range(details.checklist.count())] == ['IMDA Website', 'IMDA LinkedIn', 'Word of Mouth']
-    details.checklist.item(1).setCheckState(Qt.Checked)
-    details.save_answer()
+    checklist = details.cards[0].checklist
+    assert [checklist.item(r).text() for r in range(checklist.count())] == ['IMDA Website', 'IMDA LinkedIn', 'Word of Mouth']
+    checklist.item(1).setCheckState(Qt.Checked)
+    assert details.progress.text() == '1 of 2 questions answered'
+    details.save_answers()
     assert {a.question: a.value for a in window.store.answers()} == {
         f'{asked} — IMDA Website': False, f'{asked} — IMDA LinkedIn': True, f'{asked} — Word of Mouth': False}
-    assert details.questions.currentText() == 'Expected salary' and details.checklist.count() == 0
 
 
 def test_restart_turns_an_interrupted_run_into_a_handoff(window):
@@ -439,8 +439,9 @@ def test_desktop_workflow_pauses_asks_and_reaches_review_without_submitting(wind
         try:
             dialog = app.activeModalWidget()
             assert isinstance(dialog, RunDetailsDialog)
-            assert dialog.questions.currentText() == 'Available for this internship?'
-            dialog.kind.setCurrentIndex(2)
+            card, = dialog.cards
+            assert card.question == 'Available for this internship?'
+            card.choice.setCurrentIndex(card.choice.findText('No'))
             click('Save answers && continue', dialog)  # The only open question: saving it carries on.
         except Exception as error:
             errors.append(error)
@@ -614,20 +615,22 @@ def test_answers_default_to_this_job_except_stable_facts_and_declarations_are_lo
         InterventionRequest(kind='answer', message='', question='Will you require visa sponsorship?', required=True),
         InterventionRequest(kind='answer', message='', question='I certify the information above is true', required=True, field_kind='checkbox')])
     details = RunDetailsDialog(window.store, run)
-    assert details.scope.currentIndex() == 0 and details.why.text() == 'The form needs an answer.'
-    assert details.save_btn.text() == 'Save and next'
-    details.answer.setPlainText('Negotiable')
-    details.save_answer()
-    assert details.questions.currentText() == 'Will you require visa sponsorship?' and details.scope.currentIndex() == 2
-    details.kind.setCurrentIndex(2)
-    details.save_answer()
-    assert details.scope.currentIndex() == 0 and not details.scope.isEnabled()
-    assert 'this exact wording' in details.declaration.text() and details.save_btn.text() == 'Save answers && continue'
-    details.save_answer()
-    assert details.result() == QDialog.Accepted  # The last answer continues the application; no separate Resume.
+    salary, sponsorship, declaration = details.cards
+    assert salary.scope() == 'application' and sponsorship.scope() == 'global'
+    assert declaration.scope() == 'application' and declaration.scope_row.isHidden()
+    assert details.save_btn.text() == 'Save answers'
+    salary.text.setPlainText('Negotiable')
+    details.save_answers()
+    assert details.result() != QDialog.Accepted and '2 required questions still need an answer' in details.notice.text()
+    sponsorship.text.setPlainText('No')
+    declaration.choice.setCurrentIndex(declaration.choice.findText('Yes'))
+    assert details.save_btn.text() == 'Save answers && continue'
+    details.save_answers()
+    assert details.result() == QDialog.Accepted  # Saving the last required answer continues the application; no separate Resume.
     scopes = {a.question: (a.scope, a.scope_key) for a in window.store.answers()}
     assert scopes == {'Expected salary': ('application', run.id), 'Will you require visa sponsorship?': ('global', ''),
                       'I certify the information above is true': ('application', run.id)}
+    assert window.store.answers()[-1].value is True
 
 
 def test_an_unsupported_site_offers_teaching_and_a_draft_recipe_offers_review(window):
@@ -702,13 +705,13 @@ def test_answering_exposes_the_full_question_and_discloses_options_and_reports(w
     dialog = RunDetailsDialog(window.store, run)
     dialog.show()
     QApplication.processEvents()
-    assert dialog.question_text.text() == question and dialog.question_text.isVisible()
-    assert not dialog.kind.isVisible() and not dialog.scope.isVisible() and not dialog.report_tabs.isVisible()
-    dialog.answer_options.click()
-    assert dialog.kind.isVisible() and dialog.scope.isVisible()
+    card = dialog.cards[0]
+    title = next(l for l in card.findChildren(QLabel) if l.text() == question)
+    assert title.isVisible() and card.scope_row.isVisible() and not dialog.report_tabs.isVisible()
+    assert 'Required · This question needs your answer.' in [l.text() for l in card.findChildren(QLabel)]
+    assert card.blank is None  # A required question can't be left blank.
     dialog.report_toggle.click()
     assert dialog.report_tabs.isVisible()
-    assert dialog.kind.model().item(3).isEnabled() is False
     dialog.close()
 
 

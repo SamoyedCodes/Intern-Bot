@@ -62,7 +62,7 @@
     const readable = e => e instanceof HTMLSelectElement ? (e.value ? e.selectedOptions[0]?.textContent || '' : '') : ['checkbox','radio'].includes(e.type) ? e.checked : e.matches?.('button[aria-haspopup=listbox]') ? shownChoice(e) : e.value ?? e.textContent;
     // Employers reformat phone numbers ("55512345" becomes "5551 2345").
     const phone = p => /^profile:phone(_number)?$/.test(p.ref || ''), digits = v => String(v ?? '').replace(/\D/g, '');
-    const matches = (e, p) => e.type === 'radio' ? e.checked === (normalize(e.labels?.[0]?.textContent || e.value) === normalize(p.value)) : e.type === 'checkbox' ? e.checked === p.value : phone(p) ? digits(readable(e)) === digits(p.value) : normalize(readable(e)) === normalize(p.value);
+    const matches = (e, p) => e.type === 'radio' ? e.checked === (normalize(e.labels?.[0]?.textContent || e.value) === normalize(p.value)) : e.type === 'checkbox' ? e.checked === p.value : phone(p) || e.type === 'tel' ? digits(readable(e)) === digits(p.value) : normalize(readable(e)) === normalize(p.value);
     function assign(e, key, value) {
       if (!dom(e)) { e[key] = value; return value; }
       if (!live()) return value;
@@ -245,7 +245,9 @@
         const digest=await crypto.subtle.digest('SHA-256',await e.files[0].arrayBuffer());
         if(!live())return false;
         if(e.files.length!==1||hex(digest)!==descriptor.digest){report('conflict','An existing upload differs from the selected file.',p.key);return false;}
-        return true;
+        // A site can reject a file it wasn't ready for (Greenhouse loads its upload settings after the page): send ours once more.
+        const last=sent.get(e);
+        if(!last||last.tries>1||performance.now()-last.at<5000||acceptedUpload(e,e.files[0]))return true;
       }
       const container=e.closest(UPLOADS);
       const receipt=container?.querySelector(RECEIPTS), proof=container&&verifiedUploads.get(container);
@@ -263,11 +265,19 @@
         } finally {uploading.delete(e);}
       }
       if(container)verifiedUploads.set(container,{digest:descriptor.digest,name:descriptor.fileName,receipt:null,at:performance.now()});
+      sent.set(e,{at:performance.now(),tries:(sent.get(e)?.tries||0)+1});
       const transfer=new DataTransfer();transfer.items.add(chosen);e.files=transfer.files;
       e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));lastChange=performance.now();return true;
     }
     const hex = buffer => [...new Uint8Array(buffer)].map(b=>b.toString(16).padStart(2,'0')).join('');
     const pause = ms => new Promise(resolve=>native.setTimeout(resolve,ms));
+    // Whether the site shows this selected file as received.
+    function acceptedUpload(e,selected){
+      const container=e.closest('[data-automation-id=resumeUpload],#s3_upload_for_resume,[data-upload]')||e.closest('label')||e.parentElement;
+      const receipts=[...container.querySelectorAll('[data-automation-id=file-upload-successful],.file-upload-success,.filename,.ashby-application-form-input-file-item-name,[role=status]')];
+      return receipts.some(r=>visible(r)&&(r.getAttribute('data-automation-id')==='file-upload-successful'||r.matches('.filename,.ashby-application-form-input-file-item-name')&&r.textContent.includes(selected.name)||r.textContent.includes(selected.name)&&/uploaded|attached|complete|success/i.test(r.textContent)));
+    }
+    const sent=new WeakMap();  // File input → when this runtime last sent it a file, and how often.
     // Workday renders a dropdown's options only while it is open.
     async function listbox(e){
       if(!e?.isConnected||!e.matches('button[aria-haspopup=listbox]'))return [];
@@ -283,6 +293,32 @@
     const choice = o => o.querySelector('input[type=radio],input[type=checkbox]');
     const optionText = o => (o.querySelector('[data-automation-id=promptOption]')||o).textContent.trim();
     const typeText = (e,text) => {Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,text);e.dispatchEvent(new Event('input',{bubbles:true}));};
+    // react-select (Greenhouse): a search input in a [data-value] container; the choice shows beside it and opens on a press.
+    const reactSelect = e => e?.isConnected && e.matches('input[role=combobox]') && e.parentElement?.matches('[data-value]');
+    const reactShown = e => (e.parentElement.parentElement.querySelector('[class*="-singleValue"]')?.textContent || '').trim();
+    const reactItems = e => [...(document.getElementById(e.getAttribute('aria-controls'))?.querySelectorAll('[role=option]')||[])];
+    const press = e => {for(const type of ['mouseover','mousedown','mouseup','click'])e.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window}));};
+    async function reactOptions(e,query){
+      press(e);
+      for(let i=0;i<10&&!reactItems(e).length;i++)await pause(100);
+      // A location search lists nothing until typed.
+      if(!reactItems(e).length&&query){e.focus();typeText(e,query);for(let i=0;i<20&&!reactItems(e).length;i++)await pause(100);}
+      return reactItems(e);
+    }
+    async function reactChoose(e,p){
+      const shown=reactShown(e);
+      if(normalize(e.getAttribute('data-intern-chosen'))===normalize(p.value)&&e.getAttribute('data-intern-shown')===shown||normalize(shown)===normalize(p.value))return false;
+      if(shown&&!p.replace)return false;
+      const exact=(await reactOptions(e,String(p.value))).filter(o=>normalize(o.textContent)===normalize(p.value));
+      if(exact.length!==1){typeText(e,'');e.blur();return false;}
+      exact[0].click();lastChange=performance.now();
+      for(let i=0;i<10&&reactShown(e)===shown;i++)await pause(100);
+      e.blur();
+      if(reactShown(e)===shown)return false;
+      // The picked option can show abbreviated ("Singapore +65" shows "+65"); the scanner reads it back while that display stands.
+      e.setAttribute('data-intern-chosen',exact[0].textContent.trim());e.setAttribute('data-intern-shown',reactShown(e));
+      return true;
+    }
     async function search(e,query){
       const id=CSS.escape(e.getAttribute('data-uxi-multiselect-id'));
       const results=()=>[...document.querySelectorAll(`[data-uxi-popup-anchor="${id}"] [role=option],[data-associated-widget="${id}"] [role=option]`)];
@@ -365,10 +401,7 @@
         if(selected){
           const digest=hex(await crypto.subtle.digest('SHA-256',await selected.arrayBuffer()));
           field.file_digest=e.files.length===1?digest:'';
-          const container=e.closest('[data-automation-id=resumeUpload],#s3_upload_for_resume,[data-upload]')||e.closest('label')||e.parentElement;
-          const receipts=[...container.querySelectorAll('[data-automation-id=file-upload-successful],.file-upload-success,.filename,.ashby-application-form-input-file-item-name,[role=status]')];
-          const accepted=receipts.some(r=>visible(r)&&(r.getAttribute('data-automation-id')==='file-upload-successful'||r.matches('.filename,.ashby-application-form-input-file-item-name')&&r.textContent.includes(selected.name)||r.textContent.includes(selected.name)&&/uploaded|attached|complete|success/i.test(r.textContent)));
-          field.invalid=field.invalid||!accepted;
+          field.invalid=field.invalid||!acceptedUpload(e,selected);
         }
       }
       return alignRows(fields);
@@ -462,10 +495,8 @@
           const text=e.value;
           const items=()=>[...(document.getElementById(e.getAttribute('aria-controls'))?.querySelectorAll('[role=option]')||[])];
           // A react-select dropdown (Greenhouse) lists every choice when pressed, so a wrong saved answer can't hide them.
-          if(e.parentElement?.matches('[data-value]')){
-            for(const type of ['mouseover','mousedown','mouseup','click'])e.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window}));
-            for(let i=0;i<20&&!items().length;i++)await pause(100);
-            const found=items().map(o=>o.textContent.trim());e.blur();
+          if(reactSelect(e)){
+            const found=(await reactOptions(e,query||text)).map(o=>o.textContent.trim());typeText(e,'');e.blur();
             return found;
           }
           // A typeahead lists nothing until typed.
@@ -494,6 +525,7 @@
             continue;
           }
           if(prompt(e)){if(await pick(e,String(p.value)))chosen++;continue;}
+          if(reactSelect(e)){if(await reactChoose(e,p))chosen++;continue;}
           if(!e.matches('button[aria-haspopup=listbox]')||shown()===normalize(p.value))continue;
           if(shown()&&shown()!=='select one'&&!p.replace)continue;
           const exact=(await listbox(e)).filter(o=>normalize(o.innerText||o.textContent)===normalize(p.value));

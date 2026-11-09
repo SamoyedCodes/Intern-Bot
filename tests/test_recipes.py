@@ -268,6 +268,11 @@ def react_select(id, label, shown, typed=''):
 
 async def test_scan_reads_react_select_choices_and_skips_their_hidden_inputs(context):
     from core.automation.recipes import SCAN
-    page = await open_fixture(context, "", "<form>" + react_select("g", "GDPR Notice", "", "Yes") + react_select("c", "Country", "Singapore") + "</form>", URL)
+    # The runtime notes an option it picked whose display is abbreviated ("Singapore +65" shows "+65").
+    code = react_select("p", "Country", "+65").replace("<input id=p", '<input id=p data-intern-chosen="Singapore +65" data-intern-shown="+65"')
+    stale = react_select("q", "Country code", "+60").replace("<input id=q", '<input id=q data-intern-chosen="Singapore +65" data-intern-shown="+65"')
+    upload = '<div role=group aria-labelledby=up><div id=up>Resume/CV</div><button type=button>Attach</button><label for=r>Attach</label><input id=r type=file></div>'
+    page = await open_fixture(context, "", "<form>" + react_select("g", "GDPR Notice", "", "Yes") + react_select("c", "Country", "Singapore") + code + stale + upload + "</form>", URL)
     fields = [(f["label"], f["kind"], f["value"]) for f in await page.evaluate(f"({SCAN})(null)")]
-    assert fields == [("GDPR Notice", "combobox", ""), ("Country", "combobox", "Singapore")]
+    assert fields == [("GDPR Notice", "combobox", ""), ("Country", "combobox", "Singapore"), ("Country", "combobox", "Singapore +65"),
+                      ("Country code", "combobox", "+60"), ("Resume/CV", "file", "")]

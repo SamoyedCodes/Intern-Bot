@@ -454,7 +454,7 @@ class ApplicationEngine:
             elif field.kind == 'radio':
                 offered = any(f.kind == 'radio' and f.label == field.label and f.group == field.group and f.row == field.row and normalized(f.option) == normalized(str(resolution.value)) for f in fields)
                 matched = offered and field.value == (normalized(field.option) == normalized(str(resolution.value))) and not field.invalid
-            elif resolution.ref in ('profile:phone', 'profile:phone_number'):
+            elif resolution.ref in ('profile:phone', 'profile:phone_number') or field.kind == 'tel':
                 # Employers reformat phone numbers ("55512345" becomes "5551 2345").
                 matched = re.sub(r'\D', '', str(field.value)) == re.sub(r'\D', '', str(resolution.value)) and not field.invalid
             elif re.search(r'location|city', field.label, re.I) and normalized(str(field.value)).startswith(normalized(str(resolution.value)) + ','):
