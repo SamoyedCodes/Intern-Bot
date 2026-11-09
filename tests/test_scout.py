@@ -515,6 +515,22 @@ def test_non_employer_hosts_and_client_rendered_boards(store, monkeypatch):
     assert PublicReader().read('https://jobs.careers.gov.sg/?q=intern')[0] == 'rendered'
 
 
+def test_bot_blocked_fetch_retries_in_browser_but_other_errors_do_not(monkeypatch):
+    import core.scout_sources as module
+    from urllib.error import HTTPError
+    def opener(code):
+        def open_(*a, **k):
+            raise HTTPError('https://www.edbi.com/careers/', code, 'x', {}, None)
+        return SimpleNamespace(open=open_)
+    monkeypatch.setattr(module, 'public_url', lambda url: url)
+    monkeypatch.setattr(PublicReader, 'render', lambda self, url: ('rendered', url, []))
+    monkeypatch.setattr(module, 'build_opener', lambda *a: opener(403))
+    assert PublicReader().read('https://www.edbi.com/careers/')[0] == 'rendered'
+    monkeypatch.setattr(module, 'build_opener', lambda *a: opener(404))
+    with pytest.raises(HTTPError):
+        PublicReader().read('https://www.edbi.com/careers/')
+
+
 def test_in_page_anchors_do_not_requeue_a_checked_page(store):
     page = 'https://employer.test/jobs/intern-1'
     reader = FakeReader({ROOT: (ROOT, 'Careers', [page, page + '#main-content', 'https://employer.test/jobs#/job/2', 'https://employer.test/blog/intern-tips']),

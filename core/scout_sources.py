@@ -5,6 +5,7 @@ import re
 import socket
 from html.parser import HTMLParser
 from urllib.parse import urlencode, urljoin, urlsplit, unquote
+from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from core.automation.assistant import NoRedirect
@@ -31,18 +32,15 @@ def employment_link(url):
 
 
 DEFAULT_SOURCES = """SG Growth Capital (EDBI and SEEDS) | https://jobs.eu.lever.co/sggc
-EDBI | https://www.edbi.com/careers/
-SEEDS Capital | https://www.seedscapital.sg/
+# No careers page on their sites; kept so the targeted web search names them.
 Heliconia Capital | https://www.heliconiacapital.com/
 Vertex Holdings | https://vertexholdings.com/
-Seviora | https://www.sevioragroup.com/careers
-Pavilion Capital / Seviora Capital | https://www.sevioracapital.com/
+Seviora (incl. Seviora Capital) | https://www.sevioragroup.com/careers
 Clifford Capital | https://www.cliffordcapital.sg/careers/
 MAS | https://www.mas.gov.sg/careers
 MTI Economist Service | https://www.mti.gov.sg/who-we-are/careers-at-mti/economist-service/join-the-economist-service/
 MOF | https://www.mof.gov.sg/careers
 CCS (formerly CCCS) | https://www.ccs.gov.sg/about-ccs/careers/opportunities/
-Enterprise Singapore | https://www.enterprisesg.gov.sg/about-us/careers/for-students-and-graduates
 IBF | https://www.ibf.org.sg/youngtalent/ytp-aif
 SGX | https://careers.sgx.com/search/?q=intern
 Careers@Gov | https://www.careers.gov.sg/join-us/early-careers/
@@ -178,11 +176,17 @@ class PublicReader:
         url = public_url(url)
         if urlsplit(url).hostname in SPA_HOSTS:
             return self.render(url)
-        with build_opener(PublicRedirect()).open(Request(url, headers={"User-Agent": "Intern-Bot Opportunity Scout/1.0"}), timeout=20) as response:
-            raw = response.read(MAX_BYTES + 1)
-            final = public_url(response.url)
-            content_type = response.headers.get_content_type()
-            encoding = response.headers.get_content_charset() or "utf-8"
+        try:
+            with build_opener(PublicRedirect()).open(Request(url, headers={"User-Agent": "Intern-Bot Opportunity Scout/1.0"}), timeout=20) as response:
+                raw = response.read(MAX_BYTES + 1)
+                final = public_url(response.url)
+                content_type = response.headers.get_content_type()
+                encoding = response.headers.get_content_charset() or "utf-8"
+        except HTTPError as exc:
+            # Bot shields (EDBI, Enterprise Singapore) refuse any non-browser client; a real browser usually passes.
+            if exc.code in {403, 429}:
+                return self.render(url)
+            raise
         if len(raw) > MAX_BYTES or content_type not in {"text/html", "application/json", "text/plain"}:
             raise ValueError("Page is too large or uses an unsupported document format.")
         html = raw.decode(encoding, errors="replace")
