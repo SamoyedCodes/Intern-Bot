@@ -20,6 +20,7 @@ Autofill runs all **28 site-specific SpeedyApply 2.28.0 adapters** inside a loca
 - **Approved answers.** Each answer you approve is reused for the same question and any rewording you link to it, within its profile, scope and country.
 - **AI autofill (optional).** Unknown or reworded factual questions (graduation year, degree level, LinkedIn URL) are linked to your profile or answered from your career facts. AI answers fill the form, show as *AI · unconfirmed* under **Answers**, and block automatic submission until you confirm them.
 - **Tracking.** Pipeline stage, notes, job description and history for each application, with CSV import and export.
+- **Scout.** Finds internships and student-eligible jobs using public employer pages, official boards and your configured AI provider. Keeps posting evidence and a deduplicated history for each profile.
 - **You submit.** Automatic submission is off by default. It needs per-application authorization and stops on anything it can't verify.
 
 ## Install and run
@@ -98,6 +99,16 @@ Check the form in the browser and submit it yourself, or authorize automatic sub
 
 The detail panel holds pipeline stage, notes and the job description, and saves as you type. Import and export CSV from the ⋯ menu next to **New application**. Imports never start applications.
 
+### Scout
+
+Open **Scout** (⌘5), choose a saved profile, and edit its search brief and priority sources. Choose **Internships**, **Jobs**, or **Both**. **Scan now** previews the exact applicant context before the first AI request. **Scan daily** runs at 8:00 a.m. Singapore time while the app is open, with a catch-up scan when it next opens or wakes. Changes to the provider or shared context require a new preview; until then daily scans pause and Scout shows **!** in the sidebar. Priority sources take one `Name | URL` (or bare URL) per line, and lines starting with `#` are ignored.
+
+Scout reuses the provider, model and Keychain key in Settings. OpenAI and Claude use native web search when the selected model supports it. An optional Brave Search API key enables broad discovery with any provider. Direct public sources are checked in either case. Each run allows up to six discovery requests and 40 candidate postings, with source failures and limits shown under coverage. Public pages that require JavaScript may open in a separate Chromium window. Private university portals and sign-in-only pages appear as unavailable.
+
+Results need an independently opened posting and source excerpts proving it is open. Open postings are grouped by their verified posting date: the last 48 hours first, then those posted earlier, then undated leads. Deadlines within 14 days come first, and missing terms show **Not stated**. **Latest scan** shows every opportunity the most recent scan verified as open, with first sightings marked **New**; **All saved** shows the history. **Prepare application** uses the matched profile snapshot and starts or queues autofill in Applications, where you review submission as usual.
+
+Scout starts its own history in SQLite and generates `data/opportunities-log.md`. The log is rebuilt from saved records so an export failure can be repaired by the next scan. Scan limits bound request counts; actual API charges depend on the model and search provider.
+
 ### Answers and Settings
 
 **Answers** lists every approved answer. Expand one to see each wording matched to it and remove a wrong wording on its own.
@@ -123,7 +134,8 @@ The app follows the macOS light or dark appearance. Closing it closes the browse
 - AI autofill sends only what the provider needs:
   - **A model on this Mac:** question wording, form options, your saved question wordings, profile field names and your career facts (education, experience, skills, languages, summary). Nothing leaves the computer.
   - **A cloud provider:** question wording, form options, saved question wordings and the *names* of profile fields that have a value, never their values. Turning on **Also let … see your career facts** per provider adds career facts with your names, email, phone, address and links masked.
-  - **Never, to any provider:** contact or identity values, documents, credentials, page content, or essay, demographic, health, legal-status, pay and consent questions (including lone checkboxes).
+  - **Never through AI autofill:** contact or identity values, documents, credentials, page content, or essay, demographic, health, legal-status, pay and consent questions (including lone checkboxes).
+  - **Scout:** after its context preview is approved, the selected provider receives the redacted search brief, relevant career facts, citizenship/country criteria, and public posting text. Search services receive search criteria. Application browser sessions and documents are excluded.
   - Cloud URLs must use https. Redirects are refused, and errors never echo request content. Each request is logged by kind (provider, local or cloud, number of questions, whether facts were sent), never by content.
 
 The original XPI, exact source and notices are kept under [`third_party/speedyapply/2.28.0/`](third_party/speedyapply/2.28.0/). The loaded extension contains only the adapted dependency graph and local controls; see [extension internals](extension/README.md).
