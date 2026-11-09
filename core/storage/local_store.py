@@ -21,6 +21,8 @@ class LocalStore:
                 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS answers (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS opportunities (profile TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(profile,id));
+                CREATE TABLE IF NOT EXISTS scout_scans (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, at TEXT NOT NULL, kind TEXT NOT NULL, stage TEXT NOT NULL, note TEXT NOT NULL);
             """)
         os.chmod(self.path, 0o600)
@@ -87,6 +89,43 @@ class LocalStore:
         run.updated_at = now()
         with self.connect() as db:
             db.execute("INSERT OR REPLACE INTO runs VALUES (?, ?)", (run.id, run.model_dump_json()))
+
+    def opportunities(self, profile_name=None):
+        from core.scout import Opportunity
+        with self.connect() as db:
+            rows = db.execute("SELECT payload FROM opportunities" + (" WHERE profile=?" if profile_name is not None else ""),
+                              (profile_name,) if profile_name is not None else ()).fetchall()
+        return [Opportunity.model_validate_json(row[0]) for row in rows]
+
+    def save_opportunity(self, item):
+        from core.scout import Opportunity
+        with self.connect() as db:
+            row = db.execute("SELECT payload FROM opportunities WHERE profile=? AND id=?", (item.profile_name, item.id)).fetchone()
+            old = Opportunity.model_validate_json(row[0]) if row else None
+            if old:
+                item.first_seen = old.first_seen
+                if old.published and not item.published:
+                    item.published, item.freshness = old.published, old.freshness
+                    item.evidence["published"] = old.evidence["published"]
+            db.execute("INSERT OR REPLACE INTO opportunities VALUES (?,?,?)", (item.profile_name, item.id, item.model_dump_json()))
+        return old is None or (old.freshness == "undated" and item.freshness == "recent")
+
+    def close_opportunity(self, profile_name, item_id):
+        with self.connect() as db:
+            row = db.execute("SELECT payload FROM opportunities WHERE profile=? AND id=?", (profile_name, item_id)).fetchone()
+            if row:
+                payload = json.loads(row[0])
+                payload["active"] = False
+                db.execute("UPDATE opportunities SET payload=? WHERE profile=? AND id=?", (json.dumps(payload), profile_name, item_id))
+
+    def save_scout_report(self, report):
+        with self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO scout_scans VALUES (?,?)", (report["id"], json.dumps(report)))
+
+    def scout_reports(self, profile_name):
+        with self.connect() as db:
+            rows = db.execute("SELECT payload FROM scout_scans ORDER BY rowid DESC").fetchall()
+        return [r for row in rows if (r := json.loads(row[0]))["profile_name"] == profile_name]
 
     def get_run(self, run_id):
         with self.connect() as db:
