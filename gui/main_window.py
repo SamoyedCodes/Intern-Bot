@@ -25,13 +25,14 @@ from gui.views.application_dialogs import AnswersView
 from gui.views.assistant_dialog import AssistWorker
 from gui.views.profile_view import ProfileView
 from gui.views.tasks_view import TasksView, status_meta
+from gui.views.scout_view import ScoutView
 
 SAFETY_FACTS = [
     "Browser: bundled Chromium with local adapters, always visible.",
     "Final submission is yours by default. Automatic submission needs your authorization for each application and stops if anything can't be verified.",
     "Applications run in a separate, visible Chromium window. Employers may ask you to sign in again.",
     "Profiles, answers and history stay in a local database on this Mac. Employer logins and API keys are kept only in the system keychain.",
-    "AI never receives your contact details, documents, credentials or pages. Cloud providers get only question wording, options and profile field names unless you allow career facts; a model on this Mac keeps everything local.",
+    "AI autofill receives question wording and permitted career facts. Scout sends its previewed search context and public postings to your selected provider. Contact details, documents, credentials and application pages stay private.",
     "Preview: adapters are tested against fictional forms. Live employer acceptance testing is still pending.",
 ]
 
@@ -238,7 +239,7 @@ class SettingsView(QWidget):
 
 
 class MainWindow(QMainWindow):
-    PAGES = ("Applications", "Profile", "Answers", "Settings")
+    PAGES = ("Applications", "Profile", "Answers", "Settings", "Scout")
 
     def __init__(self, store=None):
         super().__init__()
@@ -260,9 +261,12 @@ class MainWindow(QMainWindow):
         self.profile_view = ProfileView(self.store)
         self.answers_view = AnswersView(self.store)
         self.settings_view = SettingsView(self.store)
+        self.scout_view = ScoutView(self.store)
+        self.scout_view.prepare_requested.connect(self.prepare_opportunity)
+        self.scout_view.attention.connect(self.scout_attention)
         root.addWidget(self._build_sidebar())
         self.stack = QStackedWidget()
-        for view in (self.tasks_view, self.profile_view, self.answers_view, self.settings_view):
+        for view in (self.tasks_view, self.profile_view, self.answers_view, self.settings_view, self.scout_view):
             self.stack.addWidget(view)
         root.addWidget(self.stack, 1)
 
@@ -297,15 +301,20 @@ class MainWindow(QMainWindow):
             nav.setCursor(Qt.PointingHandCursor)
             nav.setToolTip(f"{text} (⌘{index + 1})")
             nav.clicked.connect(lambda checked=False, i=index: self._select_nav(i))
-            if index == 0:
+            if text in ("Applications", "Scout"):
                 row = QHBoxLayout(nav)
                 row.setContentsMargins(0, 0, 8, 0)
                 row.addStretch()
-                self.badge = QLabel()
-                self.badge.setObjectName("navBadge")
-                self.badge.setAlignment(Qt.AlignCenter)
-                self.badge.setAttribute(Qt.WA_TransparentForMouseEvents)
-                row.addWidget(self.badge)
+                badge = QLabel()
+                badge.setObjectName("navBadge")
+                badge.setAlignment(Qt.AlignCenter)
+                badge.setAttribute(Qt.WA_TransparentForMouseEvents)
+                badge.hide()
+                row.addWidget(badge)
+                if index == 0:
+                    self.badge = badge
+                else:
+                    self.scout_badge = badge
             layout.addWidget(nav)
             self.nav_buttons.append(nav)
         layout.addStretch()
@@ -338,6 +347,13 @@ class MainWindow(QMainWindow):
         self.status_dot.setPixmap(dot_icon(tone).pixmap(16, 16))
         self.status_text.setText(text)
 
+    def scout_attention(self, text):
+        nav = self.nav_buttons[self.PAGES.index("Scout")]
+        self.scout_badge.setText("!")
+        self.scout_badge.setVisible(bool(text))
+        nav.setToolTip(text or f"Scout (⌘{self.PAGES.index('Scout') + 1})")
+        nav.setAccessibleName(f"Scout, {text}" if text else "Scout")
+
     def _select_nav(self, index: int):
         self.stack.setCurrentIndex(index)
         for button_index, nav in enumerate(self.nav_buttons):
@@ -347,6 +363,13 @@ class MainWindow(QMainWindow):
         self._select_nav(1)
         self.profile_view.editor.show_section(section)
 
+    def prepare_opportunity(self, opportunity):
+        self._select_nav(0)
+        self.tasks_view.prepare_opportunity(opportunity)
+
     def closeEvent(self, event):
+        if not self.scout_view.shutdown():
+            event.ignore()
+            return
         self.tasks_view.shutdown()
         super().closeEvent(event)

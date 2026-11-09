@@ -905,6 +905,20 @@ class TasksView(QWidget):
         else:
             self.notify("Select an application first.", "warning")
 
+    def prepare_opportunity(self, opportunity):
+        run = ApplicationRun(job_url=opportunity.url, listing_url=opportunity.url,
+            company=opportunity.organisation, role=opportunity.title,
+            profile_name=opportunity.profile_name, profile_snapshot=opportunity.profile_snapshot.model_copy(deep=True),
+            job_description=opportunity.description or opportunity.reason,
+            **{**self.store.get("automation_options", {}), "browser": "chromium"})
+        if not self.add_task(run):
+            return
+        if self._active_id:
+            self._queue.append(run.id)
+            self.notify("Application queued. It will prepare when the current application finishes.")
+        else:
+            self._start_task(run)
+
     def check_row(self, item):
         if item.column() == 0:
             run_id = item.data(Qt.UserRole)
