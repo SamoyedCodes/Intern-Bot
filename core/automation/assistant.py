@@ -42,7 +42,7 @@ def matchable(answer):
 
 
 def career_facts(profile):
-    return profile.model_dump(include={"skills", "languages", "summary", "education", "experience"})
+    return profile.model_dump(include={"skills", "languages", "language_proficiency", "summary", "education", "experience"})
 
 
 def is_local(url):

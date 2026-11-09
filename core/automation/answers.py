@@ -125,7 +125,8 @@ def linked(field, profile, fact):
 
 
 def field_value(field, value):
-    if isinstance(value, bool) and field.kind in {"radio", "select-one", "select-multiple", "combobox"}:
+    # Only a checkbox holds a Boolean; anything else shows "Yes"/"No" (a text box would otherwise be typed "true" and never verify).
+    if isinstance(value, bool) and field.kind != "checkbox":
         return "Yes" if value else "No"
     return value
 

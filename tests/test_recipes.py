@@ -256,3 +256,18 @@ async def test_scan_reads_ashby_field_entries_and_yes_no_buttons(context):
                       ("Are you a citizen?", "radio", "Permanent resident", False)]
     # Every radio offers its question's choices, so the answer dialog lists them instead of asking for text.
     assert [f[4] for f in fields] == [[], ["Yes", "No"], ["Yes", "No"], ["Citizen", "Permanent resident"], ["Citizen", "Permanent resident"]]
+
+
+# Greenhouse's react-select: the choice shows beside a search input, next to a hidden required input.
+def react_select(id, label, shown, typed=''):
+    choice = f'<div class="x-singleValue">{shown}</div>' if shown else '<div class="x-placeholder">Select...</div>'
+    hidden = '' if shown else '<input required tabindex="-1" aria-hidden="true" value="">'
+    return (f'<label id={id}-label for={id}>{label}</label><div class="x-control"><div class="x-valueContainer">{choice}'
+            f'<div data-value="{typed}"><input id={id} role=combobox aria-labelledby={id}-label value="{typed}"></div></div></div>{hidden}')
+
+
+async def test_scan_reads_react_select_choices_and_skips_their_hidden_inputs(context):
+    from core.automation.recipes import SCAN
+    page = await open_fixture(context, "", "<form>" + react_select("g", "GDPR Notice", "", "Yes") + react_select("c", "Country", "Singapore") + "</form>", URL)
+    fields = [(f["label"], f["kind"], f["value"]) for f in await page.evaluate(f"({SCAN})(null)")]
+    assert fields == [("GDPR Notice", "combobox", ""), ("Country", "combobox", "Singapore")]

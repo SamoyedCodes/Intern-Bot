@@ -6,7 +6,8 @@ globalThis.scanInternFields = (rootSelector) => {
   const labelText = e => { const copy = e.cloneNode(true); copy.querySelectorAll('input,select,textarea,button,[role=listbox],[role=status],.filename,.file-upload-success,.application-field').forEach(c=>c.remove()); return text(copy).replace(/\s+/g, ' '); };
   const controls = [...root.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]),select,textarea,[role=combobox],[role=checkbox],[role=radio],[role=spinbutton],[contenteditable=true],button[aria-haspopup=listbox],[data-intern-kind],[data-automation-id="resumeUpload"]:not(:has(input[type=file])) [data-automation-id="file-upload-item"],[data-field-path] button[aria-pressed]')]
     // Workday's utility bar includes a language listbox, and Ashby's "Autofill from resume" pane an upload, neither an applicant question.
-    .filter(e => (visible(e) || e.type === 'file') && e.getAttribute('data-automation-id') !== 'beecatcher' && !e.closest('[role=listbox],[data-automation-id="utilityButtonBar"],[class*=_autofillPane]'));
+    // react-select (Greenhouse) keeps a hidden required text input beside its combobox; it is not a question.
+    .filter(e => (visible(e) || e.type === 'file') && e.getAttribute('data-automation-id') !== 'beecatcher' && !(e.type === 'text' && e.matches('[aria-hidden=true][tabindex="-1"]')) && !e.closest('[role=listbox],[data-automation-id="utilityButtonBar"],[class*=_autofillPane]'));
   const counts = new Map();
   // Native validity misleads where the site keeps the answer elsewhere: an adapter-read dropdown's emptied search input,
   // or one box of a required checkbox group that another ticked box already satisfies. The site's own aria-invalid still counts.
@@ -68,6 +69,9 @@ globalThis.scanInternFields = (rootSelector) => {
     const options = e.tagName === 'SELECT' ? [...e.options].map(o => o.text.trim()) : radio ? choices.map(choiceText) : selected;
     let value = e.isContentEditable ? e.textContent : ('value' in e ? e.value : text(e));
     if (type === 'combobox' && e.tagName === 'BUTTON') value = text(e);
+    // react-select shows its choice beside the input, which only holds search text.
+    // Its input sits in a [data-value] container; unchosen, typed search text is not an answer.
+    if (type === 'combobox' && e.parentElement?.matches('[data-value]')) value = text(e.parentElement.parentElement.querySelector('[class*="-singleValue"]'));
     if (prompt) value = selected.join(', ');
     if (e.tagName === 'SELECT') value = e.value ? e.selectedOptions[0]?.text.trim() || '' : '';
     if (type === 'combobox' && /^(select one|select an option|choose|select\.\.\.)$/i.test(value.trim())) value = '';

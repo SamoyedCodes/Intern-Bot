@@ -27,6 +27,12 @@ def test_application_answer_beats_global_and_false_is_an_answer(run):
     assert resolve(QUESTION, PROFILE, run, [shared, answer(run, False)]).value is False
 
 
+def test_a_yes_no_answer_to_a_text_question_is_typed_as_yes_or_no(run):
+    text = FormField('q', QUESTION.label, '', 'text')
+    assert resolve(text, PROFILE, run, [answer(run, True)]).value == 'Yes'
+    assert resolve(QUESTION, PROFILE, run, [answer(run, True)]).value is True
+
+
 def test_a_recorded_wording_takes_the_same_answer(run):
     saved = answer(run, 'Jan - May 2027', variants=['When is your intended period of internship?'])
     reworded = FormField('k', 'When is your intended period of internship? *', '', 'text')

@@ -64,6 +64,7 @@ def test_career_facts_exclude_identity_contact_and_documents():
     profile = ApplicantProfile(first_name='Private name', email='secret@example.test', resume_path='/private/resume.pdf', gender='Private', skills='Python')
     facts = career_facts(profile)
     assert facts['skills'] == 'Python'
+    assert career_facts(ApplicantProfile(language_proficiency=[{'language': 'Chinese', 'fluent': True}]))['language_proficiency'][0]['language'] == 'Chinese'
     assert not {'email', 'resume_path', 'gender', 'first_name'} & facts.keys()
 
 
