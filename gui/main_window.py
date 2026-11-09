@@ -15,11 +15,13 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QStackedWidget,
+    QTabWidget,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
-from gui.theme import form_layout, MessageBar, button, card, dot_icon, label, shortcut
+from gui.theme import form_layout, MessageBar, button, card, dot_icon, label, shortcut, station_heading
 from gui.shortcuts import install_edit_shortcuts
 from gui.views.application_dialogs import AnswersView
 from gui.views.assistant_dialog import AssistWorker
@@ -42,21 +44,20 @@ class SettingsView(QWidget):
         super().__init__()
         self.store = store or LocalStore()
         self._key_checked = False
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        outer.addWidget(scroll)
-        page = QWidget()
-        page.setObjectName("scrollContent")
-        scroll.setWidget(page)
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 20, 24, 24)
-        layout.setSpacing(16)
-        layout.addWidget(label("Settings", "pageTitle"))
-        layout.addWidget(label("Changes save automatically and apply to new applications. Existing applications keep the settings they started with.", "muted"))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 16, 24, 20)
+        layout.setSpacing(12)
+        layout.addWidget(station_heading("Settings", "dispatch", "Choose how the crew prepares applications and which services it can use."))
         self.notice = MessageBar()
         layout.addWidget(self.notice)
+        tabs = self.categories = QTabWidget()
+        tabs.setAccessibleName("Settings categories")
+        layout.addWidget(tabs)
+        def add_page(name, frame):
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(frame)
+            tabs.addTab(scroll, name)
 
         options = self.store.get("automation_options", {})
         frame, box = card()
@@ -71,7 +72,13 @@ class SettingsView(QWidget):
         box.addWidget(label("Reused for the question and every wording matched to it, within the answer's scope, profile and country.", "caption"))
         for checkbox in (self.auto_advance, self.reuse_answers):
             checkbox.toggled.connect(self.save_options)
-        layout.addWidget(frame)
+        box.addWidget(label("Workshop display", "section"))
+        self.crew_motion = QCheckBox("Animate workers during an active application")
+        self.crew_motion.setChecked(bool(self.store.get("crew_motion", True)))
+        self.crew_motion.toggled.connect(lambda value: self.store.put("crew_motion", value))
+        box.addWidget(self.crew_motion)
+        box.addStretch()
+        add_page("Automation", frame)
 
         frame, box = card()
         box.addWidget(label("AI assistance (optional)", "section"))
@@ -114,16 +121,17 @@ class SettingsView(QWidget):
         box.addWidget(self.ai_match)
         box.addWidget(label("Factual questions only: essays, demographics, health, legal status, pay and consent questions are always left to you. "
                             "AI answers fill the form and appear under Answers; automatic submission waits until you confirm them.", "caption"))
-        layout.addWidget(frame)
+        box.addStretch()
+        add_page("AI assistance", frame)
         self.show_provider()
         self.provider.currentIndexChanged.connect(self.change_provider)
 
         frame, box = card(6)
         box.addWidget(label("Safety and privacy", "section"))
         for fact in SAFETY_FACTS:
-            box.addWidget(label("✓  " + fact, "fact"))
-        layout.addWidget(frame)
-        layout.addStretch()
+            box.addWidget(label(fact, "fact"))
+        box.addStretch()
+        add_page("Safety and privacy", frame)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -253,7 +261,7 @@ class MainWindow(QMainWindow):
         shell = QWidget()
         shell.setObjectName("appShell")
         self.setCentralWidget(shell)
-        root = QHBoxLayout(shell)
+        root = QVBoxLayout(shell)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
@@ -264,7 +272,7 @@ class MainWindow(QMainWindow):
         self.scout_view = ScoutView(self.store)
         self.scout_view.prepare_requested.connect(self.prepare_opportunity)
         self.scout_view.attention.connect(self.scout_attention)
-        root.addWidget(self._build_sidebar())
+        root.addWidget(self._build_navigation())
         self.stack = QStackedWidget()
         for view in (self.tasks_view, self.profile_view, self.answers_view, self.settings_view, self.scout_view):
             self.stack.addWidget(view)
@@ -282,53 +290,42 @@ class MainWindow(QMainWindow):
         self.update_status()
         self.tasks_view.table.setFocus()
 
-    def _build_sidebar(self):
-        sidebar = QFrame()
-        sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(208)
-        layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(12, 18, 12, 14)
-        layout.setSpacing(2)
+    def _build_navigation(self):
+        strip = QFrame()
+        strip.setObjectName("navigation")
+        row = QHBoxLayout(strip)
+        row.setContentsMargins(22, 7, 22, 7)
+        row.setSpacing(5)
         brand = QLabel("Intern-Bot")
         brand.setObjectName("brand")
-        layout.addWidget(brand)
-        layout.addWidget(label("Local application desk", "caption"))
-        layout.addSpacing(18)
+        row.addWidget(brand)
+        row.addSpacing(20)
         for index, text in enumerate(self.PAGES):
-            nav = QPushButton(text)
+            nav = button(text)
             nav.setObjectName("navButton")
             nav.setCheckable(True)
-            nav.setCursor(Qt.PointingHandCursor)
             nav.setToolTip(f"{text} (⌘{index + 1})")
             nav.clicked.connect(lambda checked=False, i=index: self._select_nav(i))
+            row.addWidget(nav)
+            self.nav_buttons.append(nav)
             if text in ("Applications", "Scout"):
-                row = QHBoxLayout(nav)
-                row.setContentsMargins(0, 0, 8, 0)
-                row.addStretch()
                 badge = QLabel()
                 badge.setObjectName("navBadge")
                 badge.setAlignment(Qt.AlignCenter)
-                badge.setAttribute(Qt.WA_TransparentForMouseEvents)
                 badge.hide()
                 row.addWidget(badge)
                 if index == 0:
                     self.badge = badge
                 else:
                     self.scout_badge = badge
-            layout.addWidget(nav)
-            self.nav_buttons.append(nav)
-        layout.addStretch()
-        status = QFrame()
-        status.setObjectName("engineStatus")
-        row = QHBoxLayout(status)
-        row.setContentsMargins(10, 8, 10, 8)
-        row.setSpacing(6)
+        row.addStretch()
         self.status_dot = QLabel()
-        self.status_text = label()
-        row.addWidget(self.status_dot, 0, Qt.AlignTop)
-        row.addWidget(self.status_text, 1)
-        layout.addWidget(status)
-        return sidebar
+        self.status_text = label(wrap=False)
+        self.status_text.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.status_text.setMaximumWidth(250)
+        row.addWidget(self.status_dot)
+        row.addWidget(self.status_text)
+        return strip
 
     def update_status(self):
         view = self.tasks_view
@@ -339,13 +336,14 @@ class MainWindow(QMainWindow):
         active = next((run for run in view.tasks if run.id == view._active_id), None)
         if active:
             tone = "info"
-            text = f"Running · {active.company or site_key(active.job_url)}" + (f"\n{len(view._queue)} more queued" if view._queue else "")
+            text = f"Running · {active.company or site_key(active.job_url)}" + (f" · {len(view._queue)} queued" if view._queue else "")
         elif needs:
             tone, text = "warning", f"{needs} {'needs' if needs == 1 else 'need'} you"
         else:
             tone, text = "neutral", "Idle"
         self.status_dot.setPixmap(dot_icon(tone).pixmap(16, 16))
-        self.status_text.setText(text)
+        self.status_text.setToolTip(text)
+        self.status_text.setText(self.status_text.fontMetrics().elidedText(text, Qt.ElideRight, 245))
 
     def scout_attention(self, text):
         nav = self.nav_buttons[self.PAGES.index("Scout")]

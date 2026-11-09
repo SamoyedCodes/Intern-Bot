@@ -3,10 +3,20 @@ import sys
 
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QTextCursor
-from PySide6.QtWidgets import QAbstractItemView, QLineEdit, QPlainTextEdit, QTextEdit
+from PySide6.QtWidgets import QAbstractItemView, QComboBox, QLineEdit, QPlainTextEdit, QTextEdit
 
 
 class EditShortcuts(QObject):
+    def follow_focus(self, previous, current):
+        # Embedded Chromium owns native objects that are unsafe to wrap in a global Qt event filter.
+        for widget in (previous, current):
+            editor = widget.lineEdit() if isinstance(widget, QComboBox) else widget
+            if isinstance(editor, (QLineEdit, QPlainTextEdit, QTextEdit, QAbstractItemView)):
+                if widget is previous:
+                    editor.removeEventFilter(self)
+                else:
+                    editor.installEventFilter(self)
+
     def eventFilter(self, editor, event):
         if event.type() not in {QEvent.ShortcutOverride, QEvent.KeyPress} or not isinstance(editor, (QLineEdit, QPlainTextEdit, QTextEdit, QAbstractItemView)):
             return False
@@ -57,4 +67,5 @@ class EditShortcuts(QObject):
 def install_edit_shortcuts(app):
     if sys.platform == 'darwin' and not hasattr(app, '_edit_shortcuts'):
         app._edit_shortcuts = EditShortcuts(app)
-        app.installEventFilter(app._edit_shortcuts)
+        app.focusChanged.connect(app._edit_shortcuts.follow_focus)
+        app._edit_shortcuts.follow_focus(None, app.focusWidget())

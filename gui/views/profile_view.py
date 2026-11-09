@@ -4,7 +4,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLineEdit, QMenu, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLineEdit, QMenu, QProgressBar, QVBoxLayout, QWidget,
 )
 
 from core.automation.accounts import DEFAULT_CATCHALL_FORMAT, login_address
@@ -12,7 +12,7 @@ from core.automation.models import ApplicantProfile, ats_name, canonical_url, si
 from core.storage.local_store import LocalStore
 from core.storage.onepassword import VAULT
 from core.storage.vault import TOKEN_KEY
-from gui.theme import form_layout, MessageBar, button, card, label, more_button, shortcut
+from gui.theme import form_layout, MessageBar, button, card, label, more_button, shortcut, station_heading
 from gui.views.application_dialogs import ProfileEditor
 
 ESSENTIALS = {"first_name": "first name", "last_name": "last name", "email": "email", "phone": "phone", "resume_path": "resume"}
@@ -26,11 +26,7 @@ class ProfileView(QWidget):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(12)
         header = QHBoxLayout()
-        titles = QVBoxLayout()
-        titles.setSpacing(2)
-        titles.addWidget(label("Profile", "pageTitle"))
-        titles.addWidget(label("Facts used to fill in applications. Anything blank or Unknown is asked during the application.", "muted"))
-        header.addLayout(titles, 1)
+        header.addWidget(station_heading("Profile", "fill", "The facts and documents used to prepare new applications."), 1)
         self.profile_names = QComboBox()
         self.profile_names.setAccessibleName("Profile")
         self.profile_names.setMinimumWidth(160)
@@ -50,6 +46,12 @@ class ProfileView(QWidget):
         self.essentials = label(role="caption")
         self.unsaved = label("Unsaved changes", "caption")
         self.unsaved.setProperty("tone", "warning")
+        self.readiness = QProgressBar()
+        self.readiness.setRange(0, len(ESSENTIALS))
+        self.readiness.setTextVisible(False)
+        self.readiness.setFixedWidth(115)
+        self.readiness.setAccessibleName("Profile essentials completed")
+        status.addWidget(self.readiness)
         status.addWidget(self.essentials, 1)
         status.addWidget(self.unsaved)
         layout.addLayout(status)
@@ -66,6 +68,7 @@ class ProfileView(QWidget):
         self.unsaved.setVisible(dirty)
         self.save_btn.setEnabled(dirty)
         missing = [name for key, name in ESSENTIALS.items() if not self.editor.inputs[key].text().strip()]
+        self.readiness.setValue(len(ESSENTIALS) - len(missing))
         self.essentials.setText(f"{len(ESSENTIALS) - len(missing)} of {len(ESSENTIALS)} essentials"
                                 + (f" · missing {', '.join(missing)}" if missing else " · ready to apply"))
 

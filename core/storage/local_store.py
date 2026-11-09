@@ -162,6 +162,11 @@ class LocalStore:
         return [dict(zip(("at", "kind", "stage", "note"), row)) for row in rows]
 
 
+    def recent_events(self, run_id, limit):
+        with self.connect() as db:
+            rows = db.execute("SELECT at,kind,note FROM events WHERE run_id=? ORDER BY id DESC LIMIT ?", (run_id, limit)).fetchall()
+        return [dict(zip(("at", "kind", "note"), row)) for row in rows]
+
     def delete_run(self, run_id):
         self.delete_runs([run_id])
 

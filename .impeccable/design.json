@@ -1,0 +1,862 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-09T12:25:53Z",
+  "title": "Design System: Intern-Bot",
+  "extensions": {
+    "colorMeta": {
+      "bg": {
+        "role": "neutral",
+        "displayName": "Window paper",
+        "tonalRamp": [
+          "oklch(15% 0.0067 97.4)",
+          "oklch(26% 0.0067 97.4)",
+          "oklch(38% 0.0067 97.4)",
+          "oklch(49% 0.0067 97.4)",
+          "oklch(61% 0.0067 97.4)",
+          "oklch(72% 0.0067 97.4)",
+          "oklch(84% 0.0067 97.4)",
+          "oklch(95% 0.0067 97.4)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Control surface",
+        "tonalRamp": [
+          "oklch(15% 0.0080 98.9)",
+          "oklch(26% 0.0080 98.9)",
+          "oklch(38% 0.0080 98.9)",
+          "oklch(49% 0.0080 98.9)",
+          "oklch(61% 0.0080 98.9)",
+          "oklch(72% 0.0080 98.9)",
+          "oklch(84% 0.0080 98.9)",
+          "oklch(95% 0.0080 98.9)"
+        ]
+      },
+      "surface2": {
+        "role": "neutral",
+        "displayName": "Quiet inset",
+        "tonalRamp": [
+          "oklch(15% 0.0127 126.4)",
+          "oklch(26% 0.0127 126.4)",
+          "oklch(38% 0.0127 126.4)",
+          "oklch(49% 0.0127 126.4)",
+          "oklch(61% 0.0127 126.4)",
+          "oklch(72% 0.0127 126.4)",
+          "oklch(84% 0.0127 126.4)",
+          "oklch(95% 0.0127 126.4)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Control edge",
+        "tonalRamp": [
+          "oklch(15% 0.0201 147.8)",
+          "oklch(26% 0.0201 147.8)",
+          "oklch(38% 0.0201 147.8)",
+          "oklch(49% 0.0201 147.8)",
+          "oklch(61% 0.0201 147.8)",
+          "oklch(72% 0.0201 147.8)",
+          "oklch(84% 0.0201 147.8)",
+          "oklch(95% 0.0201 147.8)"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "tonalRamp": [
+          "oklch(15% 0.0277 176.6)",
+          "oklch(26% 0.0277 176.6)",
+          "oklch(38% 0.0277 176.6)",
+          "oklch(49% 0.0277 176.6)",
+          "oklch(61% 0.0277 176.6)",
+          "oklch(72% 0.0277 176.6)",
+          "oklch(84% 0.0277 176.6)",
+          "oklch(95% 0.0277 176.6)"
+        ]
+      },
+      "text2": {
+        "role": "neutral",
+        "displayName": "Supporting ink",
+        "tonalRamp": [
+          "oklch(15% 0.0300 170.6)",
+          "oklch(26% 0.0300 170.6)",
+          "oklch(38% 0.0300 170.6)",
+          "oklch(49% 0.0300 170.6)",
+          "oklch(61% 0.0300 170.6)",
+          "oklch(72% 0.0300 170.6)",
+          "oklch(84% 0.0300 170.6)",
+          "oklch(95% 0.0300 170.6)"
+        ]
+      },
+      "text3": {
+        "role": "neutral",
+        "displayName": "Caption ink",
+        "tonalRamp": [
+          "oklch(15% 0.0243 165.3)",
+          "oklch(26% 0.0243 165.3)",
+          "oklch(38% 0.0243 165.3)",
+          "oklch(49% 0.0243 165.3)",
+          "oklch(61% 0.0243 165.3)",
+          "oklch(72% 0.0243 165.3)",
+          "oklch(84% 0.0243 165.3)",
+          "oklch(95% 0.0243 165.3)"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Action orange",
+        "tonalRamp": [
+          "oklch(15% 0.1446 35.7)",
+          "oklch(26% 0.1446 35.7)",
+          "oklch(38% 0.1446 35.7)",
+          "oklch(49% 0.1446 35.7)",
+          "oklch(61% 0.1446 35.7)",
+          "oklch(72% 0.1446 35.7)",
+          "oklch(84% 0.1446 35.7)",
+          "oklch(95% 0.1446 35.7)"
+        ]
+      },
+      "accent-hover": {
+        "role": "primary",
+        "displayName": "Hovered action",
+        "tonalRamp": [
+          "oklch(15% 0.1251 36.7)",
+          "oklch(26% 0.1251 36.7)",
+          "oklch(38% 0.1251 36.7)",
+          "oklch(49% 0.1251 36.7)",
+          "oklch(61% 0.1251 36.7)",
+          "oklch(72% 0.1251 36.7)",
+          "oklch(84% 0.1251 36.7)",
+          "oklch(95% 0.1251 36.7)"
+        ]
+      },
+      "on-accent": {
+        "role": "primary",
+        "displayName": "Action lettering",
+        "tonalRamp": [
+          "oklch(15% 0.0000 0.0)",
+          "oklch(26% 0.0000 0.0)",
+          "oklch(38% 0.0000 0.0)",
+          "oklch(49% 0.0000 0.0)",
+          "oklch(61% 0.0000 0.0)",
+          "oklch(72% 0.0000 0.0)",
+          "oklch(84% 0.0000 0.0)",
+          "oklch(95% 0.0000 0.0)"
+        ]
+      },
+      "selection": {
+        "role": "neutral",
+        "displayName": "Selected row",
+        "tonalRamp": [
+          "oklch(15% 0.0247 147.3)",
+          "oklch(26% 0.0247 147.3)",
+          "oklch(38% 0.0247 147.3)",
+          "oklch(49% 0.0247 147.3)",
+          "oklch(61% 0.0247 147.3)",
+          "oklch(72% 0.0247 147.3)",
+          "oklch(84% 0.0247 147.3)",
+          "oklch(95% 0.0247 147.3)"
+        ]
+      },
+      "info": {
+        "role": "secondary",
+        "displayName": "Information",
+        "tonalRamp": [
+          "oklch(15% 0.0713 231.8)",
+          "oklch(26% 0.0713 231.8)",
+          "oklch(38% 0.0713 231.8)",
+          "oklch(49% 0.0713 231.8)",
+          "oklch(61% 0.0713 231.8)",
+          "oklch(72% 0.0713 231.8)",
+          "oklch(84% 0.0713 231.8)",
+          "oklch(95% 0.0713 231.8)"
+        ]
+      },
+      "warning": {
+        "role": "secondary",
+        "displayName": "Attention",
+        "tonalRamp": [
+          "oklch(15% 0.1015 59.8)",
+          "oklch(26% 0.1015 59.8)",
+          "oklch(38% 0.1015 59.8)",
+          "oklch(49% 0.1015 59.8)",
+          "oklch(61% 0.1015 59.8)",
+          "oklch(72% 0.1015 59.8)",
+          "oklch(84% 0.1015 59.8)",
+          "oklch(95% 0.1015 59.8)"
+        ]
+      },
+      "danger": {
+        "role": "secondary",
+        "displayName": "Failure or removal",
+        "tonalRamp": [
+          "oklch(15% 0.1567 21.5)",
+          "oklch(26% 0.1567 21.5)",
+          "oklch(38% 0.1567 21.5)",
+          "oklch(49% 0.1567 21.5)",
+          "oklch(61% 0.1567 21.5)",
+          "oklch(72% 0.1567 21.5)",
+          "oklch(84% 0.1567 21.5)",
+          "oklch(95% 0.1567 21.5)"
+        ]
+      },
+      "success": {
+        "role": "secondary",
+        "displayName": "Verified or applied",
+        "tonalRamp": [
+          "oklch(15% 0.0776 153.7)",
+          "oklch(26% 0.0776 153.7)",
+          "oklch(38% 0.0776 153.7)",
+          "oklch(49% 0.0776 153.7)",
+          "oklch(61% 0.0776 153.7)",
+          "oklch(72% 0.0776 153.7)",
+          "oklch(84% 0.0776 153.7)",
+          "oklch(95% 0.0776 153.7)"
+        ]
+      },
+      "neutral": {
+        "role": "neutral",
+        "displayName": "Neutral status",
+        "tonalRamp": [
+          "oklch(15% 0.0243 165.3)",
+          "oklch(26% 0.0243 165.3)",
+          "oklch(38% 0.0243 165.3)",
+          "oklch(49% 0.0243 165.3)",
+          "oklch(61% 0.0243 165.3)",
+          "oklch(72% 0.0243 165.3)",
+          "oklch(84% 0.0243 165.3)",
+          "oklch(95% 0.0243 165.3)"
+        ]
+      },
+      "panel": {
+        "role": "secondary",
+        "displayName": "Inspector green",
+        "tonalRamp": [
+          "oklch(15% 0.0355 180.9)",
+          "oklch(26% 0.0355 180.9)",
+          "oklch(38% 0.0355 180.9)",
+          "oklch(49% 0.0355 180.9)",
+          "oklch(61% 0.0355 180.9)",
+          "oklch(72% 0.0355 180.9)",
+          "oklch(84% 0.0355 180.9)",
+          "oklch(95% 0.0355 180.9)"
+        ]
+      },
+      "panel-text": {
+        "role": "neutral",
+        "displayName": "Inspector ink",
+        "tonalRamp": [
+          "oklch(15% 0.0172 106.7)",
+          "oklch(26% 0.0172 106.7)",
+          "oklch(38% 0.0172 106.7)",
+          "oklch(49% 0.0172 106.7)",
+          "oklch(61% 0.0172 106.7)",
+          "oklch(72% 0.0172 106.7)",
+          "oklch(84% 0.0172 106.7)",
+          "oklch(95% 0.0172 106.7)"
+        ]
+      },
+      "panel-muted": {
+        "role": "neutral",
+        "displayName": "Inspector supporting ink",
+        "tonalRamp": [
+          "oklch(15% 0.0260 145.3)",
+          "oklch(26% 0.0260 145.3)",
+          "oklch(38% 0.0260 145.3)",
+          "oklch(49% 0.0260 145.3)",
+          "oklch(61% 0.0260 145.3)",
+          "oklch(72% 0.0260 145.3)",
+          "oklch(84% 0.0260 145.3)",
+          "oklch(95% 0.0260 145.3)"
+        ]
+      },
+      "panel-button": {
+        "role": "primary",
+        "displayName": "Inspector peach",
+        "tonalRamp": [
+          "oklch(15% 0.1180 54.0)",
+          "oklch(26% 0.1180 54.0)",
+          "oklch(38% 0.1180 54.0)",
+          "oklch(49% 0.1180 54.0)",
+          "oklch(61% 0.1180 54.0)",
+          "oklch(72% 0.1180 54.0)",
+          "oklch(84% 0.1180 54.0)",
+          "oklch(95% 0.1180 54.0)"
+        ]
+      },
+      "panel-line": {
+        "role": "neutral",
+        "displayName": "Inspector border",
+        "tonalRamp": [
+          "oklch(15% 0.0360 176.0)",
+          "oklch(26% 0.0360 176.0)",
+          "oklch(38% 0.0360 176.0)",
+          "oklch(49% 0.0360 176.0)",
+          "oklch(61% 0.0360 176.0)",
+          "oklch(72% 0.0360 176.0)",
+          "oklch(84% 0.0360 176.0)",
+          "oklch(95% 0.0360 176.0)"
+        ]
+      },
+      "panel-inset": {
+        "role": "neutral",
+        "displayName": "Inspector inset",
+        "tonalRamp": [
+          "oklch(15% 0.0388 175.1)",
+          "oklch(26% 0.0388 175.1)",
+          "oklch(38% 0.0388 175.1)",
+          "oklch(49% 0.0388 175.1)",
+          "oklch(61% 0.0388 175.1)",
+          "oklch(72% 0.0388 175.1)",
+          "oklch(84% 0.0388 175.1)",
+          "oklch(95% 0.0388 175.1)"
+        ]
+      },
+      "bg-dark": {
+        "role": "neutral",
+        "displayName": "Window paper · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0227 171.5)",
+          "oklch(26% 0.0227 171.5)",
+          "oklch(38% 0.0227 171.5)",
+          "oklch(49% 0.0227 171.5)",
+          "oklch(61% 0.0227 171.5)",
+          "oklch(72% 0.0227 171.5)",
+          "oklch(84% 0.0227 171.5)",
+          "oklch(95% 0.0227 171.5)"
+        ]
+      },
+      "surface-dark": {
+        "role": "neutral",
+        "displayName": "Control surface · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0288 166.4)",
+          "oklch(26% 0.0288 166.4)",
+          "oklch(38% 0.0288 166.4)",
+          "oklch(49% 0.0288 166.4)",
+          "oklch(61% 0.0288 166.4)",
+          "oklch(72% 0.0288 166.4)",
+          "oklch(84% 0.0288 166.4)",
+          "oklch(95% 0.0288 166.4)"
+        ]
+      },
+      "surface2-dark": {
+        "role": "neutral",
+        "displayName": "Quiet inset · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0319 163.6)",
+          "oklch(26% 0.0319 163.6)",
+          "oklch(38% 0.0319 163.6)",
+          "oklch(49% 0.0319 163.6)",
+          "oklch(61% 0.0319 163.6)",
+          "oklch(72% 0.0319 163.6)",
+          "oklch(84% 0.0319 163.6)",
+          "oklch(95% 0.0319 163.6)"
+        ]
+      },
+      "border-dark": {
+        "role": "neutral",
+        "displayName": "Control edge · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0309 158.7)",
+          "oklch(26% 0.0309 158.7)",
+          "oklch(38% 0.0309 158.7)",
+          "oklch(49% 0.0309 158.7)",
+          "oklch(61% 0.0309 158.7)",
+          "oklch(72% 0.0309 158.7)",
+          "oklch(84% 0.0309 158.7)",
+          "oklch(95% 0.0309 158.7)"
+        ]
+      },
+      "text-dark": {
+        "role": "neutral",
+        "displayName": "Ink · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0147 115.0)",
+          "oklch(26% 0.0147 115.0)",
+          "oklch(38% 0.0147 115.0)",
+          "oklch(49% 0.0147 115.0)",
+          "oklch(61% 0.0147 115.0)",
+          "oklch(72% 0.0147 115.0)",
+          "oklch(84% 0.0147 115.0)",
+          "oklch(95% 0.0147 115.0)"
+        ]
+      },
+      "text2-dark": {
+        "role": "neutral",
+        "displayName": "Supporting ink · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0264 136.3)",
+          "oklch(26% 0.0264 136.3)",
+          "oklch(38% 0.0264 136.3)",
+          "oklch(49% 0.0264 136.3)",
+          "oklch(61% 0.0264 136.3)",
+          "oklch(72% 0.0264 136.3)",
+          "oklch(84% 0.0264 136.3)",
+          "oklch(95% 0.0264 136.3)"
+        ]
+      },
+      "text3-dark": {
+        "role": "neutral",
+        "displayName": "Caption ink · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0309 146.8)",
+          "oklch(26% 0.0309 146.8)",
+          "oklch(38% 0.0309 146.8)",
+          "oklch(49% 0.0309 146.8)",
+          "oklch(61% 0.0309 146.8)",
+          "oklch(72% 0.0309 146.8)",
+          "oklch(84% 0.0309 146.8)",
+          "oklch(95% 0.0309 146.8)"
+        ]
+      },
+      "accent-dark": {
+        "role": "primary",
+        "displayName": "Action orange · dark",
+        "tonalRamp": [
+          "oklch(15% 0.1203 54.5)",
+          "oklch(26% 0.1203 54.5)",
+          "oklch(38% 0.1203 54.5)",
+          "oklch(49% 0.1203 54.5)",
+          "oklch(61% 0.1203 54.5)",
+          "oklch(72% 0.1203 54.5)",
+          "oklch(84% 0.1203 54.5)",
+          "oklch(95% 0.1203 54.5)"
+        ]
+      },
+      "accent-hover-dark": {
+        "role": "primary",
+        "displayName": "Hovered action · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0894 55.8)",
+          "oklch(26% 0.0894 55.8)",
+          "oklch(38% 0.0894 55.8)",
+          "oklch(49% 0.0894 55.8)",
+          "oklch(61% 0.0894 55.8)",
+          "oklch(72% 0.0894 55.8)",
+          "oklch(84% 0.0894 55.8)",
+          "oklch(95% 0.0894 55.8)"
+        ]
+      },
+      "on-accent-dark": {
+        "role": "primary",
+        "displayName": "Action lettering · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0229 69.3)",
+          "oklch(26% 0.0229 69.3)",
+          "oklch(38% 0.0229 69.3)",
+          "oklch(49% 0.0229 69.3)",
+          "oklch(61% 0.0229 69.3)",
+          "oklch(72% 0.0229 69.3)",
+          "oklch(84% 0.0229 69.3)",
+          "oklch(95% 0.0229 69.3)"
+        ]
+      },
+      "selection-dark": {
+        "role": "neutral",
+        "displayName": "Selected row · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0430 154.1)",
+          "oklch(26% 0.0430 154.1)",
+          "oklch(38% 0.0430 154.1)",
+          "oklch(49% 0.0430 154.1)",
+          "oklch(61% 0.0430 154.1)",
+          "oklch(72% 0.0430 154.1)",
+          "oklch(84% 0.0430 154.1)",
+          "oklch(95% 0.0430 154.1)"
+        ]
+      },
+      "info-dark": {
+        "role": "secondary",
+        "displayName": "Information · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0684 225.6)",
+          "oklch(26% 0.0684 225.6)",
+          "oklch(38% 0.0684 225.6)",
+          "oklch(49% 0.0684 225.6)",
+          "oklch(61% 0.0684 225.6)",
+          "oklch(72% 0.0684 225.6)",
+          "oklch(84% 0.0684 225.6)",
+          "oklch(95% 0.0684 225.6)"
+        ]
+      },
+      "warning-dark": {
+        "role": "secondary",
+        "displayName": "Attention · dark",
+        "tonalRamp": [
+          "oklch(15% 0.1128 72.4)",
+          "oklch(26% 0.1128 72.4)",
+          "oklch(38% 0.1128 72.4)",
+          "oklch(49% 0.1128 72.4)",
+          "oklch(61% 0.1128 72.4)",
+          "oklch(72% 0.1128 72.4)",
+          "oklch(84% 0.1128 72.4)",
+          "oklch(95% 0.1128 72.4)"
+        ]
+      },
+      "danger-dark": {
+        "role": "secondary",
+        "displayName": "Failure or removal · dark",
+        "tonalRamp": [
+          "oklch(15% 0.1095 18.3)",
+          "oklch(26% 0.1095 18.3)",
+          "oklch(38% 0.1095 18.3)",
+          "oklch(49% 0.1095 18.3)",
+          "oklch(61% 0.1095 18.3)",
+          "oklch(72% 0.1095 18.3)",
+          "oklch(84% 0.1095 18.3)",
+          "oklch(95% 0.1095 18.3)"
+        ]
+      },
+      "success-dark": {
+        "role": "secondary",
+        "displayName": "Verified or applied · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0777 143.2)",
+          "oklch(26% 0.0777 143.2)",
+          "oklch(38% 0.0777 143.2)",
+          "oklch(49% 0.0777 143.2)",
+          "oklch(61% 0.0777 143.2)",
+          "oklch(72% 0.0777 143.2)",
+          "oklch(84% 0.0777 143.2)",
+          "oklch(95% 0.0777 143.2)"
+        ]
+      },
+      "neutral-dark": {
+        "role": "neutral",
+        "displayName": "Neutral status · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0309 146.8)",
+          "oklch(26% 0.0309 146.8)",
+          "oklch(38% 0.0309 146.8)",
+          "oklch(49% 0.0309 146.8)",
+          "oklch(61% 0.0309 146.8)",
+          "oklch(72% 0.0309 146.8)",
+          "oklch(84% 0.0309 146.8)",
+          "oklch(95% 0.0309 146.8)"
+        ]
+      },
+      "panel-dark": {
+        "role": "secondary",
+        "displayName": "Inspector green · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0342 176.6)",
+          "oklch(26% 0.0342 176.6)",
+          "oklch(38% 0.0342 176.6)",
+          "oklch(49% 0.0342 176.6)",
+          "oklch(61% 0.0342 176.6)",
+          "oklch(72% 0.0342 176.6)",
+          "oklch(84% 0.0342 176.6)",
+          "oklch(95% 0.0342 176.6)"
+        ]
+      },
+      "panel-line-dark": {
+        "role": "neutral",
+        "displayName": "Inspector border · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0366 173.8)",
+          "oklch(26% 0.0366 173.8)",
+          "oklch(38% 0.0366 173.8)",
+          "oklch(49% 0.0366 173.8)",
+          "oklch(61% 0.0366 173.8)",
+          "oklch(72% 0.0366 173.8)",
+          "oklch(84% 0.0366 173.8)",
+          "oklch(95% 0.0366 173.8)"
+        ]
+      },
+      "panel-inset-dark": {
+        "role": "neutral",
+        "displayName": "Inspector inset · dark",
+        "tonalRamp": [
+          "oklch(15% 0.0411 171.4)",
+          "oklch(26% 0.0411 171.4)",
+          "oklch(38% 0.0411 171.4)",
+          "oklch(49% 0.0411 171.4)",
+          "oklch(61% 0.0411 171.4)",
+          "oklch(72% 0.0411 171.4)",
+          "oklch(84% 0.0411 171.4)",
+          "oklch(95% 0.0411 171.4)"
+        ]
+      },
+      "panel-on-button": {
+        "role": "neutral",
+        "displayName": "Inspector action ink",
+        "tonalRamp": [
+          "oklch(15% 0.0208 76.4)",
+          "oklch(26% 0.0208 76.4)",
+          "oklch(38% 0.0208 76.4)",
+          "oklch(49% 0.0208 76.4)",
+          "oklch(61% 0.0208 76.4)",
+          "oklch(72% 0.0208 76.4)",
+          "oklch(84% 0.0208 76.4)",
+          "oklch(95% 0.0208 76.4)"
+        ]
+      },
+      "station-intake": {
+        "role": "secondary",
+        "displayName": "Ochre intake bench",
+        "tonalRamp": [
+          "oklch(15% 0.1497 79.6)",
+          "oklch(26% 0.1497 79.6)",
+          "oklch(38% 0.1497 79.6)",
+          "oklch(49% 0.1497 79.6)",
+          "oklch(61% 0.1497 79.6)",
+          "oklch(72% 0.1497 79.6)",
+          "oklch(84% 0.1497 79.6)",
+          "oklch(95% 0.1497 79.6)"
+        ]
+      },
+      "station-fill": {
+        "role": "secondary",
+        "displayName": "Blue fill bench",
+        "tonalRamp": [
+          "oklch(15% 0.0757 243.1)",
+          "oklch(26% 0.0757 243.1)",
+          "oklch(38% 0.0757 243.1)",
+          "oklch(49% 0.0757 243.1)",
+          "oklch(61% 0.0757 243.1)",
+          "oklch(72% 0.0757 243.1)",
+          "oklch(84% 0.0757 243.1)",
+          "oklch(95% 0.0757 243.1)"
+        ]
+      },
+      "station-verify": {
+        "role": "secondary",
+        "displayName": "Sage verification bench",
+        "tonalRamp": [
+          "oklch(15% 0.0594 150.2)",
+          "oklch(26% 0.0594 150.2)",
+          "oklch(38% 0.0594 150.2)",
+          "oklch(49% 0.0594 150.2)",
+          "oklch(61% 0.0594 150.2)",
+          "oklch(72% 0.0594 150.2)",
+          "oklch(84% 0.0594 150.2)",
+          "oklch(95% 0.0594 150.2)"
+        ]
+      },
+      "station-dispatch": {
+        "role": "secondary",
+        "displayName": "Orange dispatch bench",
+        "tonalRamp": [
+          "oklch(15% 0.1649 42.7)",
+          "oklch(26% 0.1649 42.7)",
+          "oklch(38% 0.1649 42.7)",
+          "oklch(49% 0.1649 42.7)",
+          "oklch(61% 0.1649 42.7)",
+          "oklch(72% 0.1649 42.7)",
+          "oklch(84% 0.1649 42.7)",
+          "oklch(95% 0.1649 42.7)"
+        ]
+      },
+      "station-cream": {
+        "role": "secondary",
+        "displayName": "Model cream",
+        "tonalRamp": [
+          "oklch(15% 0.0347 88.8)",
+          "oklch(26% 0.0347 88.8)",
+          "oklch(38% 0.0347 88.8)",
+          "oklch(49% 0.0347 88.8)",
+          "oklch(61% 0.0347 88.8)",
+          "oklch(72% 0.0347 88.8)",
+          "oklch(84% 0.0347 88.8)",
+          "oklch(95% 0.0347 88.8)"
+        ]
+      },
+      "station-ink": {
+        "role": "secondary",
+        "displayName": "Model ink",
+        "tonalRamp": [
+          "oklch(15% 0.0307 172.3)",
+          "oklch(26% 0.0307 172.3)",
+          "oklch(38% 0.0307 172.3)",
+          "oklch(49% 0.0307 172.3)",
+          "oklch(61% 0.0307 172.3)",
+          "oklch(72% 0.0307 172.3)",
+          "oklch(84% 0.0307 172.3)",
+          "oklch(95% 0.0307 172.3)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "page-title": {
+        "displayName": "Page Title",
+        "purpose": "Destination heading."
+      },
+      "inspector-title": {
+        "displayName": "Inspector Title",
+        "purpose": "Selected employer or setup checklist."
+      },
+      "brand": {
+        "displayName": "Brand",
+        "purpose": "Navigation wordmark."
+      },
+      "section": {
+        "displayName": "Section",
+        "purpose": "Form section or compact dialog title."
+      },
+      "callout": {
+        "displayName": "Callout",
+        "purpose": "Question that needs action."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Native controls and records."
+      },
+      "scene-caption": {
+        "displayName": "Scene Caption",
+        "purpose": "Selected station or field legend."
+      },
+      "caption": {
+        "displayName": "Caption",
+        "purpose": "Supporting facts and help."
+      },
+      "table-heading": {
+        "displayName": "Table Heading",
+        "purpose": "Column labels."
+      }
+    },
+    "shadows": [
+      {
+        "name": "Model cast shadow",
+        "value": "PCFShadowMap, 1024 × 1024",
+        "purpose": "Grounds the miniature machines and folders on their platforms."
+      }
+    ],
+    "motion": [
+      {
+        "name": "Active worker",
+        "value": "requestAnimationFrame while selected, active, visible and motion-enabled",
+        "purpose": "Communicates the current engine checkpoint."
+      },
+      {
+        "name": "Folder travel",
+        "value": "1 − exp(−7 × frameSeconds)",
+        "purpose": "Ease toward the reported station during work. Snap for a new selection or reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "Compact table viewport (below)",
+        "value": "660px"
+      },
+      {
+        "name": "Minimum desktop width",
+        "value": "1040px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Button primary",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Prepare the pasted job.",
+      "html": "<button type=\"button\" class=\"ds-button-primary\">Prepare application</button>",
+      "css": ".ds-button-primary {font: 600 13px system-ui, sans-serif; color: #ffffff; background: #a73e22; border: 1px solid #a73e22; border-radius: 6px; padding: 5px 12px;} .ds-button-primary:hover {background:#873016;} .ds-button-primary:active {background:#873016;} .ds-button-primary:focus-visible {outline: 1px solid #192d28; outline-offset: -1px;}"
+    },
+    {
+      "name": "Button secondary",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Choose application details before preparing.",
+      "html": "<button type=\"button\" class=\"ds-button-secondary\">Options…</button>",
+      "css": ".ds-button-secondary {font: 500 13px system-ui, sans-serif; color: #192d28; background: #fffef8; border: 1px solid #b9c5ba; border-radius: 6px; padding: 5px 12px;} .ds-button-secondary:hover {background:#e9ede4;} .ds-button-secondary:active {background:#b9c5ba;} .ds-button-secondary:focus-visible {outline: 1px solid #a73e22; outline-offset: -1px;}"
+    },
+    {
+      "name": "Button ghost",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Dismiss a dialog.",
+      "html": "<button type=\"button\" class=\"ds-button-ghost\">Cancel</button>",
+      "css": ".ds-button-ghost {font: 500 13px system-ui, sans-serif; color: #40564e; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 5px 12px;} .ds-button-ghost:hover {background:#e9ede4;} .ds-button-ghost:active {background:#e9ede4;} .ds-button-ghost:focus-visible {outline: 1px solid #a73e22; outline-offset: -1px;}"
+    },
+    {
+      "name": "Button danger",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Open a removal confirmation.",
+      "html": "<button type=\"button\" class=\"ds-button-danger\">Delete answer…</button>",
+      "css": ".ds-button-danger {font: 500 13px system-ui, sans-serif; color: #a93038; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 5px 12px;} .ds-button-danger:hover {background:#e9ede4;} .ds-button-danger:active {background:#e9ede4;} .ds-button-danger:focus-visible {outline: 1px solid #a73e22; outline-offset: -1px;}"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Filter the application table.",
+      "html": "<input class=\"ds-input\" aria-label=\"Search applications\" placeholder=\"Search applications\">",
+      "css": ".ds-input {font: 500 13px system-ui, sans-serif; color: #192d28; background: #fffef8; border: 1px solid #b9c5ba; border-radius: 6px; padding: 5px 8px;}.ds-input::placeholder {color:#52635b;} .ds-input:focus-visible {outline: 1px solid #a73e22; outline-offset: -1px;}"
+    },
+    {
+      "name": "Nav selected",
+      "kind": "nav",
+      "refersTo": "nav-selected",
+      "description": "The current destination.",
+      "html": "<button type=\"button\" aria-current=\"page\" class=\"ds-nav-selected\">Applications</button>",
+      "css": ".ds-nav-selected {font: 600 13px system-ui, sans-serif; color: #f4f4e7; background: #193530; border: 1px solid #193530; border-radius: 6px; padding: 7px 11px;} .ds-nav-selected:hover {background:#193530;} .ds-nav-selected:active {background:#193530;} .ds-nav-selected:focus-visible {outline: 2px solid #a73e22; outline-offset: -2px;}"
+    },
+    {
+      "name": "Filter selected",
+      "kind": "chip",
+      "refersTo": "filter-selected",
+      "description": "A filter with its application count.",
+      "html": "<button type=\"button\" aria-pressed=\"true\" class=\"ds-filter-selected\">Needs you  2</button>",
+      "css": ".ds-filter-selected {font: 600 13px system-ui, sans-serif; color: #192d28; background: #d6e5d7; border: 1px solid #a73e22; border-radius: 10px; padding: 3px 12px;} .ds-filter-selected:hover {background:#d6e5d7;} .ds-filter-selected:active {background:#d6e5d7;} .ds-filter-selected:focus-visible {outline: 1px solid #a73e22; outline-offset: -1px;}"
+    },
+    {
+      "name": "Segment selected",
+      "kind": "button",
+      "refersTo": "segment-selected",
+      "description": "The selected application view.",
+      "html": "<button type=\"button\" aria-pressed=\"true\" class=\"ds-segment-selected\">Workshop</button>",
+      "css": ".ds-segment-selected {font: 500 13px system-ui, sans-serif; color: #f4f4e7; background: #193530; border: 1px solid #193530; border-radius: 6px; padding: 6px 10px;} .ds-segment-selected:hover {background:#193530;} .ds-segment-selected:active {background:#193530;} .ds-segment-selected:focus-visible {outline: 2px solid #a73e22; outline-offset: -2px;}"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "A section in a native form.",
+      "html": "<section class=\"ds-card\"><strong>Automation</strong></section>",
+      "css": ".ds-card {font: 500 13px system-ui, sans-serif; color: #192d28; background: #fffef8; border: 1px solid #b9c5ba; border-radius: 10px; padding: 16px 18px 18px;}.ds-card strong {font-size:18px;font-weight:650;}"
+    },
+    {
+      "name": "Inspector",
+      "kind": "custom",
+      "refersTo": "inspector",
+      "description": "A selected application's current decision.",
+      "html": "<section class=\"ds-inspector\"><h3>Lumen Analytics</h3><p>Needs your answer</p><p class=\"ds-question\">When can you start your internship?</p><button type=\"button\" class=\"ds-inspector-action\">Answer questions</button></section>",
+      "css": ".ds-inspector {font: 500 13px system-ui, sans-serif; color: #f4f4e7; background: #193530; border: 1px solid transparent; border-radius: 10px; padding: 16px 18px 18px;}.ds-inspector h3 {margin:0;font:700 25px system-ui,sans-serif;} .ds-question {padding:8px 12px;background:#27453d;border:1px solid #547169;border-radius:6px;font:600 15px system-ui,sans-serif;} .ds-inspector-action {font:600 13px system-ui,sans-serif;background:#ffae78;color:#272016;border:1px solid #ffae78;border-radius:6px;padding:5px 12px;} .ds-inspector-action:focus-visible {outline:2px solid #f4f4e7;outline-offset:-2px;}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Application Workshop",
+    "overview": "A student opens Intern-Bot to finish an application. At a glance they should be able to tell which job they are looking at, what the form actually contains, and whose turn it is. Four miniature workbenches make the preparation stages recognizable. The employer's question and the next available action sit alongside them in a native inspector.\n\nThe workshop is a model railway–scale object on a paper-colored desk. The surrounding app uses ink type, restrained borders and a deep green decision panel. The same four machines reappear in small nameplates on related screens. Interaction, evidence and approval live in Qt. The illustration can disappear and the workflow still works.",
+    "keyCharacteristics": [
+      "A named station, a physical tool and a distinct silhouette for each step.",
+      "One selected application, one active run at a time, one primary action in its inspector.",
+      "An observable field value, question or receipt behind every claim about progress."
+    ],
+    "rules": [
+      {
+        "name": "The Station Paint Rule",
+        "body": "Use a station's paint to identify the machine across states. Intake uses ochre, Fill uses blue, Verify uses sage and Dispatch uses orange. Reserve those paints for the models. A blue Fill worker can stand still during a warning and an orange Dispatch worker can wait for approval.",
+        "section": "colors"
+      },
+      {
+        "name": "The Workbench Shadow Rule",
+        "body": "Keep cast shadows in the miniature. Use surface tone and a single-pixel border to separate native layers. A selected paper row takes a sage fill. An active navigation item and the inspector take a deep green fill. Keep the UI edges clean so the miniature's cast shadows remain legible.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do bind every station, field count, question and receipt to the same run ID as the inspector.",
+      "Do retain the exact question, the reviewed value and who confirmed a submission in native text.",
+      "Do keep the decision and its action visible at compact width and with worker motion disabled.",
+      "Do name the recipient, the data and the scope before a user sends context or approves an answer."
+    ],
+    "donts": [
+      "Don't advance a station on a timer, animate an idle queue or use the demo timeline as engine state.",
+      "Don't represent an optional omission as a verified value, a send attempt as a receipt or a manual attestation as machine evidence.",
+      "Don't put personal form contents or a submit action in the scene bridge."
+    ]
+  }
+}

@@ -112,6 +112,9 @@ def test_read_only_editors_allow_select_and_copy_but_cannot_be_modified(editor):
 
 def test_password_copy_stays_protected_and_unmodified_typing_still_works(qt_app):
     editor = QLineEdit()
+    editor.show()
+    editor.setFocus()
+    qt_app.processEvents()
     editor.setEchoMode(QLineEdit.Password)
     editor.setText('fixture password')
     qt_app.clipboard().setText('clipboard remains intact')
@@ -126,6 +129,9 @@ def test_password_copy_stays_protected_and_unmodified_typing_still_works(qt_app)
 def test_editable_combobox_uses_the_same_shortcuts(qt_app):
     combo = QComboBox()
     combo.setEditable(True)
+    combo.show()
+    combo.setFocus()
+    qt_app.processEvents()
     combo.setEditText('A long form option')
     QTest.keyClick(combo.lineEdit(), Qt.Key_A, Qt.MetaModifier)
     assert combo.lineEdit().selectedText() == 'A long form option'

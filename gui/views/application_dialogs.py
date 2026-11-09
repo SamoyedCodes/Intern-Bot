@@ -13,7 +13,7 @@ from core.automation.answers import applicable, asks, fact_name
 from core.automation.models import ApplicantProfile, ApprovedAnswer, Education, Experience, Language, ats_name, employer_key, normalized, site_key
 from core.automation.recipes import save_recipe
 from core.automation.review import shown_value
-from gui.theme import form_layout, MessageBar, ReadableTree, button, card, dot_icon, label, restyle, shortcut
+from gui.theme import form_layout, MessageBar, ReadableTree, button, card, dot_icon, label, restyle, shortcut, station_heading
 
 BOOLEAN_FIELDS = {"work_authorized", "requires_sponsorship", "hispanic_or_latino"}
 ROW_BOOLEANS = {"current", "fluent"}
@@ -246,7 +246,7 @@ class ProfileDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(12)
-        layout.addWidget(label("Application profile snapshot", "section"))
+        layout.addWidget(station_heading("Application profile snapshot", "fill", compact=True))
         layout.addWidget(label("Changes apply only to this application. Your saved profile stays as it is.", "muted"))
         self.editor = ProfileEditor(profile, self)
         layout.addWidget(self.editor, 1)
@@ -290,7 +290,7 @@ class RunDetailsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(12)
-        layout.addWidget(label(f"{name} · {run.role}", "section"))
+        layout.addWidget(station_heading("Application questions", "verify", f"{name} · {run.role}", compact=True))
         self.progress = label(role="muted")
         layout.addWidget(self.progress)
 
@@ -591,7 +591,7 @@ class ReviewDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(10)
-        layout.addWidget(label(f"{name} · {run.role}", "section"))
+        layout.addWidget(station_heading("Review before sending", "dispatch", f"{name} · {run.role}", compact=True))
         source = f" · found through the listing on {site_key(run.listing_url)}" if run.listing_url else ""
         layout.addWidget(label(f"Profile {run.profile_name} · {ats_name(run.job_url) or site_key(run.job_url)}{source}", "muted"))
         files = [f"{a.label}: {a.value}" for a in run.fields.values() if a.kind == "file" and a.disposition == "verified" and a.value]
@@ -675,7 +675,7 @@ class RecipeReviewDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(10)
-        layout.addWidget(label(f"Recipe for {recipe.host}", "section"))
+        layout.addWidget(station_heading("Review filling guide", "fill", recipe.host, compact=True))
         source = "learned by watching you" if recipe.origin == "taught" else "drafted by the AI filling it"
         layout.addWidget(label(f"{source.capitalize()}. Later applications on this site fill without AI. It stores no personal values, "
                                "only how to drive the site; your answers stay in the answer bank.", "muted"))
@@ -733,11 +733,12 @@ class AnswersView(QWidget):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(12)
         header = QHBoxLayout()
-        titles = QVBoxLayout()
-        titles.setSpacing(2)
-        titles.addWidget(label("Answers", "pageTitle"))
-        titles.addWidget(label("Answers you've approved. Expand one to see every wording employers used for it; each is filled with the same answer.", "muted"))
-        header.addLayout(titles, 1)
+        header.addWidget(station_heading("Answer library", "verify", "Review reusable answers, their scope and the question wordings they match."), 1)
+        self.filter = QComboBox()
+        self.filter.addItems(["All answers", "Needs confirmation", "Approved"])
+        self.filter.setAccessibleName("Filter answers by approval")
+        self.filter.currentIndexChanged.connect(self.refresh)
+        header.addWidget(self.filter)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search questions and answers")
         self.search.setAccessibleName("Search answers")
@@ -784,6 +785,10 @@ class AnswersView(QWidget):
         query = self.search.text().strip().casefold()
         self.tree.clear()
         for answer in self.answers:
+            if self.filter.currentIndex() == 1 and answer.origin != "ai":
+                continue
+            if self.filter.currentIndex() == 2 and answer.origin == "ai":
+                continue
             if query not in " ".join([answer.question, *answer.variants, shown(answer)]).casefold():
                 continue
             applies = {"application": f"Only the {companies.get(answer.scope_key, 'deleted')} application",
@@ -801,8 +806,11 @@ class AnswersView(QWidget):
                 child.setToolTip(0, f"Also asked as “{variant}”")
             # Searching for a wording opens its answer so the match is visible.
             item.setExpanded(bool(query) and any(query in v.casefold() for v in answer.variants))
-        self.tree.setVisible(bool(self.answers))
-        self.empty.setVisible(not self.answers)
+        has_matches = bool(self.tree.topLevelItemCount())
+        self.tree.setVisible(has_matches)
+        self.empty.setVisible(not has_matches)
+        self.empty.setText("No matching answers. Change the filter or clear your search." if self.answers else
+                           "Answer a question from the workshop to start your library.")
         self.update_actions()
 
     def update_actions(self):

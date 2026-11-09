@@ -1,6 +1,6 @@
 <p align="center">
-  <a href="docs/cover.png">
-    <img src="docs/banner.png" alt="Intern-Bot in its native dark theme: local autofill with 28 site-specific adapters, reusable profiles and answers, and application tracking. The Applications screenshot uses fictional demo records." width="100%">
+  <a href="docs/design/workshop.png">
+    <img src="docs/design/workshop.png" alt="A miniature crew at four workstations. The selected fictional application needs an answer before it can proceed." width="100%">
   </a>
 </p>
 
@@ -11,6 +11,8 @@ Intern-Bot is a local macOS desktop app (Python and PySide6) for internship appl
 Autofill runs all **28 site-specific SpeedyApply 2.28.0 adapters** inside a local Chromium extension that Playwright controls directly. No SpeedyApply account, server or AI is needed for normal autofill. Optional AI (a local model, Claude, OpenAI, Gemini, DeepSeek or any OpenAI-compatible server) fills factual questions your profile doesn't cover by name, under the privacy rules below.
 
 > This is a private personal integration of proprietary user-supplied code, not an open-source release of SpeedyApply. See the [acceptance record](docs/speedyapply-acceptance.md) for fixture coverage, benchmarks and live-site limitations.
+
+The [UI and UX style guide](DESIGN.md) explains the four stations, application states, native controls and how to extend each screen. Its screenshots use fictional records.
 
 ## What it does
 
@@ -49,7 +51,7 @@ Open **Profile** and work through its sections (Name, Contact, Documents, Citize
 
 Under **Citizenship & eligibility**, **Authorized to work in job's country** defaults to **Yes** for Singapore applications. Enter citizenship as a country (for example, Singapore) and nationality as it appears on your documents (for example, Singaporean). These fields are optional; blank or Unknown answers are asked during each application. Saved No and Unknown work-authorization choices are preserved.
 
-Use the profile switcher and its ⋯ menu to create, import or export named profiles. Saving a profile affects new applications only. To change one application's copy, use **Edit snapshot…** in its detail panel.
+Use the profile switcher and its ⋯ menu to create, import or export named profiles. Saving a profile affects new applications only. To change one application's copy, use **Edit application profile…** in its inspector.
 
 ### 2. Workday logins (optional)
 
@@ -68,9 +70,11 @@ With **Create Workday accounts automatically** on, an employer with no saved log
 
 ### 3. Add and run applications
 
-**Applications → New application** (⌘N) takes an HTTPS job URL (prefilled from the clipboard) and a profile, and tells you whether the site has a supported adapter. Unrecognized pages still open for detection but you finish them by hand; ambiguous application frames are handed off to you.
+In **Applications**, press ⌘N, paste an HTTPS job link and press Return to prepare it with the active profile. **Options…** lets you choose the profile, site mode and whether to queue it first. Unrecognized pages still open for detection but you finish them by hand; ambiguous application frames are handed off to you.
 
 For Workday, choose **Request** mode to answer questions through the API. It never creates accounts.
+
+**Workshop** places the selected application at Intake, Fill, Verify or Dispatch. **Bar field** shows field assessments for up to three visible applications at a time. **List** gives the queue the full left pane. The view is remembered. Turn off worker animation under **Settings → Automation → Workshop display**.
 
 Select an application and press its primary action (**Start**, **Resume** or **Retry**; ⌘R or Return), or use **Run queue**. Queues run one at a time and skip submitted applications and anything waiting on you. Pause and cancel stop further adapter writes and pending timers.
 
@@ -97,11 +101,11 @@ Check the form in the browser and submit it yourself, or authorize automatic sub
 
 ### 6. Track
 
-The detail panel holds pipeline stage, notes and the job description, and saves as you type. Import and export CSV from the ⋯ menu next to **New application**. Imports never start applications.
+The detail panel holds pipeline stage, notes and the job description, and saves as you type. Import and export CSV from the ⋯ menu beside **Run queue**. Imports never start applications.
 
 ### Scout
 
-Open **Scout** (⌘5), choose a saved profile, and edit its search brief and priority sources. Choose **Internships**, **Jobs**, or **Both**. **Scan now** previews the exact applicant context before the first AI request. **Scan daily** runs at 8:00 a.m. Singapore time while the app is open, with a catch-up scan when it next opens or wakes. Changes to the provider or shared context require a new preview; until then daily scans pause and Scout shows **!** in the sidebar. Priority sources take one `Name | URL` (or bare URL) per line, and lines starting with `#` are ignored.
+Open **Scout** (⌘5), choose a saved profile, and edit its search brief and priority sources. Choose **Internships**, **Jobs**, or **Both**. **Scan now** previews the exact applicant context before the first AI request. **Scan daily** runs at 8:00 a.m. Singapore time while the app is open, with a catch-up scan when it next opens or wakes. Changes to the provider or shared context require a new preview; until then daily scans pause and Scout shows **!** in the top navigation. Priority sources take one `Name | URL` (or bare URL) per line, and lines starting with `#` are ignored.
 
 Scout reuses the provider, model and Keychain key in Settings. OpenAI and Claude use native web search when the selected model supports it. An optional Brave Search API key enables broad discovery with any provider. Direct public sources are checked in either case. Each run allows up to six discovery requests and 40 candidate postings, with source failures and limits shown under coverage. Public pages that require JavaScript may open in a separate Chromium window. Private university portals and sign-in-only pages appear as unavailable.
 

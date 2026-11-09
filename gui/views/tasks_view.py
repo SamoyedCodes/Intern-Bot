@@ -20,7 +20,8 @@ from core.automation.review import review_values
 from core.automation.service import AutomationService
 from core.storage.local_store import LocalStore
 from core.tracker import PIPELINE, activity, export_csv, import_csv
-from gui.theme import TOKENS, form_layout, MessageBar, button, card, dot_icon, label, more_button, restyle, shortcut
+from gui.theme import TOKENS, form_layout, MessageBar, button, card, dot_icon, label, more_button, restyle, shortcut, station_heading
+from gui.workshop import Workshop
 from gui.views.application_dialogs import ProfileDialog, RecipeReviewDialog, ReviewDialog, RunDetailsDialog
 
 BULK_LABELS = {"retry": "Retry failed", "restart": "Restart from beginning", "cancel": "Cancel tasks", "delete": "Delete tasks"}
@@ -129,7 +130,7 @@ class Stepper(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         width, y = self.width() / len(self.steps), 9
-        accent, muted = QColor(TOKENS["accent"]), QColor(TOKENS["border"])
+        accent, muted = QColor(TOKENS["panel_button"]), QColor(TOKENS["panel_line"])
         painter.setPen(QPen(muted, 2))
         painter.drawLine(QPointF(width / 2, y), QPointF(self.width() - width / 2, y))
         if self.current > 0:
@@ -146,11 +147,11 @@ class Stepper(QWidget):
             radius = 8 if i == self.current else 5
             painter.drawEllipse(center, radius, radius)
             if i == self.current:
-                painter.setBrush(QColor(TOKENS["surface"]))
+                painter.setBrush(QColor(TOKENS["panel"]))
                 painter.drawEllipse(center, 3, 3)
             font.setBold(i == self.current)
             painter.setFont(font)
-            painter.setPen(QColor(TOKENS["text" if i == self.current else "text3"]))
+            painter.setPen(QColor(TOKENS["panel_text" if i == self.current else "panel_muted"]))
             name = " ".join(QFontMetrics(font).elidedText(word, Qt.ElideRight, int(width) - 4) for word in name.split())
             painter.drawText(QRectF(i * width + 2, y + 13, width - 4, self.height() - y - 13), Qt.AlignHCenter | Qt.AlignTop | Qt.TextWordWrap, name)
 
@@ -173,7 +174,7 @@ class TaskDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(12)
-        layout.addWidget(label("New application", "section"))
+        layout.addWidget(station_heading("New application", "intake", compact=True))
         form = form_layout(10)
         self.url, self.company, self.role = QLineEdit(), QLineEdit(), QLineEdit()
         self.url.setPlaceholderText("https://company.wd1.myworkdayjobs.com/…")
@@ -270,28 +271,40 @@ class TasksView(QWidget):
         layout.setSpacing(12)
         layout.addLayout(self._build_header())
         layout.addLayout(self._build_paste())
-        layout.addLayout(self._build_chips())
         self.notice = MessageBar()
         layout.addWidget(self.notice)
-        layout.addWidget(self._build_bulk_bar())
-        self.body = QStackedWidget()
-        self.body.addWidget(self._build_empty())
         splitter = self.splitter = QSplitter()
         splitter.setHandleWidth(12)
         splitter.setChildrenCollapsible(False)
-        splitter.addWidget(self._build_table())
-        splitter.addWidget(self._build_detail())
+        workbench = QWidget()
+        bench = QVBoxLayout(workbench)
+        bench.setContentsMargins(0, 0, 0, 0)
+        bench.setSpacing(8)
+        self.workshop = Workshop(self.store)
+        self.workshop.picked.connect(self.select_track)
+        bench.addWidget(self.workshop, 5)
+        bench.addLayout(self._build_chips())
+        bench.addWidget(self._build_bulk_bar())
+        bench.addWidget(self._build_table(), 4)
+        splitter.addWidget(workbench)
+        self.body = QStackedWidget()
+        self.body.setMinimumWidth(330)
+        self.body.setMaximumWidth(470)
+        self.body.addWidget(self._build_empty())
+        self.body.addWidget(self._build_detail())
+        splitter.addWidget(self.body)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
-        splitter.setSizes([640, 400])
+        splitter.setSizes([770, 375])
         splitter.splitterMoved.connect(lambda *_: self.fit_columns())
-        self.body.addWidget(splitter)
-        layout.addWidget(self.body, 1)
+        layout.addWidget(splitter, 1)
         for keys in (QKeySequence(Qt.Key_Return), QKeySequence(Qt.Key_Enter)):
             shortcut(keys, self.table, self.primary_action, Qt.WidgetShortcut)
         for keys in (QKeySequence.Delete, QKeySequence(Qt.Key_Backspace)):
             shortcut(keys, self.table, lambda: self.bulk_action("delete") if self._checked_ids else self.delete_selected(), Qt.WidgetShortcut)
+        self.table.model().layoutChanged.connect(self.update_workshop)
         self.load_state()
+        self.switch_scene(self.scene_modes.checkedId(), save=False)
 
     # Layout
 
@@ -299,15 +312,27 @@ class TasksView(QWidget):
         row = QHBoxLayout()
         titles = QVBoxLayout()
         titles.setSpacing(2)
-        titles.addWidget(label("Applications", "pageTitle"))
+        self.page_title = label("Application workshop", "pageTitle")
+        titles.addWidget(self.page_title)
         self.stats = label(role="muted")
         titles.addWidget(self.stats)
         row.addLayout(titles, 1)
+        self.scene_modes = QButtonGroup(self)
+        for index, text in enumerate(("Workshop", "Bar field", "List")):
+            mode = button(text, variant="segment")
+            mode.setCheckable(True)
+            self.scene_modes.addButton(mode, index)
+            row.addWidget(mode)
+        saved_mode = self.store.get("application_view", "Workshop")
+        self.scene_modes.button({"Bar field": 1, "List": 2}.get(saved_mode, 0)).setChecked(True)
+        self.scene_modes.idClicked.connect(self.switch_scene)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search company, role or URL")
+        self.search.setPlaceholderText("Search applications")
+        self.search.setToolTip("Search company, role or URL")
         self.search.setAccessibleName("Search applications")
         self.search.setClearButtonEnabled(True)
-        self.search.setFixedWidth(240)
+        self.search.setMaximumWidth(205)
+        self.search.setMinimumWidth(130)
         self.search.textChanged.connect(lambda: self.render())
         row.addWidget(self.search)
         self.run_queue = button("Run queue", self.start_all_tasks, tip="Start every queued or failed application, one at a time")
@@ -317,6 +342,29 @@ class TasksView(QWidget):
         menu.addAction("Export CSV…", self.export_file)
         row.addWidget(more_button(menu, "Import and export"))
         return row
+
+    def switch_scene(self, index, save=True):
+        self.workshop.field = index == 1
+        self.workshop.setVisible(index != 2)
+        self.page_title.setText(("Application workshop", "Field crew", "Applications")[index])
+        if save:
+            self.store.put("application_view", self.scene_modes.button(index).text())
+        self.update_workshop()
+
+    def select_track(self, run_id):
+        for row in range(self.table.rowCount()):
+            if self.table.item(row, 0).data(Qt.UserRole) == run_id:
+                self.table.selectRow(row)
+                break
+
+    def update_workshop(self, *_):
+        if self.table.signalsBlocked():
+            return
+        by_id = {run.id: run for run in self.tasks}
+        runs = [by_id[item.data(Qt.UserRole)] for row in range(self.table.rowCount())
+                if (item := self.table.item(row, 0)) and item.data(Qt.UserRole) in by_id]
+        viewed = by_id.get(self._shown_id)
+        self.workshop.display(runs, self._shown_id, self._active_id, status_meta(viewed)[0] if viewed else "")
 
     def _build_paste(self):
         layout = QVBoxLayout()
@@ -356,13 +404,10 @@ class TasksView(QWidget):
         return row
 
     def _build_empty(self):
-        page = QWidget()
-        outer = QVBoxLayout(page)
-        outer.addStretch()
-        frame, box = card(10)
-        frame.setMaximumWidth(520)
-        box.addWidget(label("Get set up", "section"))
-        box.addWidget(label("Paste a job link above. Intern-Bot prepares the application, asks about missing answers, then brings it back for your approval.", "muted"))
+        frame, box = card(12)
+        frame.setObjectName("setupPanel")
+        box.addWidget(label("Set up your workshop", "inspectorTitle"))
+        box.addWidget(label("Give the crew a profile, a resume and a job link. You can review what it filled before sending.", "muted"))
         self.checklist = []
         for text, go, action in [("Add your name and email", "Edit profile", lambda: self.open_profile.emit("Name")),
                                  ("Choose your resume", "Choose resume", lambda: self.open_profile.emit("Documents")),
@@ -375,13 +420,8 @@ class TasksView(QWidget):
             row.addWidget(button(go, action, "ghost"))
             box.addLayout(row)
             self.checklist.append(mark)
-        center = QHBoxLayout()
-        center.addStretch()
-        center.addWidget(frame, 1)
-        center.addStretch()
-        outer.addLayout(center)
-        outer.addStretch()
-        return page
+        box.addStretch()
+        return frame
 
     def _build_bulk_bar(self):
         self.bulk_bar = QWidget()
@@ -414,6 +454,7 @@ class TasksView(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(40)
         header = self.table.horizontalHeader()
+        header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         header.setHighlightSections(False)
         header.setSectionResizeMode(0, QHeaderView.Fixed)
         self.select_all_visible = QCheckBox(header.viewport())
@@ -426,7 +467,7 @@ class TasksView(QWidget):
         self.select_all_visible.adjustSize()
         header.geometriesChanged.connect(position_checkbox)
         self.table.horizontalScrollBar().valueChanged.connect(position_checkbox)
-        for column, width in ((0, 40), (1, 130), (2, 145), (3, 160), (5, 80)):
+        for column, width in ((0, 40), (1, 148), (2, 164), (3, 178), (5, 80)):
             self.table.setColumnWidth(column, width)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.table.setSortingEnabled(True)
@@ -441,15 +482,19 @@ class TasksView(QWidget):
         self.table_stack.addWidget(self.table)
         empty, empty_layout = card()
         empty_layout.addStretch()
-        empty_layout.addWidget(label("No matching applications", "section"))
-        empty_layout.addWidget(label("Try another search or clear the filters to see your applications.", "muted"))
-        empty_layout.addWidget(button("Show all applications", lambda: (self.show_all(), self.render())), 0, Qt.AlignLeft)
+        self.list_empty_title = label("No matching applications", "section")
+        empty_layout.addWidget(self.list_empty_title)
+        self.list_empty_hint = label(role="muted")
+        empty_layout.addWidget(self.list_empty_hint)
+        self.reset_filters = button("Show all applications", lambda: (self.show_all(), self.render()))
+        empty_layout.addWidget(self.reset_filters, 0, Qt.AlignLeft)
         empty_layout.addStretch()
         self.table_stack.addWidget(empty)
         return self.table_stack
 
     def _build_detail(self):
         frame, box = card(10)
+        frame.setObjectName("inspector")
         self.detail_empty = label("Select an application to see what it needs.", "muted")
         self.detail_empty.setAlignment(Qt.AlignCenter)
         box.addWidget(self.detail_empty, 1)
@@ -459,7 +504,7 @@ class TasksView(QWidget):
         body.setSpacing(10)
         box.addWidget(self.detail_body, 1)
 
-        self.d_title = label(role="section")
+        self.d_title = label(role="inspectorTitle")
         self.d_role = label(role="muted")
         body.addWidget(self.d_title)
         body.addWidget(self.d_role)
@@ -507,14 +552,15 @@ class TasksView(QWidget):
         self.replace_action = self.detail_menu.addAction("Replace link…", self.replace_link)
         self.cancel_action = self.detail_menu.addAction("Stop and cancel automation", self.cancel)
         actions.addWidget(more_button(self.detail_menu))
-        body.addLayout(actions)
 
         self.callout = QLabel()
+        self.callout.setTextFormat(Qt.PlainText)
         self.callout.setObjectName("callout")
         self.callout.setWordWrap(True)
         self.callout.setMinimumWidth(0)
         self.callout.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         body.addWidget(self.callout)
+        body.addLayout(actions)
 
         body.addSpacing(4)
         self.d_stage = QLabel()
@@ -559,6 +605,9 @@ class TasksView(QWidget):
         self.notes.textChanged.connect(self._save_timer.start)
         self.description.textChanged.connect(self._save_timer.start)
 
+        self.recent_events = label(role="caption")
+        self.recent_events.setTextFormat(Qt.PlainText)
+        body.addWidget(self.recent_events)
         body.addStretch()
         self.d_profile = label(role="caption")
         body.addWidget(self.d_profile)
@@ -596,8 +645,12 @@ class TasksView(QWidget):
         self.table.setColumnHidden(5, compact)
         self.table.setColumnHidden(4, compact)
         header = self.table.horizontalHeader()
-        for column in (1, 2):
-            header.setSectionResizeMode(column, QHeaderView.Stretch if compact else QHeaderView.Interactive)
+        for column, width in ((1, 148), (2, 164)):
+            new_mode = QHeaderView.Stretch if compact else QHeaderView.Interactive
+            if header.sectionResizeMode(column) != new_mode:
+                header.setSectionResizeMode(column, new_mode)
+                if not compact:
+                    header.resizeSection(column, width)
         header.setSectionResizeMode(4, QHeaderView.Stretch)
 
     def load_state(self):
@@ -664,6 +717,10 @@ class TasksView(QWidget):
             self.table.item(row, 5).setData(Qt.UserRole + 1, run.updated_at)
         self.table.setSortingEnabled(True)
         self.table_stack.setCurrentIndex(0 if visible else 1)
+        if not visible:
+            self.list_empty_title.setText("No matching applications" if self.tasks else "Application queue")
+            self.list_empty_hint.setText("Clear your filters or try another search." if self.tasks else "Paste a job link above to prepare your first application.")
+            self.reset_filters.setVisible(bool(self.tasks))
         rows = [r for r in range(self.table.rowCount()) if self.table.item(r, 0).data(Qt.UserRole) == keep] or ([0] if visible else [])
         self.table.clearSelection()
         if rows:
@@ -695,6 +752,7 @@ class TasksView(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self.refresh_paste_profile()
+        self.update_workshop()
         if not self.tasks:
             self.refresh_empty()
 
@@ -707,6 +765,7 @@ class TasksView(QWidget):
             if run:
                 self.load_tracking(run)
         self.refresh_detail()
+        self.update_workshop()
 
     def load_tracking(self, run):
         for widget in (self.stage, self.notes, self.description):
@@ -737,13 +796,16 @@ class TasksView(QWidget):
         self.detail_empty.setVisible(not run)
         if run:
             text, tone, _ = status_meta(run)
+            recent = self.store.recent_events(run.id, 2)
+            self.recent_events.setText("\n".join(f"{ago(e['at'])}  ·  {e['note'] or e['kind'].replace('_', ' ')}" for e in recent))
+            self.recent_events.setVisible(bool(recent))
             self.d_title.setText(run.company or site_key(run.job_url))
             self.d_role.setText(run.role)
             self.d_dot.setPixmap(dot_icon(tone).pixmap(16, 16))
             self.d_status.setText(text)
             recipe = recipe_for(self.store, run.job_url)
             self.d_platform.setText((ats_name(run.job_url) or (recipe and "Taught site") or "Unrecognized site") + (" · Request mode" if run.mode == "request" else ""))
-            messages = [request.message for request in run.interventions]
+            messages = [request.question or request.message for request in run.interventions]
             if unsupported(run):
                 messages = ["This site needs a filling guide. Teach it once, or choose Fill with AI from More actions."]
             self.callout.setText("\n".join(dict.fromkeys(messages)))
@@ -751,20 +813,34 @@ class TasksView(QWidget):
             total = len(run.fields)
             verified = sum(f.disposition == "verified" for f in run.fields.values())
             omitted = sum(f.disposition == "intentionally_omitted" for f in run.fields.values())
-            self.d_stage.setText("Check employer confirmation" if receipt_unconfirmed(run) else "Application prepared" if run.status == "ready_for_review" else stage_text(run))
+            if run.submission_confirmed:
+                stage = "Employer receipt confirmed"
+            elif run.submitted_by_user:
+                stage = "Submission confirmed by you"
+            elif receipt_unconfirmed(run):
+                stage = "Check employer confirmation"
+            elif run.status == "ready_for_review":
+                stage = "Application prepared"
+            elif run.status == "needs_input" and any(i.question for i in run.interventions):
+                stage = "Waiting for your answer"
+            else:
+                stage = stage_text(run)
+            self.d_stage.setText(stage)
             self.d_steps.set_steps(run.steps, run.step)
             self.d_steps.setVisible(bool(run.steps))
             self.d_bar.setVisible(bool(total) and not run.steps)
             self.d_bar.setRange(0, max(total, 1))
             self.d_bar.setValue(verified + omitted)
-            details = [f"{verified} answers checked" if total else "No fields checked yet"]
+            details = [f"{verified} of {total} fields verified" if total else "No fields checked yet"]
             if omitted:
-                details.append(f"{omitted} optional fields left blank")
+                details = [f"{verified + omitted} of {total} fields resolved", f"{verified} verified",
+                           f"{omitted} optional {'field' if omitted == 1 else 'fields'} left blank"]
             if run.completed_sections and not run.steps:
                 details.append(f"{len(run.completed_sections)} sections done")
             if run.elapsed_seconds:
                 details.append(duration(run.elapsed_seconds) + " active")
             self.d_progress.setText(" · ".join(details))
+            self.d_bar.setAccessibleName(self.d_progress.text())
             self.d_profile.setText(f"Prepared with profile: {run.profile_name}")
             for widget in (self.stage, self.notes, self.description):
                 widget.setEnabled(run.id != self._active_id)
@@ -1051,6 +1127,7 @@ class TasksView(QWidget):
                     credential = vault.credential(run.job_url)
             if self.service.start(run.model_copy(deep=True), profile, credential, inspect_only=inspect_only):
                 self._active_id = run.id
+                run.work_phase = "intake"
                 self._queue = [i for i in self._queue if i != run.id]
                 run.status = "running"
                 run.interventions = []

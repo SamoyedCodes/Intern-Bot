@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout,
 
 from core.automation.assistant import DEFAULT_PROVIDER, PROVIDERS, ai_config, career_facts, generate_text
 from core.automation.privacy import redact
-from gui.theme import button, label, restyle
+from gui.theme import station_heading, button, label, restyle
 
 
 class AssistWorker(QThread):
@@ -41,7 +41,7 @@ class AssistantDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(10)
-        layout.addWidget(label(f"Draft an answer with {name}" if mode == "draft" else f"Compare profiles with {name}", "section"))
+        layout.addWidget(station_heading("Draft an answer" if mode == "draft" else "Compare profiles", "verify", name, compact=True))
         layout.addWidget(label("Review and edit exactly what will be sent to your local model; nothing leaves this Mac." if local else
                                f"Review and edit exactly what will be sent to the {name} API. Contact details, file contents and credentials are left out, and names, "
                                "emails, phone numbers and links in your career facts are masked, but other free text may still be personal.", "muted"))

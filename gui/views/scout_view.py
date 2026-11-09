@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 
 from core.automation.assistant import ai_config
 from core.scout import SG, Scout, ScoutSettings, consent_key, daily_due, deadline_expired, search_context, sort_key, source_rows, timestamp
-from gui.theme import MessageBar, ReadableTree, button, form_layout, label
+from gui.theme import MessageBar, ReadableTree, button, form_layout, label, station_heading
 
 
 class ScoutWorker(QThread):
@@ -52,7 +52,7 @@ class ScoutView(QWidget):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(12)
         header = QHBoxLayout()
-        header.addWidget(label("Scout", "pageTitle"), 1)
+        header.addWidget(station_heading("Opportunity scout", "intake", "Find openings, check the posting evidence, then send a job to Intake."), 1)
         self.profiles = QComboBox()
         self.profiles.setAccessibleName("Scout profile")
         header.addWidget(self.profiles)
@@ -121,7 +121,8 @@ class ScoutView(QWidget):
         self.coverage.setMaximumHeight(85)
         self.coverage.hide()
         layout.addWidget(self.coverage)
-        split = QSplitter(Qt.Vertical)
+        split = QSplitter(Qt.Horizontal)
+        split.setChildrenCollapsible(False)
         self.results = ReadableTree()
         self.results.setHeaderLabels(["Opportunity", "Organisation", "Type", "Hours", "Deadline"])
         self.results.setRootIsDecorated(True)
@@ -135,7 +136,7 @@ class ScoutView(QWidget):
         self.detail.setAccessibleName("Posting evidence")
         self.detail.setOpenExternalLinks(True)
         split.addWidget(self.detail)
-        split.setSizes([250, 150])
+        split.setSizes([680, 400])
         layout.addWidget(split, 1)
         bottom = QHBoxLayout()
         self.open_btn = button("Open posting", self.open_posting)
@@ -149,6 +150,7 @@ class ScoutView(QWidget):
         self.daily.toggled.connect(self.daily_toggled)
         self._loading = False
         self.refresh_profiles()
+        self.settings_btn.setChecked(not bool(self.store.get("scout:" + self.profile_name, {})))
         self.timer = QTimer(self, interval=30000, timeout=self.check_daily)
         self.timer.start()
         QTimer.singleShot(0, self.check_daily)

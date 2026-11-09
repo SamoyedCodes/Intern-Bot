@@ -49,6 +49,11 @@ class ApplicationEngine:
         if self.bridge:
             asyncio.create_task(self.bridge.stop())
 
+    def report_phase(self, run, phase):
+        if run.work_phase != phase:
+            run.work_phase = phase
+            self.emit(run.model_copy(deep=True))
+
     def checkpoint(self, run):
         self.store.save_run(run)
         self.emit(run.model_copy(deep=True))
@@ -74,6 +79,7 @@ class ApplicationEngine:
         started = time.monotonic()
         run.interventions = []
         run.status = 'running'
+        run.work_phase = 'intake'
         try:
             config = translate(profile, run, self.store.answers())
             digest = config['files'].get(profile.resume_path, {}).get('digest', '')
@@ -157,6 +163,7 @@ class ApplicationEngine:
                     # This run's Create Account click led straight into the application: the tenant needed no email verification.
                     self.store._vault().set_account_state(run.job_url, 'verified')
                     credential['state'] = 'verified'
+                self.report_phase(run, 'fill')
                 await bridge.command('start')
                 settled = await self.wait_for_section(run, profile)
                 if settled and match['frame'] == 0 and settled['url'] != bridge.page.url and not (self._pause or self._cancel):
@@ -169,6 +176,7 @@ class ApplicationEngine:
                     settled = await self.wait_for_section(run, profile)
                 if not settled or self._pause or self._cancel:
                     return run
+                self.report_phase(run, 'verify')
                 scanned = await bridge.command('scan')
                 fields = [FormField(**f) for f in scanned['fields']]
                 await asyncio.sleep(.35)

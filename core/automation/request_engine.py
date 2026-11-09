@@ -66,6 +66,7 @@ class RequestEngine(ApplicationEngine):
         started = time.monotonic()
         run.interventions = []
         run.status = 'running'
+        run.work_phase = 'intake'
         try:
             # Evidence belongs to this read-back, not a previous attempt or answer-bank revision.
             run.fields, run.completed_sections = {}, []
@@ -96,6 +97,7 @@ class RequestEngine(ApplicationEngine):
             found = [(info[key], kind, page) for key, kind, page in QUESTIONNAIRES if info.get(key)]
             for questionnaire, kind, page in found:
                 run.step = next((i for i, p in enumerate(pages) if p.get('id') == page), run.step)
+                run.work_phase = 'fill'
                 run.stage = f'Workday API: {kind} questions'
                 self.checkpoint(run)
                 if not await self.questionnaire(run, profile, questionnaire, kind) or self.stopped:
@@ -276,6 +278,7 @@ class RequestEngine(ApplicationEngine):
                     self.intervene(run, str(error.get('message') or error) if isinstance(error, dict) else str(error), 'validation')
                 return False
             saved = await self.saved(kind)
+        self.report_phase(run, "verify")
         ok = True
         for field in shown:
             if field.selector not in chosen and field.selector not in omitted:

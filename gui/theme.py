@@ -5,19 +5,23 @@ from string import Template
 
 from PySide6.QtCore import QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QPixmap, QShortcut
-from PySide6.QtWidgets import QFormLayout, QFrame, QLabel, QPushButton, QStyledItemDelegate, QToolButton, QTreeWidget, QVBoxLayout
+from PySide6.QtWidgets import QFormLayout, QFrame, QHBoxLayout, QLabel, QPushButton, QStyledItemDelegate, QToolButton, QTreeWidget, QVBoxLayout, QWidget
 
 LIGHT = {
-    "bg": "#f6f7f9", "surface": "#ffffff", "surface2": "#eef0f3", "border": "#dcdfe5",
-    "text": "#16181d", "text2": "#555d6b", "text3": "#6b7280",
-    "accent": "#15803d", "accent_hover": "#116b33", "on_accent": "#ffffff", "selection": "#d7efe0",
-    "info": "#1d5fd1", "warning": "#a35f00", "danger": "#c62f3b", "success": "#15803d", "neutral": "#6b7280",
+    "bg": "#f7f6f1", "surface": "#fffef8", "surface2": "#e9ede4", "border": "#b9c5ba",
+    "text": "#192d28", "text2": "#40564e", "text3": "#52635b",
+    "accent": "#a73e22", "accent_hover": "#873016", "on_accent": "#ffffff", "selection": "#d6e5d7",
+    "info": "#275e78", "warning": "#895019", "danger": "#a93038", "success": "#306342", "neutral": "#52635b",
+    "panel": "#193530", "panel_text": "#f4f4e7", "panel_muted": "#cad9ca", "panel_button": "#ffae78",
+    "panel_line": "#547169", "panel_inset": "#27453d",
 }
 DARK = {
-    "bg": "#0f1115", "surface": "#161920", "surface2": "#1e222b", "border": "#2a2f3a",
-    "text": "#e8eaf0", "text2": "#a0a7b4", "text3": "#7d8594",
-    "accent": "#2fbf71", "accent_hover": "#3fd283", "on_accent": "#04130a", "selection": "#1c3a2b",
-    "info": "#5b9dff", "warning": "#e5a50a", "danger": "#f0616d", "success": "#2fbf71", "neutral": "#7d8594",
+    "bg": "#15241f", "surface": "#20332b", "surface2": "#2b4036", "border": "#4f6357",
+    "text": "#f0f2e7", "text2": "#cfdbca", "text3": "#adbfae",
+    "accent": "#ffad75", "accent_hover": "#ffc298", "on_accent": "#251c12", "selection": "#405a48",
+    "info": "#93cde5", "warning": "#f3ba70", "danger": "#ffa3a5", "success": "#abd6a8", "neutral": "#adbfae",
+    "panel": "#112b25", "panel_text": "#f4f4e7", "panel_muted": "#cad9ca", "panel_button": "#ffae78",
+    "panel_line": "#56736a", "panel_inset": "#28473d",
 }
 TOKENS = dict(LIGHT)  # live palette; apply_theme updates it in place
 _QSS = Path(__file__).with_name("styles.qss")
@@ -113,6 +117,28 @@ def form_layout(spacing=10):
     layout.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
     layout.setVerticalSpacing(spacing)
     return layout
+
+
+def station_heading(title, station, description="", compact=False):
+    """A workbench nameplate made from the same model as the live scene."""
+    frame = QWidget()
+    row = QHBoxLayout(frame)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(12)
+    art = QLabel()
+    size = QSize(62, 48) if compact else QSize(91, 70)
+    asset = Path(__file__).with_name("crew") / f"{station}.png"
+    art.setPixmap(QPixmap(str(asset)).scaled(size * 2, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+    art.setFixedSize(size)
+    art.setScaledContents(True)
+    row.addWidget(art)
+    text = QVBoxLayout()
+    text.setSpacing(2)
+    text.addWidget(label(title, "section" if compact else "pageTitle"))
+    if description:
+        text.addWidget(label(description, "muted"))
+    row.addLayout(text, 1)
+    return frame
 
 
 def card(spacing=12):

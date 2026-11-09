@@ -229,6 +229,8 @@ class ApplicationRun(BaseModel):
     resume_digest: str = ""
     documents_digest: str = ""
     status: Literal["queued", "running", "needs_input", "ready_for_review", "failed", "cancelled"] = "queued"
+    # Live presentation telemetry. A saved/restarted application has no active worker.
+    work_phase: Literal["intake", "fill", "verify", "dispatch"] = Field(default="intake", exclude=True)
     stage: str = "start"
     fields: dict[str, FieldAssessment] = Field(default_factory=dict)
     interventions: list[InterventionRequest] = Field(default_factory=list)

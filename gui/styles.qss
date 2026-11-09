@@ -314,3 +314,30 @@ QToolTip {
     color: $text;
     padding: 4px 6px;
 }
+
+/* Application workshop */
+QFrame#navigation { background: $surface; border-bottom: 1px solid $border; }
+QLabel#brand { color: $text; font-size: 22px; font-weight: 750; }
+QPushButton#navButton { text-align: center; padding: 7px 11px; }
+QPushButton#navButton:checked { background: $panel; color: $panel_text; }
+QLabel[role="pageTitle"] { font-size: 32px; font-weight: 700; }
+QLabel[role="section"] { font-size: 18px; font-weight: 650; }
+QLabel[role="inspectorTitle"] { font-size: 25px; font-weight: 700; }
+QPushButton[variant="segment"] { background: $surface2; padding: 6px 10px; border: 1px solid $border; }
+QPushButton[variant="segment"]:checked { background: $panel; color: $panel_text; border-color: $panel; }
+QPushButton[variant="segment"]:focus, QPushButton#navButton:focus { border: 2px solid $accent; }
+QLabel[role="sceneCaption"] { background: $surface2; color: $text2; font-size: 12px; padding: 5px 10px; }
+QFrame#setupPanel, QFrame#inspector { background: $panel; border: none; border-radius: 10px; }
+QFrame#setupPanel QLabel, QFrame#inspector QLabel { color: $panel_text; }
+QFrame#setupPanel QLabel[role="muted"], QFrame#inspector QLabel[role="muted"], QFrame#inspector QLabel[role="caption"] { color: $panel_muted; }
+QFrame#inspector QLabel#callout { background: $panel_inset; border: 1px solid $panel_line; color: $panel_text; font-size: 15px; font-weight: 600; }
+QFrame#inspector QPushButton[variant="primary"] { background: $panel_button; border-color: $panel_button; color: #272016; }
+QFrame#inspector QPushButton[variant="primary"]:focus { border: 2px solid $panel_text; }
+QFrame#inspector QPushButton[variant="ghost"], QFrame#setupPanel QPushButton, QFrame#inspector QToolButton { background: $panel_inset; border-color: $panel_line; color: $panel_text; }
+QFrame#inspector QPushButton[variant="danger"] { color: #ffb4ad; }
+QFrame#inspector QPushButton:disabled { background: $panel_inset; color: $panel_muted; }
+QFrame#inspector QProgressBar { background: $panel_line; }
+QFrame#inspector QProgressBar::chunk { background: #bfdaae; }
+QListWidget#sectionNav { background: $surface2; border-radius: 8px; padding: 6px; }
+QListWidget#sectionNav::item:selected { background: $panel; color: $panel_text; }
+QTextBrowser { background: $surface; color: $text; border: 1px solid $border; border-radius: 8px; padding: 12px; }

@@ -341,6 +341,7 @@ def test_each_ai_provider_keeps_its_own_model_and_key(window):
 
 def test_a_local_server_is_the_default_and_cloud_providers_never_get_values_unless_allowed(window):
     settings, store = window.settings_view, window.store
+    settings.categories.setCurrentIndex(1)  # Open AI assistance.
     assert settings.provider.currentData() == 'compatible' and settings.ai_url.text() == 'http://localhost:1234/v1'
     assert not settings.ai_facts.isVisibleTo(settings) and 'On this Mac' in settings.ai_privacy.text()
     settings.ai_url.setText('http://example.com/v1')
