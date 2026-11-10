@@ -12,6 +12,8 @@ from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QLabel, Q
 
 import core.automation.service as service_module
 import gui.views.tasks_view as tasks_module
+from core.automation.answers import resolve
+from core.automation.fields import FormField
 from core.automation.models import ApplicantProfile, ApplicationRun, ApprovedAnswer, InterventionRequest
 from core.automation.speedy_profile import translate
 from core.browser.playwright_mgr import AsyncPlaywrightManager
@@ -129,8 +131,9 @@ def test_each_question_starts_with_its_form_control_type(window, tmp_path):
     assert window.store.answers() == []  # Only the form's own options are accepted, and nothing is saved until they are.
     choice.choice.setCurrentIndex(0)
     details.save_answers()
-    assert details.result() == QDialog.Accepted  # The open question is optional, so the application continues.
-    assert {a.question: a.value for a in window.store.answers()} == {'Resume': str(resume), 'Degree': 'Bachelor Degree'}
+    assert details.result() == QDialog.Accepted  # The open question is optional, so the application continues with it left blank.
+    assert {a.question: (a.value, a.omit) for a in window.store.answers()} == {
+        'Resume': (str(resume), False), 'Degree': ('Bachelor Degree', False), 'Have you worked with us before?': ('', True)}
     assert str(resume) in translate(ApplicantProfile(), run, window.store.answers())['files']
 
 
@@ -147,8 +150,67 @@ def test_tick_all_that_apply_options_are_asked_as_one_checklist(window):
     checklist.item(1).setCheckState(Qt.Checked)
     assert details.progress.text() == '1 of 2 questions answered'
     details.save_answers()
-    assert {a.question: a.value for a in window.store.answers()} == {
+    assert {a.question: a.value for a in window.store.answers() if not a.omit} == {
         f'{asked} — IMDA Website': False, f'{asked} — IMDA LinkedIn': True, f'{asked} — Word of Mouth': False}
+
+
+def test_optional_questions_left_empty_are_left_blank_instead_of_asked_again(window):
+    asked = 'Where did you hear about us?'
+    run = ApplicationRun(company='Example', job_url=URL, profile_snapshot=ApplicantProfile(), status='needs_input', interventions=[
+        InterventionRequest(kind='answer', message='', question=f'{asked} — {option}', field_kind='checkbox') for option in ('LinkedIn', 'A friend')] + [
+        InterventionRequest(kind='answer', message='', question='If Other, please specify', field_kind='text')])
+    details = RunDetailsDialog(window.store, run)
+    assert details.save_btn.text() == 'Save answers && continue'
+    details.save_answers()
+    assert details.result() == QDialog.Accepted
+    answers = window.store.answers()
+    assert {a.question for a in answers} == {f'{asked} — LinkedIn', f'{asked} — A friend', 'If Other, please specify'}
+    assert all(a.omit and (a.scope, a.scope_key) == ('application', run.id) for a in answers)
+    assert all(resolve(FormField('', a.question, '', 'text'), ApplicantProfile(), run, answers).omit for a in answers)
+
+
+def test_a_question_starts_from_what_the_form_holds_or_the_saved_answer_it_did_not_take(window):
+    ask = lambda question, **kw: InterventionRequest(kind='answer', message='The form did not take the approved value.', question=question, **kw)
+    run = ApplicationRun(company='Example', job_url=URL, profile_snapshot=ApplicantProfile(), status='needs_input', interventions=[
+        ask('Are you located in Singapore?', options=['Yes', 'No'], field_kind='combobox', value='yes'),
+        ask('City', field_kind='text', value='Singapore'),
+        ask('I agree to the terms', field_kind='checkbox', value=True),
+        ask('Heard from — LinkedIn', field_kind='checkbox', value=True), ask('Heard from — A friend', field_kind='checkbox'),
+        ask('Currently enrolled?', options=['Yes', 'No'], field_kind='radio'),
+        InterventionRequest(kind='conflict', message='Existing browser value conflicts with the profile.', question='Currently enrolled?', options=['Yes', 'No'], field_kind='radio', value='No'),
+        InterventionRequest(kind='conflict', message='Existing browser value conflicts with the profile.', question='Country of citizenship', field_kind='text', value='Singapore Citizen')])
+    details = RunDetailsDialog(window.store, run)
+    located, city, terms, heard, enrolled, citizenship = details.cards
+    assert [c.answer() for c in (located, city, terms, enrolled)] == [('value', 'Yes', False), ('value', 'Singapore', False), ('value', True, False), ('value', 'No', False)]
+    assert heard.answer() == ('checklist', {'Heard from — LinkedIn': True, 'Heard from — A friend': False})
+    # The form's own wording against a saved answer stays with this application, even for a stable fact.
+    assert citizenship.scope() == 'application' and enrolled.scope() == 'application'
+    assert details.progress.text() == '6 of 6 questions answered'
+
+
+def test_with_answer_reuse_off_every_answer_stays_with_this_application(window):
+    run = ApplicationRun(company='Example', job_url=URL, profile_snapshot=ApplicantProfile(), status='needs_input', reuse_answers=False, interventions=[
+        InterventionRequest(kind='answer', message='', question='Will you require visa sponsorship?', required=True)])
+    details = RunDetailsDialog(window.store, run)
+    card = details.cards[0]
+    assert card.scope() == 'application' and card.scope_row.isHidden()
+    card.text.setPlainText('No')
+    details.save_answers()
+    assert resolve(FormField('', 'Will you require visa sponsorship?', '', 'text'), ApplicantProfile(), run, window.store.answers()).value == 'No'
+
+
+def test_answering_a_reworded_question_leaves_the_original_answer_alone(window):
+    original, reworded = 'Are you authorized to work in Singapore?', 'Are you legally authorised to work here?'
+    window.store.save_answer(ApprovedAnswer(question=original, variants=[reworded], value='Yes', scope='global'))
+    run = ApplicationRun(company='Example', job_url=URL, profile_snapshot=ApplicantProfile(), status='needs_input', interventions=[
+        InterventionRequest(kind='answer', message='The exact approved option is not offered by this form.', question=reworded,
+                            required=True, options=['Yes, I do', 'No, I do not'], field_kind='select-one')])
+    details = RunDetailsDialog(window.store, run)
+    assert details.cards[0].scope() == 'global'
+    details.cards[0].choice.setCurrentText('Yes, I do')
+    details.save_answers()
+    value = lambda question: resolve(FormField('', question, '', 'text'), ApplicantProfile(), run, window.store.answers()).value
+    assert (value(original), value(reworded)) == ('Yes', 'Yes, I do')
 
 
 def test_restart_turns_an_interrupted_run_into_a_handoff(window):

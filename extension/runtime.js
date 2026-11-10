@@ -22,7 +22,8 @@
     const handles = new Map(), rowActions = new Set(), uploading = new WeakSet();
     const events = [], problems = new Map(), actions = new Map();
     const url = location.href;
-    let running = true, status = 'prepared', lastChange = performance.now(), started = false, sequence = 0, picker;
+    // expired: the adapter ran out of time on this page; the desktop then fills what it has approved without it (config.direct).
+    let running = true, expired = false, status = 'prepared', lastChange = performance.now(), started = false, sequence = 0, picker;
     const live = () => {if(running && location.href !== url)stop();return running;};
     const report = (kind, message, field = '') => problems.set(`${kind}:${field}:${message}`, {kind, message, field});
     const stop = () => {
@@ -144,6 +145,8 @@
         if (owner) picker = owner;
         const p = picker && policies.get(picker);
         if(picker && !p){proposals.set(picker,{key:'option',value:e});return;}
+        // A react-select left blank on purpose or still unanswered: the adapter's guess is dropped and its menu closed; verification asks.
+        if(p&&(p.omit||p.value==null)&&reactSelect(picker)){close(picker);return;}
         if(!p || normalize(e.innerText || e.textContent)!==normalize(p.value)){
           // The adapter guesses options from the profile; an approved value selects its own exact option instead.
           const exact=p&&!p.omit&&p.value!=null&&p.value!==''?[...(e.closest('[role=listbox]')?.querySelectorAll('[role=option]')||[])].filter(o=>normalize(o.innerText||o.textContent)===normalize(p.value)):[];
@@ -158,6 +161,8 @@
         report('browser','An unrecognized adapter action needs manual review.');return;
       }
       e.click();
+      // The adapter picked the approved react-select option itself: note it for the read-back, now and once the display has updated.
+      if(e.matches?.('[role=option]')&&reactSelect(picker)){const input=picker,text=(e.innerText||e.textContent).trim();noteChoice(input,text);native.setTimeout(()=>input.isConnected&&noteChoice(input,text),250);}
     }
     const R = {
       environment, stop, live,
@@ -191,6 +196,9 @@
         if(key==='addEventListener'){e.addEventListener(args[0],safe(args[1]),{...(typeof args[2]==='object'?args[2]:{capture:!!args[2]}),signal:abort.signal});return;}
         if(['click','submit','requestSubmit'].includes(key))return action(e,key);
         if(key==='dispatchEvent') {
+          // react-select opens on the press itself, which action()'s click() never sends; without its menu the adapter waits forever.
+          // Opening writes nothing, so it is allowed even where the adapter's value was refused; choosing an option is still checked.
+          if(/^(click|mousedown|mouseup)$/.test(args[0].type)&&reactSelect(e)){picker=e;return e.dispatchEvent(...args);}
           if(denied.has(e))return false;
           if(args[0].type==='submit'){action(e,'submit');return false;}
           if(['Enter',' '].includes(args[0].key)){
@@ -296,6 +304,8 @@
     // react-select (Greenhouse): a search input in a [data-value] container; the choice shows beside it and opens on a press.
     const reactSelect = e => e?.isConnected && e.matches('input[role=combobox]') && e.parentElement?.matches('[data-value]');
     const reactShown = e => (e.parentElement.parentElement.querySelector('[class*="-singleValue"]')?.textContent || '').trim();
+    // The picked option can show abbreviated ("Singapore +65" shows "+65"); the scanner reads it back while that display stands.
+    const noteChoice = (e,text) => {e.setAttribute('data-intern-chosen',text);e.setAttribute('data-intern-shown',reactShown(e));};
     const reactItems = e => [...(document.getElementById(e.getAttribute('aria-controls'))?.querySelectorAll('[role=option]')||[])];
     const press = e => {for(const type of ['mouseover','mousedown','mouseup','click'])e.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window}));};
     async function reactOptions(e,query){
@@ -315,8 +325,7 @@
       for(let i=0;i<10&&reactShown(e)===shown;i++)await pause(100);
       e.blur();
       if(reactShown(e)===shown)return false;
-      // The picked option can show abbreviated ("Singapore +65" shows "+65"); the scanner reads it back while that display stands.
-      e.setAttribute('data-intern-chosen',exact[0].textContent.trim());e.setAttribute('data-intern-shown',reactShown(e));
+      noteChoice(e,exact[0].textContent.trim());
       return true;
     }
     async function search(e,query){
@@ -443,7 +452,7 @@
     }
     const observer=new native.MutationObserver(records=>{if(records.some(r=>r.type==='childList'||r.attributeName!=='data-intern-control'))lastChange=performance.now();});
     observer.observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-invalid','disabled','hidden','aria-busy']});observers.add(observer);
-    timers.add(native.setTimeout(()=>{if(live()){report('browser','The adapter reached its bounded wait limit. Inspect the form and resume.');stop();}},20000));
+    timers.add(native.setTimeout(()=>{if(live()){report('browser','The adapter reached its bounded wait limit. Inspect the form and resume.');stop();expired=true;}},20000));
     window.addEventListener('unhandledrejection',fail,{signal:abort.signal});
     const authControls=()=>({
       emails:[...document.querySelectorAll('input[type=email],input[autocomplete=email],input[autocomplete=username],input[data-automation-id=email]')].filter(visible),
@@ -465,7 +474,7 @@
           // Workday dropdown buttons are chosen by choose(): writing their value changes nothing visible, and the blur closes an open listbox.
           if(e && !site?.custom?.(e) && !e.matches('button[aria-haspopup=listbox]') && (p.ref?.startsWith('answer:') || p.ref==='profile:cover_letter' || p.ref==='profile:cover_letter_path' ||
             config.adapter==='workday' && !authControls().passwords.length && p.ref?.startsWith('profile:') && e.matches('input:not([type=file]),textarea,select') && !prompt(e) ||
-            site?.fill==='direct' && p.ref?.startsWith('profile:') && e.matches('input,textarea,select'))){
+            (site?.fill==='direct'||config.direct) && p.ref?.startsWith('profile:') && e.matches('input,textarea,select') && !prompt(e))){
             if(e.type==='file')void upload(null,e);
             else if(site?.hold?.(e,policyOf))proposals.set(e,{key:'value',value:p.value});
             else if(!matches(e,p)){assign(e,'value',p.value);if(!denied.has(e)){e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));e.blur();}}
@@ -480,7 +489,7 @@
         const ctx={addEventListener:(target,...args)=>R.call(target,'addEventListener',args),onInvalidated:fn=>abort.signal.addEventListener('abort',fn,{once:true})};
         Promise.resolve(adapter.script({getProfile:async()=>config.profile,setMessage:message=>{if(live())status=message||status;},autofillSettings:{autoClickNextPage:true,autoSubmit:true,saveApplications:false,saveResponses:false},accountSettings:{accountEmail:"",accountPassword:""},ctx})).catch(fail);
       },
-      snapshot(){return {summary:reviewSummary(),errors:(/\bVPS\|[0-9a-f-]{36}\b/i.test(document.body.innerText)||/something went wrong[\s\S]*please refresh the page and then try again/i.test(document.body.innerText)?1:0)+[...document.querySelectorAll('[role=alert],.field-error-msg,.form-error,[data-automation-id=inputError],[data-automation-id=inputAlert]')].filter(isError).length,status,live:live(),settled:performance.now()-lastChange>350&&timers.size<=1&&!site?.busy?.(policyOf),proposals:proposals.size,events,problems:[...problems.values()],actions:[...actions].filter(([,a])=>a.element.isConnected&&visible(a.element)&&!a.element.disabled).map(([id,a])=>({id,kind:a.kind})),url};},
+      snapshot(){return {summary:reviewSummary(),errors:(/\bVPS\|[0-9a-f-]{36}\b/i.test(document.body.innerText)||/something went wrong[\s\S]*please refresh the page and then try again/i.test(document.body.innerText)?1:0)+[...document.querySelectorAll('[role=alert],.field-error-msg,.form-error,[data-automation-id=inputError],[data-automation-id=inputAlert]')].filter(isError).length,status,live:live(),settled:performance.now()-lastChange>350&&timers.size<=1&&!site?.busy?.(policyOf),proposals:proposals.size,expired,events,problems:[...problems.values()],actions:[...actions].filter(([,a])=>a.element.isConnected&&visible(a.element)&&!a.element.disabled).map(([id,a])=>({id,kind:a.kind})),url};},
       async options(selector,query){
         const e=handles.get(selector);
         if(site?.custom?.(e))return site.options(e,query);

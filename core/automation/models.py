@@ -199,6 +199,8 @@ class InterventionRequest(BaseModel):
     required: bool = False
     options: list[str] = Field(default_factory=list)
     field_kind: str = ""  # the form control's kind (text, combobox, file…), so the answer dialog offers the same type
+    # What the answer dialog starts from: the value the form holds now, else the saved answer the form didn't take.
+    value: str | bool = ""
 
 
 class ApplicationRun(BaseModel):

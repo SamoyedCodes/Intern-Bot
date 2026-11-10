@@ -89,7 +89,7 @@ You review each recipe before it's used. A recipe stores no personal values. Unt
 
 ### 4. Answer questions
 
-When an application needs a fact or hits a conflict, open **Answer questions**. The dialog moves to the next open question after each save and offers **Resume application** once required questions are answered. The **Needs you** filter shows everything waiting on you.
+When an application needs a fact or hits a conflict, open **Answer questions**. The dialog moves to the next open question after each save and offers **Resume application** once required questions are answered. Each question starts from what the form already holds, or from the saved answer the form didn't take. Optional questions you leave empty are left blank on the form. The **Needs you** filter shows everything waiting on you.
 
 New answers apply to every application by default, or only to this application or employer. If a question rewords one you've already answered, pick the original under **Same as** and the new wording joins that answer. Existing conflicting values are kept until you resolve them. Broad vendor guesses and hard-coded personal answers are blocked.
 

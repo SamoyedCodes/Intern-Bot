@@ -278,11 +278,13 @@ class QuestionCard(QFrame):
     """One open question: the employer's wording, an answer in the form's own control type, and how widely it is remembered."""
     changed = Signal()
 
-    def __init__(self, question, request, members=(), known=(), employer="", draft=None, editable=False):
+    def __init__(self, question, request, members=(), known=(), employer="", draft=None, editable=False, value="", reuse=True):
+        """value: what the card starts from (the form's own value, or the saved answer it didn't take); for a checklist, its ticked members."""
         super().__init__()
         self.setObjectName("card")
-        self.question, self.request, self.members = question, request, list(members)
+        self.question, self.request, self.members, self.reuse = question, request, list(members), reuse
         self.required = bool(request and request.required)
+        conflict = bool(request and request.kind == "conflict")
         control = request.field_kind if request else ""
         options = list(request.options) if request else []
         self.declaration = bool(DECLARATION.search(question))
@@ -304,6 +306,8 @@ class QuestionCard(QFrame):
         notes = ["Required" if self.required else "Optional"] if request else []
         if request and request.message and request.message != UNANSWERED:
             notes.append(request.message)
+        if conflict and value not in ("", False):
+            notes.append("Shown below: what the form holds now. Saving keeps it")
         if self.declaration:
             notes.append("Declaration: saved for this application and this exact wording only")
         if notes:
@@ -315,7 +319,7 @@ class QuestionCard(QFrame):
             for member in self.members:
                 item = QListWidgetItem(member.rsplit(" — ", 1)[1])
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-                item.setCheckState(Qt.Unchecked)
+                item.setCheckState(Qt.Checked if member in (value or ()) else Qt.Unchecked)
                 item.setData(Qt.UserRole, member)
                 self.checklist.addItem(item)
             self.checklist.setFixedHeight(self.checklist.sizeHintForRow(0) * self.checklist.count() + 2 * self.checklist.frameWidth())
@@ -325,6 +329,7 @@ class QuestionCard(QFrame):
             self.file = QLineEdit()
             self.file.setReadOnly(True)
             self.file.setPlaceholderText("The document to upload")
+            self.file.setText(str(value or ""))
             self.file.textChanged.connect(lambda *_: self.changed.emit())
             row = QHBoxLayout()
             row.addWidget(self.file, 1)
@@ -347,13 +352,16 @@ class QuestionCard(QFrame):
                 self.choice.addItem("No", False)
             if not self.required:
                 self.choice.addItem("Leave blank", OMIT)
-            self.choice.setCurrentIndex(-1 if options else 0)
+            held = {True: "yes", False: "no"}.get(value, normalized(str(value)))
+            start = next((i for i in range(self.choice.count()) if value != "" and normalized(self.choice.itemText(i)) == held), None)
+            self.choice.setCurrentIndex(start if start is not None else -1 if options else 0)
             self.choice.currentTextChanged.connect(lambda *_: self.changed.emit())
             layout.addWidget(self.choice)
         else:
             self.text = QPlainTextEdit()
             self.text.setFixedHeight(64)
             self.text.setPlaceholderText("The exact answer to fill in")
+            self.text.setPlainText({True: "Yes", False: "No"}.get(value, str(value)))
             self.text.textChanged.connect(lambda *_: self.changed.emit())
             layout.addWidget(self.text)
             if draft:
@@ -398,8 +406,12 @@ class QuestionCard(QFrame):
             segment_row.addWidget(choice)
         row.addWidget(segments)
         row.addStretch()
-        self.scopes.button(0 if self.declaration or not STABLE_FACT.search(question) else 2).setChecked(True)
-        self.scope_row.setVisible(not self.declaration)
+        # A question asked again because this form wouldn't take (or already holds something other than) your saved answer
+        # wants this form's own wording, so the correction starts with this application and leaves the saved answer for other forms.
+        revision = bool(request and request.message not in ("", UNANSWERED) and value not in ("", False, []))
+        self.scopes.button(0 if self.declaration or revision or not STABLE_FACT.search(question) else 2).setChecked(True)
+        # With answer reuse off, only this application's own answers are used; any wider scope would be saved and then ignored.
+        self.scope_row.setVisible(not self.declaration and reuse)
         layout.addWidget(self.scope_row)
         self.changed.connect(self.sync)
         self.sync()
@@ -419,7 +431,7 @@ class QuestionCard(QFrame):
             self.file.setText(path)
 
     def scope(self):
-        return "application" if self.declaration else SCOPES[max(self.scopes.checkedId(), 0)][0]
+        return "application" if self.declaration or not self.reuse else SCOPES[max(self.scopes.checkedId(), 0)][0]
 
     def answer(self):
         """("same", id), ("checklist", {question: ticked}), ("value", value, omit), ("invalid", reason), or None while unanswered."""
@@ -467,7 +479,8 @@ class RunDetailsDialog(QDialog):
         self.progress = label(role="muted")
         layout.addWidget(self.progress)
         layout.addWidget(label("Answer everything here, then save once. “Remember for” sets how widely each answer is reused: "
-                               "stable facts start at every application, this job's specifics at this application.", "caption"))
+                               "stable facts start at every application, this job's specifics at this application. "
+                               "Optional questions you leave empty are left blank on the form.", "caption"))
 
         known = applicable(store.answers(), run.profile_snapshot or ApplicantProfile(), run)
         cards = QWidget()
@@ -478,7 +491,8 @@ class RunDetailsDialog(QDialog):
         for question in self.pending or [""]:
             members = self.groups.get(question, [])
             card = QuestionCard(question, self.request(members[0] if members else question), members, known, name,
-                                self.draft_answer, editable=not self.pending)
+                                self.draft_answer, editable=not self.pending, reuse=run.reuse_answers,
+                                value=[m for m in members if self.held(m) is True] if members else self.held(question))
             card.changed.connect(self.update_progress)
             column.addWidget(card)
             self.cards.append(card)
@@ -544,7 +558,14 @@ class RunDetailsDialog(QDialog):
 
     def request(self, question):
         question = normalized(question)
-        return next((i for i in self.run.interventions if i.question and normalized(i.question) == question), None)
+        asked = [i for i in self.run.interventions if i.question and normalized(i.question) == question]
+        # A radio group asks once per button; the one the form holds against your answer describes the question.
+        return next((i for i in asked if i.kind == "conflict"), asked[0] if asked else None)
+
+    def held(self, question):
+        """What the form holds for this question, else the saved answer it didn't take; a radio group reports it on any of its buttons."""
+        question = normalized(question)
+        return next((i.value for i in self.run.interventions if i.question and normalized(i.question) == question and i.value not in ("", False)), "")
 
     def unanswered_required(self):
         return [c for c in self.cards if c.required and c.answer() is None]
@@ -589,14 +610,19 @@ class RunDetailsDialog(QDialog):
                 self.store_answer(question, answer[1], answer[2], card.scope())
             self.answered.add(normalized(question))
             saved += 1
-        if not saved:
+        left = self.unanswered_required()
+        if not saved and (left or not self.pending):
             self.notice.notify("Answer a question first." if self.pending else "Enter the exact question and its answer first.", "warning")
             return
-        left = self.unanswered_required()
         if left:
             self.scroll.ensureWidgetVisible(left[0])
             self.notice.notify(f"Saved {saved} answer{'s' if saved > 1 else ''}. {len(left)} required question{'s' if len(left) > 1 else ''} still need{'' if len(left) > 1 else 's'} an answer.", "warning")
         elif self.pending:
+            # An optional question left empty is left blank on purpose, or the application would stop for it again.
+            for card in self.cards:
+                if card.answer() is None:
+                    for question in card.members or [card.question]:
+                        self.store_answer(question, "", omit=True)
             self.accept()  # Every required question is answered: carry on without a separate Resume step.
         else:
             self.notice.notify("Answer saved. It applies the next time a form asks this question.", "success")
@@ -605,10 +631,18 @@ class RunDetailsDialog(QDialog):
         key = self.run.id if scope == "application" else employer_key(self.run.job_url) if scope == "employer" else ""
         country = self.run.profile_snapshot.country if self.run.profile_snapshot else ""
         answer = ApprovedAnswer(question=question, profile_name=self.run.profile_name, value=value, scope=scope, scope_key=key, country=country, omit=omit)
-        # Editing the same scoped answer replaces it instead of creating a conflict.
-        existing = [a for a in self.store.answers() if asks(a, question) and a.profile_name == self.run.profile_name and a.scope == scope and a.scope_key == key and a.country == country]
-        if existing:
-            answer.id, answer.question, answer.variants = existing[-1].id, existing[-1].question, existing[-1].variants
+        for existing in self.store.answers():
+            if not (asks(existing, question) and existing.profile_name == self.run.profile_name and existing.scope == scope and existing.scope_key == key and existing.country == country):
+                continue
+            if normalized(existing.question) == normalized(question):
+                # Editing the same scoped answer replaces it (and any duplicate of it) instead of creating a conflict.
+                self.store.delete_answer(existing.id)
+                answer.id, answer.question = existing.id, existing.question
+                answer.variants = list(dict.fromkeys([*answer.variants, *existing.variants]))
+            else:
+                # This wording now has its own answer; the answer it was linked to keeps its value for its other wordings.
+                existing.variants = [v for v in existing.variants if normalized(v) != normalized(question)]
+                self.store.save_answer(existing)
         self.store.save_answer(answer)
 
 

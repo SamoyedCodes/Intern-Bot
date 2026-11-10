@@ -501,6 +501,61 @@ async def test_greenhouse_dropdown_picks_the_approved_option_and_reads_it_back(c
     assert next(f for f in run.fields.values() if f.label == 'GDPR Notice').value == 'Acknowledge/Confirm'
 
 
+# Greenhouse's current board, as its adapter drives it: the phone-country dropdown opens only on a press (never a click),
+# and the picked option shows abbreviated beside the input.
+NEW_BOARD = """<form id="application-form"><label>First Name<input id="first_name"></label><label>Last Name<input id="last_name"></label><label>Email<input id="email"></label>
+<div class="field"><label id="country-label" for="country">Country</label>
+<div class="select"><div class="x-valueContainer"><div class="x-placeholder">Select...</div><div data-value=""><input id="country" role="combobox" aria-labelledby="country-label"></div></div></div></div>
+<div aria-labelledby="upload-label-resume"><div class="file-upload__filename">fixture.pdf</div></div>
+<div class="application--submit"><button type="submit" onclick="event.preventDefault();window.submissions=(window.submissions||0)+1">Submit application</button></div></form>
+<script>
+const country = document.getElementById('country');
+country.addEventListener('mousedown', () => {
+  if (document.getElementById('country-list')) return;
+  const list = document.createElement('div');
+  list.id = 'country-list'; list.className = 'select__menu-list'; list.setAttribute('role', 'listbox');
+  list.innerHTML = '<div role="option">Malaysia +60</div><div role="option">Singapore +65</div>';
+  country.setAttribute('aria-controls', 'country-list'); country.closest('.select').append(list);
+  for (const option of list.children) option.addEventListener('click', () => {
+    country.closest('.select').querySelector('.x-placeholder,.x-singleValue').outerHTML = '<div class="x-singleValue">' + option.textContent.split(' ')[1] + '</div>';
+    list.remove(); country.removeAttribute('aria-controls');
+  });
+});
+</script>"""
+
+
+@pytest.mark.parametrize('answered', [True, False])
+async def test_the_greenhouse_adapter_opens_dropdowns_with_a_press_and_never_waits_on_one_forever(context, store, answered):
+    page = await open_fixture(context, 'greenhouse', NEW_BOARD)
+    run = ApplicationRun(job_url=page.url)
+    if answered:
+        store.save_answer(ApprovedAnswer(question='Country', value='Singapore +65', scope_key=run.id))
+    # Seen live: a click never opened the menu, so the adapter waited on it until the runtime's 20 s limit, on every resume.
+    run = await asyncio.wait_for(apply(store, page, run, profile_for('greenhouse')), 15)
+    assert await page.locator('#first_name').input_value() == 'Ada' and not await page.evaluate('Boolean(window.submissions)')
+    if answered:
+        assert run.status == 'ready_for_review', run.interventions
+        # The adapter's own pick of the approved option reads back in full, though the form shows only "+65".
+        assert next(f for f in run.fields.values() if f.label == 'Country').value == 'Singapore +65'
+    else:
+        # Its guess for an unanswered dropdown is dropped; the question arrives with the dropdown's real options.
+        assert [(i.question, i.options) for i in run.interventions] == [('Country', ['Malaysia +60', 'Singapore +65'])]
+        assert await page.locator('.x-singleValue').count() == 0
+
+
+async def test_a_stalled_adapter_is_finished_directly_from_approved_values(context, store):
+    # The adapter waits for a form that never appears; after its time limit the profile and approved answers are filled without it.
+    page = await open_fixture(context, 'greenhouse', greenhouse(extra=REACT_SELECT).replace('id="application"', 'id="loading"'))
+    run = ApplicationRun(job_url=page.url)
+    store.save_answer(ApprovedAnswer(question='GDPR Notice', value='Acknowledge/Confirm', scope_key=run.id))
+    run = await apply(store, page, run, profile_for('greenhouse'))
+    assert await page.locator('#first_name').input_value() == 'Ada'
+    assert await page.locator('.x-singleValue').inner_text() == 'Acknowledged'
+    assert all(f.disposition == 'verified' for f in run.fields.values()) and len(run.fields) == 4
+    assert 'adapter_stalled' in [e['kind'] for e in store.events(run.id)]
+    assert 'continuation control' in run.interventions[-1].message and not await page.evaluate('Boolean(window.submissions)')
+
+
 async def test_workday_fills_singapore_eligibility_citizenship_and_nationality(context, store):
     page = await open_fixture(context, 'workday', '''<form>
         <label>Are you legally authorized to work in Singapore?<select id=authorized required>
@@ -589,6 +644,30 @@ def test_a_location_typeahead_may_add_the_region_but_not_change_the_place(store)
     check = lambda shown: ApplicationEngine(store).verify(run, ApplicantProfile(), [FormField('loc', 'Current location', '', 'text', value=shown)], {'files': {}})
     assert check('Singapore, SGP')
     assert not check('Singapore Road, Leeds')
+
+
+def test_a_failed_field_is_asked_again_from_what_the_form_holds_or_the_saved_answer(store):
+    run = ApplicationRun(job_url='https://jobs.lever.co/acme/1/apply')
+    for question, value in (('Country', 'Singapore'), ('Currently enrolled?', 'Yes'), ('Citizenship status', 'Citizen')):
+        store.save_answer(ApprovedAnswer(question=question, value=value, scope='global', profile_name=run.profile_name))
+    fields = [FormField('country', 'Country', '', 'combobox'),  # Saved, but the form didn't take it.
+              FormField('y', 'Currently enrolled?', '', 'radio', option='Yes', value=False), FormField('n', 'Currently enrolled?', '', 'radio', option='No', value=True),
+              FormField('status', 'Citizenship status', '', 'text', value='Singapore Citizen'),  # You set the form's own wording.
+              FormField('heard', 'How did you hear about us?', '', 'text', value='A friend')]  # Answered only in the browser.
+    assert not ApplicationEngine(store).verify(run, ApplicantProfile(), fields, {'files': {}})
+    assert [(i.question, i.kind, i.value) for i in run.interventions] == [
+        ('Country', 'answer', 'Singapore'), ('Currently enrolled?', 'answer', 'No'), ('Currently enrolled?', 'conflict', 'No'),
+        ('Citizenship status', 'conflict', 'Singapore Citizen'), ('How did you hear about us?', 'answer', 'A friend')]
+
+
+def test_an_unlabelled_field_keeps_what_you_set_and_never_becomes_an_invisible_question(store):
+    run = ApplicationRun(job_url='https://jobs.lever.co/acme/1/apply')
+    check = lambda **field: ApplicationEngine(store).verify(run, ApplicantProfile(), [FormField('k', '', '', 'text', **field)], {'files': {}})
+    assert check() and next(iter(run.fields.values())).disposition == 'intentionally_omitted'
+    assert check(value='typed by you') and next(iter(run.fields.values())).disposition == 'verified'
+    run.interventions = []
+    assert not check(required=True)
+    assert 'no readable label' in run.interventions[0].message and not run.interventions[0].question
 
 
 def ai_questions(monkeypatch, results):

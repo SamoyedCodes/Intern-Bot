@@ -58,10 +58,10 @@ class ApplicationEngine:
         self.store.save_run(run)
         self.emit(run.model_copy(deep=True))
 
-    def intervene(self, run, message, kind='browser', field=None):
+    def intervene(self, run, message, kind='browser', field=None, value=''):
         run.status = 'needs_input'
         run.intervention_count += 1
-        request = InterventionRequest(kind=kind, message=message)
+        request = InterventionRequest(kind=kind, message=message, value=value)
         if field:
             # Row questions name their row, so the answer you give fills only that language, school or employer.
             request.field_key, request.question = field.key, question_for(field, run.profile_snapshot or ApplicantProfile())
@@ -169,6 +169,13 @@ class ApplicationEngine:
                 if settled and match['frame'] == 0 and settled['url'] != bridge.page.url and not (self._pause or self._cancel):
                     # Workday normalizes /apply/applyManually to /apply after rendering the form.
                     continue
+                if settled and settled.get('expired') and not any(f.kind == 'password' for f in fields) and not (self._pause or self._cancel):
+                    # The site's adapter ran out of time waiting on a control that never appeared, with the rest of the section untouched.
+                    # A fresh runtime, which never starts the adapter, fills every field that has an approved value directly.
+                    self.store.record_event(run.id, 'adapter_stalled', run.stage, "The site's adapter stopped partway; the rest was filled directly from your profile and answers.")
+                    result = await bridge.command('prepare', {**config, 'direct': True}, binding=match)
+                    await self.authorize(run, profile, [FormField(**f) for f in result['fields']])
+                    settled = await self.wait_for_section(run, profile)
                 # Each choose stays inside the bridge's command limit; repeat while it still selects approved options.
                 for _ in range(5):
                     if not settled or self._pause or self._cancel or not (await bridge.command('choose')).get('chosen'):
@@ -416,7 +423,7 @@ class ApplicationEngine:
             if snapshot['proposals']:
                 fields = [FormField(**f) for f in (await self.bridge.command('scan'))['fields']]
                 await self.authorize(run, profile, fields)
-            if snapshot['settled'] and not self.bridge.pending and (snapshot['status'] in {'autofill-complete','page-complete','complete-required','complete-manually','action-pending'} or not snapshot['live']):
+            if snapshot['settled'] and not self.bridge.pending and (snapshot['status'] in {'prepared','autofill-complete','page-complete','complete-required','complete-manually','action-pending'} or not snapshot['live']):
                 return snapshot
             await asyncio.sleep(.1)
         self.intervene(run, 'The adapter did not finish within its bounded wait. Inspect the form and resume.')
@@ -441,9 +448,14 @@ class ApplicationEngine:
         for field in fields:
             resolution = resolve(field, profile, run, answers)
             reason = ''
-            omitted = resolution.omit and not field.required and field.value in ('', False)
+            # A control with no readable label has no question to ask or answer to keep: what you set in the browser stands.
+            unlabelled = not field.label and resolution.value is None
+            omitted = (resolution.omit or unlabelled) and not field.required and field.value in ('', False)
             if omitted:
                 matched = True
+            elif unlabelled:
+                matched = field.value not in ('', False) and not field.invalid
+                reason = 'This field has no readable label. Set it in Chromium, then resume.'
             elif resolution.value is None:
                 matched = False
                 reason = resolution.reason
@@ -465,14 +477,19 @@ class ApplicationEngine:
             if not matched:
                 ok = False
                 reason = reason or ('The form rejected this value. Answer it in the format the form asks for.' if field.invalid and field.value not in ('', False) and resolution.value is not None and normalized(str(field.value)) == normalized(str(resolution.value))
-                                    else 'Existing browser value conflicts with the profile. Resolve it before resuming.' if field.value not in ('', False) else 'The adapter did not fill this field with the approved value. Complete it manually or correct the profile.')
+                                    else 'Existing browser value conflicts with the profile. Resolve it before resuming.' if field.value not in ('', False)
+                                    else 'The form did not take the approved value. Set this field in Chromium, then resume, or correct the answer.')
             key = run.stage + ':' + field.key
-            run.fields[key] = FieldAssessment(key=key, label=field.label, section=run.stage, required=field.required, group=field.group, row=field.row, kind=field.kind,
+            run.fields[key] = FieldAssessment(key=key, label=field.label or 'Unlabelled field', section=run.stage, required=field.required, group=field.group, row=field.row, kind=field.kind,
                 answer_ref=resolution.ref, disposition='intentionally_omitted' if omitted else 'verified' if matched else 'needs_input',
                 evidence='Exact file digest and DOM validity' if matched and field.kind == 'file' else 'Section DOM read-back' if matched else '',reason='' if matched else reason,
                 value='' if field.kind == 'password' else field.value, option=field.option)
             if not matched:
-                self.intervene(run, reason, 'conflict' if 'conflict' in reason else 'answer', field)
+                # The question is asked starting from what the form holds (a radio group's selected choice), else the saved answer it didn't take.
+                held = '' if field.kind in ('file', 'password') else field.value if field.kind != 'radio' else next(
+                    (f.option for f in fields if f.kind == 'radio' and f.value is True and (f.label, f.group, f.row) == (field.label, field.group, field.row)), '')
+                start = held if held not in ('', False) else '' if resolution.value is None else resolution.value
+                self.intervene(run, reason, 'conflict' if 'conflict' in reason else 'answer', field, start)
         return ok
 
     def verify_review(self, run, profile, summary):
