@@ -7,7 +7,7 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-from core.automation.models import ApplicantProfile, ApplicationRun, ApprovedAnswer, now
+from core.automation.models import ApplicantProfile, ApplicationRun, ApprovedAnswer, now, stable_application_url, ats_name
 from core.storage.vault import CredentialVault
 
 
@@ -86,6 +86,8 @@ class LocalStore:
             ])
 
     def save_run(self, run: ApplicationRun):
+        if ats_name(run.job_url) == 'SAP SuccessFactors':
+            run.job_url = stable_application_url(run.job_url)
         run.updated_at = now()
         with self.connect() as db:
             db.execute("INSERT OR REPLACE INTO runs VALUES (?, ?)", (run.id, run.model_dump_json()))

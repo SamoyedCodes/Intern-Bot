@@ -4,12 +4,18 @@ import os
 import shutil
 import subprocess
 
-from core.automation.models import site_key
+from core.automation.models import AccountContext, account_context
 
 VAULT = "Job Sites"
 TAG = "intern-bot"
 STATE = "intern_bot_state"
-NO_TOKEN = "Paste your 1Password service account token in Profile → Workday logins."
+NO_TOKEN = "Paste your 1Password service account token in Profile → Employer accounts."
+
+
+class AmbiguousLogins(RuntimeError):
+    def __init__(self, items):
+        super().__init__("More than one login matches this employer in Job Sites. Choose the account to use, then resume.")
+        self.options = [f"[{item['id']}] {item.get('title') or 'Employer login'}" for item in items]
 
 
 def run_op(args, stdin, env):
@@ -22,7 +28,7 @@ def run_op(args, stdin, env):
     if result.returncode:
         if "(101)" in result.stderr:
             raise RuntimeError(f"1Password: the service account can't change the “{VAULT}” vault. Give it read and write access.")
-        raise RuntimeError("1Password: " + (result.stderr.strip() or "op failed"))
+        raise RuntimeError("1Password could not complete the vault operation. Check the token, vault permissions and connection.")
     return result.stdout
 
 
@@ -42,16 +48,33 @@ class OnePasswordLogins:
         self.op("vault", "get", VAULT, "--format", "json")
 
     def _find(self, site: str) -> str:
-        host = site_key(site)
+        account = site if isinstance(site, AccountContext) else account_context(site)
+        if account is None:
+            raise ValueError("Identify the employer tenant before accessing its login.")
         items = [i for i in json.loads(self.op("item", "list", "--vault", VAULT, "--categories", "Login", "--format", "json") or "[]")
-                 if any(site_key(u.get("href", "")) == host for u in i.get("urls") or [])]
-        items.sort(key=lambda i: TAG not in (i.get("tags") or []))  # A login the bot created wins over a hand-made duplicate.
+                 if any(self._matches(account, u.get("href", "")) for u in i.get("urls") or [])]
+        if account.item_id:
+            items = [i for i in items if i["id"] == account.item_id]
+            if not items:
+                raise RuntimeError("The associated 1Password login is missing or belongs to another tenant. Check its website address in Job Sites before resuming.")
+        if len(items) > 1:
+            raise AmbiguousLogins(items)
         return items[0]["id"] if items else ""
+
+    @staticmethod
+    def _matches(account, url):
+        try:
+            candidate = account_context(url)
+            return candidate is not None and candidate.key == account.key
+        except ValueError:
+            return False
 
     def credential(self, site: str) -> dict:
         item_id = self._find(site)
         if not item_id:
             return {}
+        if isinstance(site, AccountContext):
+            site.item_id = item_id
         fields = json.loads(self.op("item", "get", item_id, "--vault", VAULT, "--reveal", "--format", "json")).get("fields") or []
         value = lambda match: next((f.get("value") or "" for f in fields if match(f)), "")
         return {"username": value(lambda f: f.get("purpose") == "USERNAME"),
@@ -59,19 +82,22 @@ class OnePasswordLogins:
                 # Hand-made logins have no state field; they already work, so they read as verified.
                 "state": value(lambda f: f.get("label") == STATE) or "verified"}
 
-    def save_credential(self, site: str, username: str, password: str | None = None, state: str = "verified"):
+    def save_credential(self, site: str, username: str, password: str | None = None, state: str = "verified", *, password_recipe="24,letters,digits,symbols"):
         """Create the login; with no password, 1Password generates one. Passwords go on stdin, never argv."""
-        host = site_key(site)
-        if self._find(host):
+        account = site if isinstance(site, AccountContext) else account_context(site)
+        if account is None:
+            raise ValueError("Identify the employer tenant before saving its login.")
+        if self._find(account):
             raise ValueError("A login for this employer is already in 1Password; edit it there.")
         fields = [{"id": "username", "type": "STRING", "purpose": "USERNAME", "label": "username", "value": username},
                   {"id": STATE, "type": "STRING", "label": STATE, "value": state}]
         if password is not None:
             fields.append({"id": "password", "type": "CONCEALED", "purpose": "PASSWORD", "label": "password", "value": password})
-        template = {"title": "Workday · " + host, "category": "LOGIN", "tags": [TAG],
-                    "urls": [{"href": "https://" + host, "primary": True}], "fields": fields}
-        generate = [] if password is not None else ["--generate-password=24,letters,digits,symbols"]
-        self.op("item", "create", "--vault", VAULT, *generate, "--format", "json", stdin=json.dumps(template))
+        fields.append({"id": "intern_bot_account", "type": "STRING", "label": "intern_bot_account", "value": account.key})
+        template = {"title": account.provider + " · " + account.tenant, "category": "LOGIN", "tags": [TAG],
+                    "urls": [{"href": account.login_url, "primary": True}], "fields": fields}
+        generate = [] if password is not None else ["--generate-password=" + password_recipe]
+        self.op("item", "create", "-", "--vault", VAULT, *generate, "--format", "json", stdin=json.dumps(template))
 
     def set_account_state(self, site: str, state: str):
         item_id = self._find(site)

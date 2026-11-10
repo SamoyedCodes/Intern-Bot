@@ -1,7 +1,8 @@
 function makeCrewScene(host, selectJob, inspectStation) {
   const T = window.THREE;
-  const renderer = new T.WebGLRenderer({ antialias: true, alpha: false });
-  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+  const renderer = new T.WebGLRenderer({ antialias: true, alpha: true });
+  // Always render at 2x: on a standard-density display this supersamples the small models and their edges.
+  renderer.setPixelRatio(2);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = T.PCFShadowMap;
   const canvas = renderer.domElement;
@@ -13,10 +14,12 @@ function makeCrewScene(host, selectJob, inspectStation) {
   const sun = new T.DirectionalLight(0xfff3dd, 2.8);
   sun.position.set(-8, 13, 8);
   sun.castShadow = true;
-  Object.assign(sun.shadow.camera, { left: -12, right: 12, top: 12, bottom: -12, far: 42 });
-  sun.shadow.mapSize.set(1024, 1024);
-  sun.shadow.bias = -0.00045;
-  sun.shadow.normalBias = 0.025;
+  // A tight frustum and a large map keep the cast shadows smooth instead of stair-stepped.
+  Object.assign(sun.shadow.camera, { left: -9.5, right: 9.5, top: 8, bottom: -8, near: 4, far: 34 });
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.radius = 3;
+  sun.shadow.bias = -0.0003;
+  sun.shadow.normalBias = 0.02;
   scene.add(sun, new T.AmbientLight(0xffffff, 1.65));
   const shapes = new Map(),
     materials = new Map();
@@ -78,7 +81,7 @@ function makeCrewScene(host, selectJob, inspectStation) {
     ctx.fillText(text, 384, 84, 740);
     const tex = new T.CanvasTexture(c);
     tex.colorSpace = T.SRGBColorSpace;
-    tex.anisotropy = 4;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
     const o = mesh(p, new T.PlaneGeometry(w, h), new T.MeshStandardMaterial({ map: tex, roughness: 1 }), x, y, z);
     o.castShadow = false;
     return o;
@@ -105,12 +108,13 @@ function makeCrewScene(host, selectJob, inspectStation) {
     const head = group(torso, 0, 0.63, 0);
     box(head, 0, 0, 0, 0.66, 0.48, 0.47, skin, 0.13);
     box(head, 0, 0.008, 0.225, 0.49, 0.23, 0.075, boots, 0.065);
-    for (const side of [-1, 1]) {
-      box(head, side * 0.113, 0.02, 0.268, 0.067, 0.08, 0.018, field ? '#f3f2df' : '#ffcd84', 0.012);
+    const eyes = [-1, 1].map((side) => {
       ball(head, side * 0.335, -0.025, 0.005, 0.067, paint);
-    }
-    cyl(head, -0.14, 0.28, -0.04, 0.017, 0.017, 0.12, boots, 10);
-    ball(head, -0.14, 0.36, -0.04, 0.044, paint);
+      return box(head, side * 0.113, 0.02, 0.268, 0.067, 0.08, 0.018, field ? '#f3f2df' : '#ffcd84', 0.012);
+    });
+    const antenna = group(head, -0.14, 0.22, -0.04);
+    cyl(antenna, 0, 0.06, 0, 0.017, 0.017, 0.12, boots, 10);
+    ball(antenna, 0, 0.14, 0, 0.044, paint);
     const arms = [-1, 1].map((s) => {
       const arm = group(torso, s * 0.276, 0.26, 0.01);
       ball(arm, 0, 0, 0, 0.076, boots);
@@ -120,9 +124,10 @@ function makeCrewScene(host, selectJob, inspectStation) {
       ball(arm, s * 0.083, -0.16, 0.25, 0.073, skin);
       return arm;
     });
-    return { root, head, arms, torso };
+    return { root, head, arms, torso, eyes, antenna };
   }
   const floor = box(scene, 0, -0.62, 0, 160, 0.1, 160, '#b8cbbd');
+  floor.castShadow = false;
   const shop = group(scene),
     field = group(scene);
   const spots = [
@@ -242,9 +247,12 @@ function makeCrewScene(host, selectJob, inspectStation) {
     yaw = 0.32,
     dragging = null,
     pending = false,
+    touched = -1e9,
     w = 0,
     h = 0;
   let elapsed = 0,
+    idle = 0,
+    drift = 0,
     previous = 0,
     packetX = spots[0][0],
     packetZ = spots[0][1],
@@ -337,11 +345,13 @@ function makeCrewScene(host, selectJob, inspectStation) {
     }
   }
   canvas.addEventListener('pointerdown', (e) => {
+    touched = performance.now();
     dragging = { x: e.clientX, y: e.clientY, yaw };
     canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener('pointermove', (e) => {
     if (dragging) {
+      touched = performance.now();
       yaw = Math.max(-0.75, Math.min(0.85, dragging.yaw + (e.clientX - dragging.x) * 0.005));
       redraw();
     }
@@ -356,6 +366,7 @@ function makeCrewScene(host, selectJob, inspectStation) {
   canvas.addEventListener('keydown', (e) => {
     if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
     e.preventDefault();
+    touched = performance.now();
     yaw = Math.max(-0.75, Math.min(0.85, yaw + (e.key === 'ArrowLeft' ? -0.12 : 0.12)));
     redraw();
   });
@@ -364,7 +375,10 @@ function makeCrewScene(host, selectJob, inspectStation) {
     // Keep the entire row of machines in view on narrow screens.
     const half = Math.max(fieldMode ? 3.85 : 3.12, (fieldMode ? 7.35 : 7.85) / aspect);
     Object.assign(camera, { left: -half * aspect, right: half * aspect, top: half, bottom: -half });
-    camera.position.set(Math.sin(yaw) * 16, fieldMode ? 11.2 : 8.5, Math.cos(yaw) * 16);
+    // A slow, small sway around the chosen angle; it holds still while the user is turning the scene.
+    const turn = yaw + Math.sin(drift * 0.16) * 0.075,
+      lift = Math.sin(drift * 0.11) * 0.35;
+    camera.position.set(Math.sin(turn) * 16, (fieldMode ? 11.2 : 8.5) + lift, Math.cos(turn) * 16);
     camera.lookAt(0, fieldMode ? 0.3 : 0.6, 0);
     camera.updateProjectionMatrix();
   }
@@ -373,14 +387,20 @@ function makeCrewScene(host, selectJob, inspectStation) {
     if (!state || !w || !h || document.hidden) return;
     const job = state.rows.find((r) => r.id === state.selected);
     const work = job ? job.station : 0;
-    const animate = Boolean(job && job.moving && state.motion && !reduce.matches);
+    const ambient = Boolean(state.motion && !reduce.matches);
+    const animate = Boolean(job && job.moving && ambient);
     const dt = Math.min(0.07, (now - previous) / 1000);
     previous = now;
     if (animate) elapsed += dt;
+    if (ambient) {
+      idle += dt;
+      if (!dragging && now - touched > 4000) drift += dt;
+    }
     cameraPose();
     if (fieldMode) {
       tracks.forEach((track, i) => {
-        track.worker.head.rotation.y = animate && state.rows[i]?.id === state.selected ? Math.sin(elapsed * 3) * 0.16 : 0;
+        const working = animate && state.rows[i]?.id === state.selected;
+        rest(track.worker, i, ambient, working ? Math.sin(elapsed * 3) * 0.16 : 0);
       });
     } else {
       const [x, z] = spots[work],
@@ -400,16 +420,35 @@ function makeCrewScene(host, selectJob, inspectStation) {
         b.root.position.x = moving ? -0.97 : -0.68;
         b.root.position.z = moving ? 0.44 : 0.89;
         b.root.rotation.y = moving ? 1.51 : 0.68;
-        b.head.rotation.y = blocked ? -0.6 : moving ? Math.sin(elapsed * 4) * 0.22 : -0.18;
-        b.torso.rotation.x = moving ? 0.13 + 0.045 * Math.sin(elapsed * 5) : 0;
-        b.arms[1].rotation.z = blocked ? 2.43 : 0;
-        b.arms[1].rotation.x = moving ? -0.9 + 0.45 * Math.sin(elapsed * 7) : 0;
-        b.arms[0].rotation.x = moving ? -0.75 - 0.34 * Math.sin(elapsed * 7) : 0;
+        rest(b, i, ambient && !moving, blocked ? -0.6 : moving ? Math.sin(elapsed * 4) * 0.22 : -0.18);
+        if (moving) {
+          b.torso.rotation.x = 0.13 + 0.045 * Math.sin(elapsed * 5);
+          b.arms[1].rotation.x = -0.9 + 0.45 * Math.sin(elapsed * 7);
+          b.arms[0].rotation.x = -0.75 - 0.34 * Math.sin(elapsed * 7);
+        }
+        // The raised arm waits for the user; with motion on it waves the placard gently.
+        b.arms[1].rotation.z = blocked ? 2.43 + (ambient ? Math.sin(idle * 2.2) * 0.07 : 0) : 0;
         bulbs[i].material = mat(active ? (blocked ? orange : yellow) : cream);
       });
     }
     renderer.render(scene, camera);
-    if (animate) redraw();
+    if (ambient) redraw();
+  }
+  // Idle pose: breathing, a slow look around, an antenna sway and a blink every few seconds.
+  // Each worker has its own phase so the crew never moves in unison. Nothing here moves the folder,
+  // a lamp or a station: idle motion carries no information about the application.
+  function rest(b, i, on, look) {
+    const t = idle + i * 1.73;
+    const blink = on && t % (4.6 + (i % 3) * 0.9) < 0.13;
+    b.torso.position.y = 0.53 + (on ? Math.sin(t * 1.7) * 0.012 : 0);
+    b.torso.rotation.x = on ? Math.sin(t * 1.7 + 0.6) * 0.022 : 0;
+    b.head.rotation.y = look + (on ? Math.sin(t * 0.43) * 0.2 + Math.sin(t * 0.17) * 0.12 : 0);
+    b.head.rotation.z = on ? Math.sin(t * 0.61) * 0.05 : 0;
+    b.antenna.rotation.z = on ? Math.sin(t * 2.3) * 0.12 : 0;
+    b.antenna.rotation.x = on ? Math.sin(t * 1.9 + 1) * 0.08 : 0;
+    b.arms[0].rotation.x = on ? Math.sin(t * 1.7) * 0.06 : 0;
+    b.arms[1].rotation.x = on ? Math.sin(t * 1.7 + 0.4) * 0.06 : 0;
+    for (const eye of b.eyes) eye.scale.y = blink ? 0.15 : 1;
   }
   resize();
   return { update };

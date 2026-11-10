@@ -1,12 +1,12 @@
 """RequestEngine against a fake Workday tenant that answers the candidate API the way Workday's apply flow expects."""
 import json
-from types import SimpleNamespace
 
 import pytest
 from urllib.parse import parse_qs, urlsplit
 
+from core.automation.extension_bridge import ExtensionBridge
 from core.automation.models import ApplicationRun, ApprovedAnswer
-from core.automation.request_engine import NEW_ACCOUNT, SINGLE, TEXT, RequestEngine, apply_url
+from core.automation.request_engine import SINGLE, TEXT, RequestEngine, apply_url
 from tests.support import profile_for
 
 URL = 'https://example.wd1.myworkdayjobs.com/en-US/Careers/job/Singapore/Intern_R123'
@@ -75,7 +75,7 @@ async def run_request(context, store, tenant, run=None, credential=None):
     run = run or ApplicationRun(job_url=URL, mode='request')
     # These scenarios supply authorization answers explicitly rather than using the profile's default Yes.
     profile = profile_for('workday').model_copy(update={'work_authorized': None})
-    await RequestEngine(store).answer_questions(run, profile, SimpleNamespace(page=page, binding=None), credential)
+    await RequestEngine(store).answer_questions(run, profile, ExtensionBridge(page, run.id), credential)
     return run, page
 
 
@@ -130,10 +130,14 @@ async def test_a_saved_login_signs_in_through_the_page_once(context, store, form
     assert [i.message for i in run.interventions] == [] and not run.authentication_attempted
 
 
-async def test_request_mode_never_creates_accounts(context, store):
-    tenant = Tenant(signed_in=False)
-    run, _ = await run_request(context, store, tenant, credential={'username': 'a@example.test', 'password': 'x', 'state': 'new'})
-    assert [i.message for i in run.interventions] == [NEW_ACCOUNT] and not run.authentication_attempted
+async def test_request_mode_uses_shared_browser_creation_and_waits_for_verification(context, store, vault):
+    from tests.support import account_pages
+    store.put('auto_create_accounts', True)
+    tenant = Tenant(signed_in=False, sign_in=account_pages('create', 'verification'))
+    run, _ = await run_request(context, store, tenant)
+    assert run.registration_attempted and run.interventions[-1].kind == 'activation'
+    assert vault.credential(URL)['state'] == 'pending_verification'
+    assert not tenant.posts
 
 
 class QuestionnairePage:
@@ -247,15 +251,17 @@ async def test_stop_before_sign_in_click_does_not_consume_login_attempt(context,
     page = await context.new_page()
     await page.route('**/*', tenant.handle)
     engine = RequestEngine(store)
-    # Cancel during the deliberate pre-click delay, after the credentials have been filled.
-    original_wait = page.wait_for_timeout
-    async def wait_then_stop(ms):
-        await original_wait(ms)
-        getattr(engine, stop)()
-    page.wait_for_timeout = wait_then_stop
-    from unittest.mock import AsyncMock
+    # Pause after credential validation, before the attempt checkpoint and remote submit.
     run = ApplicationRun(job_url=URL, mode='request')
-    await engine.start(run, profile_for('workday'), SimpleNamespace(page=page, binding=None, stop=AsyncMock()),
+    bridge = ExtensionBridge(page, run.id)
+    original = bridge.command
+    async def stop_after_validation(name, payload=None, binding=None):
+        result = await original(name, payload, binding)
+        if name == 'validate_authentication':
+            getattr(engine, stop)()
+        return result
+    bridge.command = stop_after_validation
+    await engine.start(run, profile_for('workday'), bridge,
                        {'username': 'ada@example.test', 'password': 'secret', 'state': 'verified'})
     assert not run.authentication_attempted
     assert run.status == ('cancelled' if stop == 'cancel' else 'needs_input')

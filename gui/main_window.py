@@ -73,7 +73,7 @@ class SettingsView(QWidget):
         for checkbox in (self.auto_advance, self.reuse_answers):
             checkbox.toggled.connect(self.save_options)
         box.addWidget(label("Workshop display", "section"))
-        self.crew_motion = QCheckBox("Animate workers during an active application")
+        self.crew_motion = QCheckBox("Animate the workshop crew and camera")
         self.crew_motion.setChecked(bool(self.store.get("crew_motion", True)))
         self.crew_motion.toggled.connect(lambda value: self.store.put("crew_motion", value))
         box.addWidget(self.crew_motion)
@@ -313,7 +313,7 @@ class MainWindow(QMainWindow):
                 badge.setObjectName("navBadge")
                 badge.setAlignment(Qt.AlignCenter)
                 badge.hide()
-                row.addWidget(badge)
+                row.addWidget(badge, 0, Qt.AlignVCenter)
                 if index == 0:
                     self.badge = badge
                 else:

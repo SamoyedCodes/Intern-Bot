@@ -300,10 +300,10 @@ def test_logins_are_not_invented_unless_auto_create_is_enabled(window, monkeypat
     run = ApplicationRun(job_url='https://acme.wd1.myworkdayjobs.com/job/R1', profile_snapshot=ApplicantProfile(email='me@example.test'))
     view.add_task(run)
     view._start_task(run)
-    assert started[-1][2] == {} and not window.store._vault().credential(run.job_url)
+    assert started[-1][2] is None and not window.store._vault().credential(run.job_url)
 
 
-def test_auto_created_login_waits_for_email_verification(window, monkeypatch):
+def test_account_lookup_is_deferred_and_verification_does_not_mark_the_vault_verified(window, monkeypatch):
     profile_view, view, vault = window.profile_view, window.tasks_view, window.store._vault()
     url = 'https://acme.wd1.myworkdayjobs.com/job/R1'
     started = capture_starts(view, monkeypatch)
@@ -315,13 +315,12 @@ def test_auto_created_login_waits_for_email_verification(window, monkeypatch):
     profile_view.auto_create.setChecked(True)
     profile_view.save_account_settings()
     view._start_task(run)
-    credential = started[-1][2]
-    assert credential['username'] == 'ben-acme@apps.example.test' and credential['state'] == 'new'
-    assert vault.credential(url) == credential
+    assert started[-1][2] is None and not vault.credential(url)
+    assert window.store.get('auto_create_accounts') is True
     view._active_id = None
 
     # The engine handed off for email verification.
-    vault.set_account_state(url, 'pending_verification')
+    vault.save_credential(url, 'ben-acme@apps.example.test', 'Fixture1!', 'pending_verification')
     run.status, run.authentication_attempted = 'needs_input', True
     run.interventions = [InterventionRequest(kind='activation', message='Verify')]
     notifications = []
@@ -331,11 +330,23 @@ def test_auto_created_login_waits_for_email_verification(window, monkeypatch):
     assert view.status_label(run) == 'Waiting for email verification'
     assert len(notifications) == 1 and notifications[0][-1].startswith('acme.wd1.myworkdayjobs.com:')
     view.render(select_id=run.id)
-    assert view.start_btn.text() == "I've verified my account"
+    assert view.start_btn.text() == "Continue after verification"
 
     view.start_btn.click()
-    assert started[-1][2]['state'] == 'verified' and vault.credential(url)['state'] == 'verified'
-    assert not window.store.get_run(run.id).authentication_attempted
+    assert started[-1][2] is None and vault.credential(url)['state'] == 'pending_verification'
+    assert window.store.get_run(run.id).verification_continued
+
+
+def test_duplicate_vault_login_selection_only_saves_the_item_reference(window, monkeypatch):
+    from core.automation.models import account_context
+    run = ApplicationRun(job_url=URL, account=account_context(URL), status='needs_input',
+                         interventions=[InterventionRequest(kind='verification', message='Choose login', field_key='1password-item', options=['[first] Personal', '[second] Internship'])])
+    window.store.save_run(run)
+    monkeypatch.setattr(tasks_module.QInputDialog, 'getItem', lambda *a: ('[second] Internship', True))
+    started = capture_starts(window.tasks_view, monkeypatch)
+    window.tasks_view._start_task(run)
+    assert started[-1][0].account.item_id == 'second' and started[-1][2] is None
+    assert window.store.get_run(run.id).account.item_id == 'second'
 
 
 def test_named_profiles_switch_in_the_editor(window):

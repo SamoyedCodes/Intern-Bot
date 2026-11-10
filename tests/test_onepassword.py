@@ -52,9 +52,57 @@ def test_a_hand_made_login_is_found_by_url_host_and_reads_as_verified():
     assert logins(FakeOp()).credential(SITE) == {}
 
 
-def test_the_bot_tagged_login_wins_over_a_duplicate():
+def test_duplicate_logins_need_selection_even_when_one_was_created_by_the_bot():
     fake = FakeOp([hand_made('a', f'https://{SITE}', 'old', 'p1'), hand_made('b', f'https://{SITE}', 'bot', 'p2', ['intern-bot'])])
-    assert logins(fake).credential(SITE)['username'] == 'bot'
+    with pytest.raises(RuntimeError, match='More than one login'):
+        logins(fake).credential(SITE)
+    from core.automation.models import account_context
+    selected = account_context(SITE)
+    selected.item_id = 'b'
+    assert logins(fake).credential(selected)['username'] == 'bot'
+    selected.item_id = 'deleted'
+    with pytest.raises(RuntimeError, match='associated 1Password login is missing'):
+        logins(fake).credential(selected)
+
+
+def test_shared_sap_hosts_match_the_company_and_reuse_the_account_across_jobs():
+    from core.automation.models import account_context
+    first = 'https://career44.sapsf.com/career?company=first&career_job_req_id=1'
+    second = 'https://career44.sapsf.com/career?company=second&career_job_req_id=1'
+    fake = FakeOp([hand_made('a', first, 'first-user', 'p1'), hand_made('b', second, 'second-user', 'p2'),
+                   hand_made('legacy', 'https://career44.sapsf.com', 'unknown-company', 'p3')])
+    context = account_context(first.replace('req_id=1', 'req_id=2') + '&requestParams=expired')
+    assert logins(fake).credential(context)['username'] == 'first-user'
+    assert context.item_id == 'a'
+    assert logins(fake).credential(second)['username'] == 'second-user'
+    with pytest.raises(ValueError, match='tenant'):
+        logins(fake).credential('https://career44.sapsf.com')
+
+
+def test_generated_sap_logins_keep_a_stable_tenant_url_and_password_recipe():
+    fake = FakeOp()
+    site = 'https://career44.sapsf.com/career?company=integrat02P3&requestParams=secret&career_job_req_id=13892'
+    logins(fake).save_credential(site, 'u@example.test', state='new', password_recipe='20,letters,digits,symbols')
+    args, stdin, _ = next(c for c in fake.calls if c[0][:2] == ['item', 'create'])
+    assert '--generate-password=20,letters,digits,symbols' in args
+    assert json.loads(stdin)['urls'][0]['href'] == 'https://career44.sapsf.com/career?company=integrat02P3'
+    assert 'requestParams' not in stdin and '13892' not in stdin
+
+
+def test_shared_workday_sites_match_the_employer_path_not_just_the_server():
+    first = 'https://wd5.myworkdaysite.com/recruiting/first/Careers/job/Intern_R1'
+    second = 'https://wd5.myworkdaysite.com/recruiting/second/Careers/job/Intern_R1'
+    fake = FakeOp([hand_made('a', first, 'first-user', 'p1'), hand_made('b', second, 'second-user', 'p2')])
+    assert logins(fake).credential(first)['username'] == 'first-user'
+    assert logins(fake).credential(second)['username'] == 'second-user'
+    with pytest.raises(ValueError, match='tenant'):
+        logins(fake).credential('https://wd5.myworkdaysite.com')
+
+
+@pytest.mark.parametrize('query', ['company=a&company=b', 'company=a&company=', 'company='])
+def test_ambiguous_or_empty_sap_company_ids_never_match_a_saved_login(query):
+    from core.automation.models import account_context
+    assert account_context('https://career44.sapsf.com/career?' + query) is None
 
 
 def test_the_token_travels_only_in_the_environment():
@@ -87,6 +135,7 @@ def test_a_known_password_goes_only_through_stdin():
     fake = FakeOp()
     logins(fake).save_credential(SITE, 'u', 'KnownSecret123', 'verified')
     args, stdin, _ = next(c for c in fake.calls if c[0][:2] == ['item', 'create'])
+    assert args[2] == '-'
     assert 'KnownSecret123' in stdin and 'KnownSecret123' not in ' '.join(args)
     assert not any(a.startswith('--generate-password') for a in args)
     assert json.loads(stdin)['urls'] == [{'href': f'https://{SITE}', 'primary': True}]

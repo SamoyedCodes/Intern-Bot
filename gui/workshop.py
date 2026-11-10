@@ -3,8 +3,8 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRectF, Qt, QUrl, Signal, Slot, QTimer
-from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPixmap
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget
+from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPixmap
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget
 
 from core.automation.models import site_key
 from gui.theme import label
@@ -78,6 +78,9 @@ class StillScene(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         p.setRenderHint(QPainter.Antialiasing)
+        clip = QPainterPath()  # match the rounded top of the live scene and the caption bar below it
+        clip.addRoundedRect(QRectF(self.rect()).adjusted(0, 0, 0, 12), 10, 10)
+        p.setClipPath(clip)
         field = self.state.get("field")
         rows = self.state.get("rows", [])
         selected = self.state.get("selected")
@@ -140,7 +143,10 @@ class Workshop(QWidget):
         self.still = StillScene()
         self.layers.addWidget(self.still)
         box.addLayout(self.layers, 1)
-        caption_row = QHBoxLayout()
+        caption_bar = QFrame()
+        caption_bar.setObjectName("sceneCaptionBar")
+        caption_row = QHBoxLayout(caption_bar)
+        caption_row.setContentsMargins(0, 0, 0, 0)
         caption_row.setSpacing(0)
         self.caption = label(role="sceneCaption")
         self.caption.setTextFormat(Qt.PlainText)
@@ -148,7 +154,7 @@ class Workshop(QWidget):
         self.rotate_hint = label("Drag or use ← → to rotate", "sceneCaption", wrap=False)
         self.rotate_hint.hide()
         caption_row.addWidget(self.rotate_hint)
-        box.addLayout(caption_row)
+        box.addWidget(caption_bar)
         self.setAccessibleName("Application workshop")
 
     def _pick(self, run_id):
@@ -180,6 +186,7 @@ class Workshop(QWidget):
         page.settings().setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, False)
         page.settings().setAttribute(QWebEngineSettings.JavascriptCanOpenWindows, False)
         page.settings().setAttribute(QWebEngineSettings.LocalStorageEnabled, False)
+        page.setBackgroundColor(Qt.transparent)
         self.web.setPage(page)
         self.channel = QWebChannel(page)
         self.channel.registerObject("crew", self.bridge)

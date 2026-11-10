@@ -5,20 +5,24 @@ import hashlib
 import json
 import re
 import time
+from urllib.parse import urlsplit
 
 from core.automation.answers import UNANSWERED, applicable, linked, question_for, resolve
 from core.automation.assistant import ai_config, askable, autofill, matchable
-from core.automation.models import ApplicantProfile, ApprovedAnswer, FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url
+from core.automation.models import ApplicantProfile, ApprovedAnswer, FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url, account_context, application_scope
+from core.automation.accounts import login_address
+from core.automation.journey import ApplicationJourney
 from pathlib import Path
 from core.automation.speedy_profile import translate
 from core.automation.privacy import configure_privacy
 from core.automation.fields import FormField
 from core.automation.recipes import recipe_for, save_recipe
+from core.storage.onepassword import AmbiguousLogins
 
 ENGINE_VERSION = 'speedyapply-local-2.28.0-v2'
-SIGN_IN_HANDOFF = 'Complete employer sign-in or activation in Chromium, then resume. Saved credentials remain in the operating-system keychain; an existing authentication attempt will not be repeated.'
-ACTIVATION_HANDOFF = "Check {} for Workday's verification email and open its link, then click I've verified my account."
-REJECTED_ACCOUNT = "Workday didn't accept the new account. It may already exist: sign in or reset the password in Chromium, save that login under Profile → Workday logins, then resume."
+SIGN_IN_HANDOFF = 'Complete employer sign-in or activation in Chromium, then resume. Saved credentials remain in 1Password; an existing authentication attempt will not be repeated.'
+ACTIVATION_HANDOFF = "Check {} for the employer's verification email and open its link, then choose Continue after verification."
+REJECTED_ACCOUNT = "The employer didn't accept the new account. It may already exist: sign in or reset the password in Chromium, save that login under Profile → Employer accounts, then resume."
 
 
 class ApplicationEngine:
@@ -38,6 +42,8 @@ class ApplicationEngine:
         self.bridge = None
         self.recipe = None  # the approved site recipe driving an otherwise unsupported site
         self.asked = set()  # Normalized labels already sent for AI matching during this run.
+        self.account_credential = None
+        self.verification_returned = False
 
     def pause(self):
         self._pause = True
@@ -72,6 +78,10 @@ class ApplicationEngine:
 
     async def start(self, run, profile, bridge, credential=None):
         self.bridge = bridge
+        if bridge.journey is None:
+            bridge.journey = ApplicationJourney(run, bridge.page)
+        self.account_credential = credential
+        self.verification_returned = False
         self._pause = self._cancel = False
         self.recipe = recipe_for(self.store, run.job_url)
         if run.is_submitted:
@@ -95,6 +105,7 @@ class ApplicationEngine:
                 await self.confirm_submission(run)
                 return run
             last_advanced_stage = None
+            returned_to_job = False
             stalls = 0
             verification_retries = 0
             def stage_of(match, result, fields):
@@ -103,8 +114,13 @@ class ApplicationEngine:
             for _ in range(100):
                 if self._pause or self._cancel:
                     break
+                bridge.sync_page()
+                if bridge.journey and bridge.journey.blocked_reason:
+                    self.intervene(run, bridge.journey.blocked_reason, 'link')
+                    return run
                 canonical_url(bridge.page.url)
-                if employer_key(bridge.page.url) != employer_key(run.job_url):
+                permitted = bridge.journey.permits(bridge.page.url) if bridge.journey else application_scope(bridge.page.url) == application_scope(run.job_url)
+                if not permitted:
                     self.intervene(run, 'The tab left the selected employer. Open the selected application before resuming.')
                     return run
                 self.recipe = recipe_for(self.store, bridge.page.url)
@@ -112,12 +128,25 @@ class ApplicationEngine:
                 if self._pause or self._cancel:
                     return run
                 matches = found.get('matches', [])
+                accounts = [a for a in found.get('accounts', []) if a['account'].get('page')]
+                if accounts:
+                    matches = accounts
+                if not accounts and not matches and run.account and bridge.journey and hasattr(bridge.journey, 'reopen_job') and not returned_to_job:
+                    returned_to_job = True
+                    problem, _ = await bridge.journey.reopen_job()
+                    if problem:
+                        self.intervene(run, problem, 'link')
+                        return run
+                    continue
                 if len(matches) != 1:
                     self.intervene(run, 'More than one adapter or application frame matched. Choose the application manually.' if matches else 'No supported application form was detected. Open the application form or continue manually.')
                     return run
                 match = matches[0]
                 canonical_url(match['url'])
-                if bridge.binding and employer_key(match['url']) != employer_key(bridge.binding['url']):
+                permitted = bridge.journey.permits(match['url']) if bridge.journey else application_scope(match['url']) == application_scope(run.job_url)
+                if not permitted and match['frame'] != 0 and bridge.binding is None and bridge.journey:
+                    permitted = await bridge.journey.adopt_frame(match['url'])
+                if not permitted:
                     self.intervene(run, 'The application frame left the selected employer. Inspect the redirect before resuming.')
                     return run
                 config['adapter'] = match['adapter']['id']
@@ -127,6 +156,16 @@ class ApplicationEngine:
                     return run
                 fields = [FormField(**f) for f in result['fields']]
                 run.stage = stage_of(match, result, fields)
+                if config['adapter'] == 'account':
+                    if await self.account_step(run, profile, fields, bridge, self.account_credential):
+                        last_advanced_stage = None
+                        continue
+                    return run
+                signed_in = any(a['account'].get('signed_in') for a in found.get('accounts', []))
+                if signed_in and run.account and not self.account_credential:
+                    self.account_credential = await asyncio.to_thread(self.store._vault().credential, run.account)
+                if signed_in and self.account_credential and self.account_credential.get('state') != 'verified':
+                    await self.account_state(run, 'verified')
                 if result.get('steps'):
                     run.steps, run.step = result['steps'], result['step']
                 if run.stage == last_advanced_stage:
@@ -140,8 +179,8 @@ class ApplicationEngine:
                 stalls = 0
                 await self.authorize(run, profile, fields)
                 if any(f.kind == 'password' for f in fields):
-                    if match['adapter']['id'] == 'workday' and credential:
-                        if await self.account_step(run, profile, fields, bridge, credential):
+                    if match['adapter']['id'] == 'workday':
+                        if await self.account_step(run, profile, fields, bridge, self.account_credential):
                             continue
                     else:
                         self.intervene(run, SIGN_IN_HANDOFF, 'verification')
@@ -159,10 +198,13 @@ class ApplicationEngine:
                             break
                     last_advanced_stage = run.stage
                     continue
-                if run.authentication_attempted and fields and credential and credential.get('state') == 'pending_verification':
-                    # This run's Create Account click led straight into the application: the tenant needed no email verification.
-                    self.store._vault().set_account_state(run.job_url, 'verified')
-                    credential['state'] = 'verified'
+                if not fields and run.account and bridge.journey and hasattr(bridge.journey, 'reopen_job') and not returned_to_job:
+                    returned_to_job = True
+                    problem, _ = await bridge.journey.reopen_job()
+                    if problem:
+                        self.intervene(run, problem, 'link')
+                        return run
+                    continue
                 self.report_phase(run, 'fill')
                 await bridge.command('start')
                 settled = await self.wait_for_section(run, profile)
@@ -288,6 +330,7 @@ class ApplicationEngine:
             self.intervene(run, f'{message} ({type(exc).__name__})')
         finally:
             await bridge.stop()
+            self.account_credential = None
             # An approval is good for one send attempt; a stop on the way there needs a fresh one.
             run.approved_review = {}
             if self._cancel:
@@ -302,49 +345,227 @@ class ApplicationEngine:
 
     resume = start
 
-    async def account_step(self, run, profile, fields, bridge, credential):
-        """One guarded Workday create-account or sign-in step. True continues the section loop; False hands off or pauses."""
-        state = credential.get('state', 'verified')
-        auth = await bridge.command('auth_page')
-        if state == 'pending_verification':
-            if auth['page'] == 'create' and run.authentication_attempted and (await bridge.command('snapshot'))['errors']:
-                self.intervene(run, REJECTED_ACCOUNT, 'verification')
-            else:
-                self.intervene(run, ACTIVATION_HANDOFF.format(credential['username']), 'activation')
-            return False
-        create = state == 'new'
-        if run.authentication_attempted:
-            self.intervene(run, SIGN_IN_HANDOFF, 'verification')
-            return False
-        expected = 'create' if create else 'sign_in'
-        if auth['page'] != expected:
-            if (await bridge.command('open_create_account' if create else 'open_sign_in')).get('opened'):
-                await asyncio.sleep(.3)
-                return True
-            self.intervene(run, "Open Workday's Create Account page in Chromium, then resume." if create else SIGN_IN_HANDOFF, 'verification')
-            return False
-        # The runtime refuses unapproved extra questions (such as a terms checkbox); ask before consuming the single attempt.
-        credentials, answers = set(auth['credentials']), self.store.answers()
-        for field in fields:
-            resolution = resolve(field, profile, run, answers)
-            if field.selector not in credentials and resolution.value is None and not resolution.omit:
-                self.intervene(run, resolution.reason, 'answer', field)
-                return False
-        if create:
-            # Persist before the click: a crash afterwards must never create a second account.
-            self.store._vault().set_account_state(run.job_url, 'pending_verification')
-            credential['state'] = 'pending_verification'
-        run.authentication_attempted = True
+    async def account_state(self, run, state):
+        await asyncio.to_thread(self.store._vault().set_account_state, run.account, state)
+        self.account_credential['state'] = state
         self.checkpoint(run)
-        if self._pause or self._cancel:
+
+    async def account_signed_in(self):
+        return False
+
+    async def switch_account_page(self, run, bridge, create=False):
+        if not (await bridge.command('open_create_account' if create else 'open_sign_in')).get('opened'):
             return False
-        await bridge.command('authenticate', {'credential': {'username': credential['username'], 'password': credential['password']}})
-        # Workday takes seconds to sign in; a form still showing just after the click is not yet a failure.
+        document = (bridge.binding or {}).get('document')
+        expected = 'create' if create else 'sign_in'
         for _ in range(self.AUTH_POLLS):
             await asyncio.sleep(.25)
-            if self._pause or self._cancel or (await bridge.command('auth_page'))['page'] != expected or (await bridge.command('snapshot'))['errors']:
-                break
-        return True
+            if self._pause or self._cancel:
+                return False
+            found = await bridge.discover()
+            accounts = found.get('accounts', [])
+            if len(accounts) == 1 and (accounts[0]['account'].get('page') == expected or accounts[0]['document'] != document or accounts[0]['account'].get('signed_in')):
+                return True
+        return False
+
+    async def account_step(self, run, profile, fields, bridge, credential=None):
+        """One document-bound account step; a saved attempt is never replayed automatically."""
+        auth = await bridge.command('auth_page')
+        if auth['page'] == 'loading':
+            await asyncio.sleep(.25)
+            return True
+        if auth['page'] == 'email_choice':
+            if await self.switch_account_page(run, bridge):
+                return True
+            self.intervene(run, SIGN_IN_HANDOFF, 'verification')
+            return False
+        if auth['page'] in {'challenge', 'ambiguous'}:
+            self.intervene(run, 'Complete CAPTCHA, MFA or the unfamiliar sign-in form in Chromium, then resume.', 'verification')
+            if auth['page'] == 'challenge':
+                run.interventions[-1].field_key = 'account-challenge'
+                self.checkpoint(run)
+            return False
+        context = account_context(bridge.binding['url'])
+        if context is None:
+            self.intervene(run, 'This shared sign-in site does not identify the employer tenant. Complete sign-in manually; no credentials were sent.', 'verification')
+            return False
+        if auth.get('action'):
+            try:
+                action = canonical_url(auth['action'])
+                receiver = account_context(action)
+                if urlsplit(action).hostname != urlsplit(bridge.binding['url']).hostname or receiver and receiver.key != context.key:
+                    self.intervene(run, 'The account form sends credentials to a different or unverified account site. Complete sign-in manually; no credentials were entered.', 'verification')
+                    return False
+            except ValueError:
+                self.intervene(run, 'The account form has an unsupported destination. No credentials were entered.', 'verification')
+                return False
+        context.return_url = run.listing_url or run.job_url
+        if run.account and run.account.key == context.key:
+            context.item_id = run.account.item_id
+        elif run.account:
+            credential = None
+            run.registration_attempted = run.login_attempted = False
+        run.account = context
+        try:
+            run.stage = 'Checking employer login'
+            self.checkpoint(run)
+            if credential is None:
+                credential = await asyncio.to_thread(self.store._vault().credential, context)
+            if credential:
+                credential.setdefault('state', 'verified')
+            self.account_credential = credential
+            self.checkpoint(run)
+            if auth.get('signed_in'):
+                if credential:
+                    await self.account_state(run, 'verified')
+                return True
+            if auth['page'] == 'verification':
+                if credential and credential.get('state') == 'creation_attempted':
+                    await self.account_state(run, 'pending_verification')
+                if not run.verification_continued:
+                    self.intervene(run, ACTIVATION_HANDOFF.format((credential or {}).get('username', profile.email)), 'activation')
+                    return False
+                if await self.switch_account_page(run, bridge):
+                    return True
+                # A verification page may not offer Sign In. Re-enter through the job, never an expired signup URL.
+                if self.verification_returned:
+                    self.intervene(run, 'The employer still shows email verification. Complete it in Chromium, then choose Continue after verification.', 'activation')
+                    return False
+                self.verification_returned = True
+                if bridge.journey:
+                    bridge.journey.expect()
+                await bridge.page.goto(context.return_url, wait_until='domcontentloaded')
+                return True
+            if not credential:
+                if auth['page'] == 'created':
+                    self.intervene(run, 'The employer confirms account creation, but its login is missing from 1Password. Save the existing login in Job Sites, then resume; no new registration was attempted.', 'verification')
+                    return False
+                if run.registration_attempted:
+                    self.intervene(run, 'Registration was already attempted, but its saved login is missing. Restore the login in 1Password or sign in manually; no new account was created.', 'verification')
+                    return False
+                if not self.store.get('auto_create_accounts', self.store.get('auto_create_workday_accounts', False)):
+                    self.intervene(run, 'No login is saved for this employer. Enable automatic account creation under Profile → Employer accounts, or sign in manually.', 'verification')
+                    return False
+                if auth['page'] != 'create':
+                    if await self.switch_account_page(run, bridge, create=True):
+                        return True
+                    self.intervene(run, 'No account-creation link could be identified. Open Create Account in Chromium, then resume.', 'verification')
+                    return False
+                policy = auth.get('policy', {})
+                length = min(24, policy.get('maximum', 64))
+                if length < max(1, policy.get('minimum', 0)):
+                    self.intervene(run, 'The password requirements could not be satisfied. Create the login in 1Password and continue manually.', 'verification')
+                    return False
+                recipe = str(length) + ',letters,digits' + (',symbols' if policy.get('symbols', True) else '')
+                username = login_address(context.tenant.split('/')[-1], profile.email, self.store.get('catchall_domain', ''), self.store.get('catchall_format', ''))
+                run.stage = 'Saving new login in 1Password'
+                self.checkpoint(run)
+                await asyncio.to_thread(self.store._vault().save_credential, context, username, None, 'new', password_recipe=recipe)
+                credential = await asyncio.to_thread(self.store._vault().credential, context)
+                if not credential.get('username') or not credential.get('password'):
+                    raise RuntimeError('The saved 1Password login could not be read back. No account was submitted.')
+                self.account_credential = credential
+                self.checkpoint(run)
+            state = credential.get('state', 'verified')
+            if auth['page'] == 'created':
+                await self.account_state(run, 'created')
+                if await self.switch_account_page(run, bridge):
+                    return True
+                self.intervene(run, 'The account was created. Open the employer sign-in page in Chromium, then resume.', 'verification')
+                return False
+            if state in {'creation_attempted', 'pending_verification'} and not run.verification_continued:
+                if auth.get('form_error'):
+                    self.intervene(run, REJECTED_ACCOUNT, 'verification')
+                elif state == 'pending_verification':
+                    self.intervene(run, ACTIVATION_HANDOFF.format(credential['username']), 'activation')
+                else:
+                    self.intervene(run, 'Account creation was attempted, but its outcome is uncertain. Check the employer page or email before continuing; registration will not be repeated.', 'verification')
+                return False
+            create = state == 'new'
+            expected = 'create' if create else 'sign_in'
+            if auth['page'] != expected:
+                if await self.switch_account_page(run, bridge, create=create):
+                    return True
+                self.intervene(run, 'Open the employer Create Account page in Chromium, then resume.' if create else SIGN_IN_HANDOFF, 'verification')
+                return False
+            if run.verification_continued:
+                run.login_attempted = False
+                run.authentication_attempted = False
+                run.verification_continued = False
+                self.checkpoint(run)
+            attempted = run.registration_attempted if create else run.login_attempted or (run.authentication_attempted and not run.registration_attempted)
+            if attempted:
+                self.intervene(run, REJECTED_ACCOUNT if create else SIGN_IN_HANDOFF, 'verification')
+                return False
+            credentials = set(auth['credentials'])
+            policies = {}
+            for field in fields:
+                if field.selector in credentials:
+                    continue
+                label = normalized(field.label)
+                marketing = field.kind == 'checkbox' and (field.selector in auth.get('marketing', []) or bool(re.search(r'marketing|newsletter|job alerts|promotional|future opportunities|talent community', label)))
+                terms = field.kind == 'checkbox' and (field.required or field.selector in auth.get('required_terms', [])) and bool(re.search(r'terms|privacy', label))
+                resolution = resolve(field, profile, run, self.store.answers())
+                value = False if marketing else True if terms else resolution.value
+                omit = resolution.omit or value is None and not field.required and field.kind != 'checkbox'
+                if value is None and not omit:
+                    self.intervene(run, resolution.reason, 'answer', field)
+                    return False
+                policies[field.selector] = dict(key=field.key, label=field.label, value=value, omit=omit, ref=resolution.ref, replace=terms or marketing)
+            await bridge.command('authorize', {'policies': policies})
+            try:
+                await bridge.command('validate_authentication', {'credential': {'username': credential['username'], 'password': credential['password']}})
+            except Exception:
+                self.intervene(run, 'The account form changed or rejected the saved values. Inspect the form and check the login in 1Password; nothing was submitted.', 'verification')
+                return False
+            if self._pause or self._cancel:
+                return False
+            # Write the uncertain state before the remote click, including across runs for the same account.
+            run.stage = 'Creating employer account' if create else 'Signing in'
+            if create:
+                await self.account_state(run, 'creation_attempted')
+                run.registration_attempted = True
+            else:
+                run.login_attempted = True
+            run.authentication_attempted = True
+            self.checkpoint(run)
+            if self._pause or self._cancel:
+                return False
+            await bridge.command('authenticate', {'credential': {'username': credential['username'], 'password': credential['password']}})
+            for _ in range(self.AUTH_POLLS):
+                await asyncio.sleep(.25)
+                if self._pause or self._cancel:
+                    return False
+                if bridge.journey and bridge.journey.blocked_reason:
+                    self.intervene(run, bridge.journey.blocked_reason, 'link')
+                    return False
+                found = await bridge.discover()
+                accounts = found.get('accounts', [])
+                observation = accounts[0]['account'] if len(accounts) == 1 else {}
+                if observation.get('signed_in') or await self.account_signed_in():
+                    if credential.get('state') != 'verified':
+                        await self.account_state(run, 'verified')
+                    return True
+                if observation.get('page') == 'verification':
+                    if create:
+                        await self.account_state(run, 'pending_verification')
+                    self.intervene(run, ACTIVATION_HANDOFF.format(credential['username']), 'activation')
+                    return False
+                if observation.get('form_error') or observation.get('page') not in {None, expected}:
+                    return True
+                if not accounts and found.get('matches'):
+                    return True
+            self.intervene(run, 'Account creation was attempted, but its outcome is uncertain. Check the employer page before continuing; registration will not be repeated.' if create else SIGN_IN_HANDOFF, 'verification')
+            return False
+        except AmbiguousLogins as exc:
+            self.intervene(run, str(exc), 'verification')
+            run.interventions[-1].field_key = '1password-item'
+            run.interventions[-1].options = exc.options
+            self.checkpoint(run)
+            return False
+        except (RuntimeError, ValueError) as exc:
+            self.intervene(run, str(exc), 'verification')
+            return False
 
     async def authorize(self, run, profile, fields):
         await self.ai_autofill(run, profile, fields)

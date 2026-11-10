@@ -6,12 +6,11 @@ import time
 from urllib.parse import quote, urlsplit
 
 from core.automation.answers import resolve
-from core.automation.engine import ACTIVATION_HANDOFF, ENGINE_VERSION as BROWSER_ENGINE, SIGN_IN_HANDOFF, ApplicationEngine
+from core.automation.engine import ENGINE_VERSION as BROWSER_ENGINE, SIGN_IN_HANDOFF, ApplicationEngine
 from core.automation.fields import FormField
-from core.automation.models import FieldAssessment, InterventionRequest, normalized
+from core.automation.models import FieldAssessment, InterventionRequest, normalized, application_scope
 
 ENGINE_VERSION = 'workday-request-v1'
-NEW_ACCOUNT = "Request mode signs in with an existing Workday login. Sign in or create this employer's account in Chromium, then resume."
 NO_DRAFT = 'No Workday draft was found for this job. In Chromium, choose Apply, then Apply Manually, and resume once the first page shows.'
 
 # Workday's question types, from its apply-flow code (common/questionnaire/{id}).
@@ -114,6 +113,7 @@ class RequestEngine(ApplicationEngine):
         except Exception as exc:
             self.intervene(run, f'Workday did not answer as request mode expects. Inspect the draft in Chromium and resume ({type(exc).__name__}).')
         finally:
+            self.account_credential = None
             if self._cancel:
                 run.status = 'cancelled'
             elif self._pause:
@@ -161,59 +161,33 @@ class RequestEngine(ApplicationEngine):
         except Exception:
             return False  # A page still loading after the sign-in click.
 
+    async def account_signed_in(self):
+        self.bridge.sync_page()
+        self.page = self.bridge.page
+        return await self.signed_in()
+
     async def sign_in(self, run, credential):
         if await self.signed_in():
             run.authentication_attempted = False
             return True
-        state = (credential or {}).get('state', 'verified')
-        if state == 'pending_verification':
-            self.intervene(run, ACTIVATION_HANDOFF.format(credential['username']), 'activation')
-            return False
-        if not credential or state == 'new':
-            self.intervene(run, NEW_ACCOUNT, 'verification')
-            return False
-        if run.authentication_attempted:
-            self.intervene(run, SIGN_IN_HANDOFF, 'verification')
-            return False
-        page = self.page
-        email_button = page.get_by_role('button', name=re.compile(r'^sign in with email$', re.I))
-        sign_in_link = page.locator('[data-automation-id="signInLink"]:visible')
-        email, password = page.locator('input[data-automation-id="email"]:visible'), page.locator('input[type=password]:visible')
-        try:
-            await email_button.or_(sign_in_link).or_(email).first.wait_for(timeout=15000)
-            if await email_button.count() == 1:
-                await email_button.click()
-            elif await sign_in_link.count() == 1 and await page.locator('[data-automation-id="createAccountSubmitButton"]').count():
-                # Tenants such as Keppel open on Create Account; its Sign In link swaps in the sign-in form.
-                await sign_in_link.click()
-                await page.locator('[data-automation-id="createAccountSubmitButton"]').wait_for(state='detached', timeout=10000)
-            await email.first.wait_for(timeout=10000)
-        except Exception:
-            self.intervene(run, SIGN_IN_HANDOFF, 'verification')
-            return False
-        if await email.count() != 1 or await password.count() != 1:
-            self.intervene(run, SIGN_IN_HANDOFF, 'verification')
-            return False
-        # One attempt per run, persisted before the click, as in classic mode.
-        self.check_running()
-        await email.fill(credential['username'])
-        self.check_running()
-        await password.fill(credential['password'])
-        # Workday drops a sign-in sent within 500ms of the form appearing, and only accepts a real click on the
-        # transparent overlay it lays over the submit button.
-        await page.wait_for_timeout(1000)
-        overlay = page.locator('[data-automation-id="click_filter"]:visible')
-        button = overlay if await overlay.count() == 1 else page.locator('[data-automation-id="signInSubmitButton"]')
-        self.check_running()
-        run.authentication_attempted = True
-        self.checkpoint(run)
-        self.check_running()
-        await button.click()
-        for _ in range(self.AUTH_POLLS):
-            await asyncio.sleep(.25)
+        self.account_credential = credential
+        for _ in range(12):
             if self.stopped:
                 return False
-            if await self.signed_in():
+            found = await self.bridge.discover()
+            accounts = found.get('accounts', [])
+            if len(accounts) != 1:
+                self.intervene(run, SIGN_IN_HANDOFF, 'verification')
+                return False
+            match = accounts[0]
+            allowed = self.bridge.journey.permits(match['url']) if self.bridge.journey else application_scope(match['url']) == application_scope(run.job_url)
+            if not allowed:
+                self.intervene(run, 'The sign-in frame left the selected employer. No credentials were sent.', 'verification')
+                return False
+            result = await self.bridge.command('prepare', {'adapter': 'account', 'profile': {}, 'files': {}}, binding=match)
+            if not await self.account_step(run, run.profile_snapshot, [FormField(**f) for f in result['fields']], self.bridge, self.account_credential):
+                return False
+            if await self.account_signed_in():
                 run.authentication_attempted = False
                 self.checkpoint(run)
                 return True

@@ -26,9 +26,9 @@ class CredentialVault:
     def get(self, key: str) -> str:
         return self.backend.get_password(self.service, key) or ""
 
-    # Account lifecycle: "new" (not yet created), "pending_verification" (created, email unverified), "verified".
-    def save_credential(self, site: str, username: str, password: str | None = None, state: str = "verified"):
-        self.logins.save_credential(site, username, password, state)
+    # creation_attempted is deliberately distinct from confirmed email verification.
+    def save_credential(self, site: str, username: str, password: str | None = None, state: str = "verified", **options):
+        self.logins.save_credential(site, username, password, state, **options)
 
     def credential(self, site: str) -> dict:
         return self.logins.credential(site)

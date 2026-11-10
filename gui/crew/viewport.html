@@ -2,5 +2,5 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' qrc:; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none'">
 <title>Workshop floor</title>
-<style>*{margin:0}html,body,#stage,canvas{width:100%;height:100%;overflow:hidden}body{background:#c5d6cb}canvas{display:block;cursor:grab}canvas:active{cursor:grabbing}canvas:focus-visible{outline:3px solid #b94b24;outline-offset:-3px}</style></head>
-<body><div id="stage"></div><script src="qrc:///qtwebchannel/qwebchannel.js"></script><script src="three.min.js"></script><script src="scene.js"></script><script src="connect.js"></script></body></html>
+<style>*{margin:0}html,body,#stage,canvas{width:100%;height:100%;overflow:hidden}body{background:transparent}#stage{position:relative;border-radius:10px 10px 0 0;overflow:hidden}canvas{display:block;cursor:grab}canvas:active{cursor:grabbing}canvas:focus-visible{outline:3px solid #b94b24;outline-offset:-3px;border-radius:10px 10px 0 0}#shade{position:absolute;inset:0;pointer-events:none;background:radial-gradient(120% 95% at 50% 42%,transparent 55%,rgba(16,34,29,.2) 100%)}</style></head>
+<body><div id="stage"><div id="shade"></div></div><script src="qrc:///qtwebchannel/qwebchannel.js"></script><script src="three.min.js"></script><script src="scene.js"></script><script src="connect.js"></script></body></html>

@@ -74,7 +74,7 @@ async def test_a_job_posting_opens_the_manual_application_once(context, store):
     run = ApplicationRun(job_url=page.url)
     for _ in range(2):
         await ApplicationEngine(store).start(run, ApplicantProfile(), ExtensionBridge(page, run.id))
-        assert run.interventions[-1].message == SIGN_IN_HANDOFF
+        assert 'No login is saved' in run.interventions[-1].message
     assert await page.evaluate('clicks') == ['apply', 'manual']
 
 
@@ -85,7 +85,7 @@ async def test_a_saved_draft_continues_its_application(context, store):
     page = await open_fixture(context, 'workday', html)
     run = ApplicationRun(job_url=page.url)
     await ApplicationEngine(store).start(run, ApplicantProfile(), ExtensionBridge(page, run.id))
-    assert run.interventions[-1].message == SIGN_IN_HANDOFF
+    assert 'No login is saved' in run.interventions[-1].message
     assert await page.evaluate('clicks') == ['continue']
 
 
@@ -160,7 +160,7 @@ async def test_login_appearing_after_prepare_uses_authentication_flow(context, s
 
 
 async def test_a_new_account_is_created_once_then_waits_for_verification_before_one_sign_in(context, store, vault):
-    page = await open_fixture(context, 'workday', account_pages('signin', 'signin'))
+    page = await open_fixture(context, 'workday', account_pages('signin', 'verification'))
     url = page.url
     vault.save_credential(url, LOGIN, PASSWORD, 'new')
     run = ApplicationRun(job_url=url)
@@ -168,18 +168,12 @@ async def test_a_new_account_is_created_once_then_waits_for_verification_before_
     engine = ApplicationEngine(store, lambda r: states.append((r.authentication_attempted, vault.credential(url)['state'])))
     start = lambda: engine.resume(run, ApplicantProfile(), ExtensionBridge(page, run.id), vault.credential(url))
 
-    # Sign In is shown first: the bot opens Create Account, then asks about the unapproved terms checkbox.
-    await start()
-    assert run.interventions[-1].kind == 'answer', run.interventions
-    assert not await page.evaluate('Boolean(window.creates)') and not run.authentication_attempted
-    assert vault.credential(url)['state'] == 'new'
-
-    approve_terms(store, run)
+    # Required account terms are authorized by the automatic-account policy.
     await start()
     assert await page.evaluate('window.creates') == 1
     assert await page.evaluate('window.created') == [LOGIN, PASSWORD, PASSWORD, True]
-    # The keychain recorded the attempt before the click could happen.
-    assert next(s for s in states if s[0]) == (True, 'pending_verification')
+    assert next(s for s in states if s[0]) == (True, 'creation_attempted')
+    assert vault.credential(url)['state'] == 'pending_verification'
     assert run.interventions[-1].kind == 'activation' and LOGIN in run.interventions[-1].message
 
     # Resuming without confirming verification neither re-creates nor signs in.
@@ -188,8 +182,7 @@ async def test_a_new_account_is_created_once_then_waits_for_verification_before_
     assert run.interventions[-1].kind == 'activation'
 
     # "I've verified my account": exactly one sign-in, never repeated.
-    vault.set_account_state(url, 'verified')
-    run.authentication_attempted = False
+    run.verification_continued = True
     await start()
     assert await page.evaluate('window.logins') == 1
     await start()
@@ -198,7 +191,7 @@ async def test_a_new_account_is_created_once_then_waits_for_verification_before_
 
 
 @pytest.mark.parametrize('after, state, handoff', [
-    ('error', 'pending_verification', "didn't accept"),
+    ('error', 'creation_attempted', "didn't accept"),
     ('form', 'verified', None),
 ], ids=['rejected', 'signed-in-immediately'])
 async def test_the_creation_outcome_updates_the_saved_login(context, store, vault, monkeypatch, after, state, handoff):

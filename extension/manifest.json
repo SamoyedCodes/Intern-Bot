@@ -8,7 +8,7 @@
   "background": {"service_worker": "background.js"},
   "content_scripts": [{
     "matches": ["https://*/*"],
-    "js": ["generated/scan.js", "generated/adapters.js", "adapters/monee.js", "adapters/recipe.js", "runtime.js"],
+    "js": ["generated/scan.js", "generated/adapters.js", "adapters/monee.js", "adapters/recipe.js", "accounts.js", "runtime.js"],
     "all_frames": true,
     "run_at": "document_idle"
   }],

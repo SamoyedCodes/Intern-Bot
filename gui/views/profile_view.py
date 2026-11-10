@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.automation.accounts import DEFAULT_CATCHALL_FORMAT, login_address
-from core.automation.models import ApplicantProfile, ats_name, canonical_url, site_key
+from core.automation.models import ApplicantProfile, ats_name, canonical_url, site_key, account_context
 from core.storage.local_store import LocalStore
 from core.storage.onepassword import VAULT
 from core.storage.vault import TOKEN_KEY
@@ -58,7 +58,7 @@ class ProfileView(QWidget):
         self.notice = MessageBar()
         layout.addWidget(self.notice)
         self.editor = ProfileEditor(ApplicantProfile.model_validate(self.store.get("verified_profile", {})))
-        self.editor.add_section("Workday logins", self._credentials_page())
+        self.editor.add_section("Employer accounts", self._credentials_page())
         self.editor.changed.connect(lambda: self.set_dirty(True))
         layout.addWidget(self.editor, 1)
         shortcut(QKeySequence.Save, self, self.save_profile, Qt.WidgetWithChildrenShortcut)
@@ -143,8 +143,8 @@ class ProfileView(QWidget):
 
     def _credentials_page(self):
         frame, box = card()
-        box.addWidget(label("Workday logins", "section"))
-        box.addWidget(label(f"Stored in your 1Password “{VAULT}” vault and matched by the employer's Workday address, so you can add or edit logins in 1Password. "
+        box.addWidget(label("Employer accounts", "section"))
+        box.addWidget(label(f"Stored in your 1Password “{VAULT}” vault and matched by the employer and tenant address, so you can add or edit logins in 1Password. "
                             "Each login is used only for that employer's sign-in. CAPTCHA, activation and unfamiliar sign-in steps stay manual.", "muted"))
         form = form_layout(10)
         self.token = QLineEdit()
@@ -164,8 +164,8 @@ class ProfileView(QWidget):
         self.show_token_status()
         self.address_preview = label(role="caption")
         box.addWidget(self.address_preview)
-        self.auto_create = QCheckBox("Create Workday accounts automatically when no login is saved")
-        self.auto_create.setChecked(self.store.get("auto_create_workday_accounts", False))
+        self.auto_create = QCheckBox("Create employer accounts automatically when no login is saved")
+        self.auto_create.setChecked(self.store.get("auto_create_accounts", self.store.get("auto_create_workday_accounts", False)))
         self.auto_create.setToolTip("1Password generates and stores the login, the bot creates the account, then waits for you to verify the email.")
         box.addWidget(self.auto_create)
         for widget in (self.catchall, self.catchall_format):
@@ -185,15 +185,16 @@ class ProfileView(QWidget):
 
     def credential_site(self):
         value = self.site.text().strip()
-        if ats_name(value) != "Workday":
-            raise ValueError("Use a Workday employer site for saved credentials.")
-        return site_key(canonical_url(value if "://" in value else "https://" + value))
+        context = account_context(value)
+        if context is None:
+            raise ValueError("Use the employer login URL, including its company or tenant identifier.")
+        return context.login_url
 
     def preview_address(self):
         domain = self.catchall.text().strip()
         try:
             example = login_address("company.wd1.myworkdayjobs.com", "you@example.com", domain, self.catchall_format.text())
-            self.address_preview.setText(f"New accounts use addresses like {example}. {{company}} becomes the employer's Workday name." if domain
+            self.address_preview.setText(f"New accounts use addresses like {example}. {{company}} becomes the employer's account name." if domain
                                          else "Without a catch-all domain, new accounts use your profile email.")
         except ValueError:
             self.address_preview.setText("That catch-all domain or address isn't a valid email address.")
@@ -201,7 +202,7 @@ class ProfileView(QWidget):
     def save_account_settings(self):
         self.store.put("catchall_domain", self.catchall.text().strip().lstrip("@"))
         self.store.put("catchall_format", self.catchall_format.text().strip())
-        self.store.put("auto_create_workday_accounts", self.auto_create.isChecked())
+        self.store.put("auto_create_accounts", self.auto_create.isChecked())
 
     def show_token_status(self):
         saved = bool(self.store._vault().get(TOKEN_KEY))
@@ -233,23 +234,23 @@ class ProfileView(QWidget):
             self.notice.notify(str(exc), "danger")
             return
         except ValueError:
-            self.notice.notify("Enter a Workday employer site first.", "warning")
+            self.notice.notify("Enter an employer login URL first.", "warning")
             return
-        state = {"new": " The account hasn't been created yet.", "pending_verification": " Workday is waiting for you to verify the email."}.get(value.get("state"), "")
+        state = {"new": " The account hasn't been created yet.", "pending_verification": " The employer is waiting for you to verify the email."}.get(value.get("state"), "")
         self.notice.notify(f"1Password has a login for {value['username']}." + state if value else "No login for this employer in 1Password.",
                            "success" if value else "info")
 
     def create_credential(self):
         try:
             site = self.credential_site()
-            username = login_address(site, self.editor.profile().email, self.catchall.text(), self.catchall_format.text())
+            username = login_address(account_context(site).tenant.split('/')[-1], self.editor.profile().email, self.catchall.text(), self.catchall_format.text())
             self.store._vault().save_credential(site, username, None, "new")
             self.save_account_settings()
-            self.notice.notify(f"1Password generated and saved a login for {username}. The bot creates the Workday account on the next run.", "success")
+            self.notice.notify(f"1Password generated and saved a login for {username}. The bot creates the employer account on the next run.", "success")
         except RuntimeError as exc:
             self.notice.notify(str(exc), "danger")
         except ValueError as exc:
-            self.notice.notify(str(exc) if "1Password" in str(exc) else "Enter a valid Workday employer site and your email or catch-all domain first.", "warning")
+            self.notice.notify(str(exc) if "1Password" in str(exc) else "Enter a valid employer login URL and your email or catch-all domain first.", "warning")
 
     def import_keychain_logins(self):
         vault = self.store._vault()

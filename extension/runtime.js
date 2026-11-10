@@ -385,8 +385,8 @@
       handles.clear();
       const formRoots=[...document.querySelectorAll('form')].filter(e=>visible(e)&&!e.parentElement.closest('form'));
       if(formRoots.length>1)report('browser','More than one form is present. Choose a single application form before autofilling.');
-      const root=formRoots.length===1?formRoots[0]:document;
-      if(formRoots.length>1){stop();return [];}
+      const root=config.adapter==='account'?internAccount.controls().root:formRoots.length===1?formRoots[0]:document;
+      if(formRoots.length>1&&config.adapter!=='account'){stop();return [];}
       site?.annotate?.(root);
       const roots=[root];
       for(let i=0;i<roots.length;i++)for(const element of roots[i].querySelectorAll('*'))if(element.shadowRoot)roots.push(element.shadowRoot);
@@ -454,11 +454,7 @@
     observer.observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-invalid','disabled','hidden','aria-busy']});observers.add(observer);
     timers.add(native.setTimeout(()=>{if(live()){report('browser','The adapter reached its bounded wait limit. Inspect the form and resume.');stop();expired=true;}},20000));
     window.addEventListener('unhandledrejection',fail,{signal:abort.signal});
-    const authControls=()=>({
-      emails:[...document.querySelectorAll('input[type=email],input[autocomplete=email],input[autocomplete=username],input[data-automation-id=email]')].filter(visible),
-      passwords:[...document.querySelectorAll('input[type=password]')].filter(visible),
-      buttons:[...document.querySelectorAll('[data-automation-id="signInSubmitButton"],[data-automation-id="createAccountSubmitButton"]')].filter(visible),
-    });
+    const authControls=()=>internAccount.controls();
     return {
       token,document:documentId,R,
       scan,
@@ -545,6 +541,7 @@
         return chosen;
       },
       openLink(id){
+        if(config.adapter==='account'&&['signInLink','createAccountLink'].includes(id)&&live())return internAccount.open(id==='createAccountLink'?'create':'sign_in');
         const links=[...document.querySelectorAll(`[data-automation-id="${id}"]`)].filter(visible);
         if(config.adapter!=='workday'||!live()||!['signInLink','createAccountLink','adventureButton','applyManually','continueButton'].includes(id)||links.length!==1)return false;
         links[0].click();return true;
@@ -553,7 +550,11 @@
         // The posting renders after the document loads. Apply stays visible behind its Start Your Application dialog, so Apply Manually goes first.
         // A signed-in candidate with a saved draft gets Continue Application instead of Apply.
         // A native adapter names its own link from the posting to the form.
-        if(config.adapter!=='workday'&&!site?.open)return '';
+        if(config.adapter!=='workday'&&!site?.open){
+          const links=[...document.querySelectorAll('a,button,[role=button]')].filter(e=>visible(e)&&/^(?:apply(?: now| for .+| to .+)?|start (?:your )?application)[\s»›→]*$/i.test((e.innerText||e.getAttribute('aria-label')||'').trim()));
+          if(links.length===1||links.length&&links[0].href&&new Set(links.map(e=>e.href||'')).size===1){links[0].click();return 'native';}
+          return '';
+        }
         for(let attempt=0;attempt<50&&live();attempt++){
           // 'ready': the form rendered after this section was scanned, so the engine scans it again.
           if(site?.open){const links=[...document.querySelectorAll(site.open)].filter(visible);if(links.length===1){links[0].click();return 'native';}if(document.querySelector('form'))return 'ready';}
@@ -564,18 +565,20 @@
       },
       // Which Workday authentication form is shown, and which scanned controls receive the saved login.
       authPage(){
-        if(config.adapter!=='workday')return {page:'',credentials:[]};
+        if(!['workday','account'].includes(config.adapter))return {page:'',credentials:[]};
         const {emails,passwords,buttons}=authControls();
-        const page=buttons.length!==1?'':buttons[0].matches('[data-automation-id="createAccountSubmitButton"]')?'create':'sign_in';
-        return {page,credentials:[...handles].filter(([,e])=>e===emails[0]||passwords.includes(e)).map(([selector])=>selector)};
+        return {...internAccount.inspect(),credentials:[...handles].filter(([,e])=>emails.includes(e)||passwords.includes(e)).map(([selector])=>selector),required_terms:[...handles].filter(([,e])=>e.type==='checkbox'&&(e.required||e.matches('[data-automation-id=createAccountCheckbox]'))).map(([selector])=>selector),marketing:[...handles].filter(([,e])=>e.type==='checkbox'&&!e.required&&e.parentElement.tagName!=='FORM'&&e.parentElement.textContent.length<600&&/marketing|newsletter|receive emails about job|job alerts|promotional/i.test(e.parentElement.textContent)).map(([selector])=>selector)};
       },
-      async authenticate(credential){
-        if(config.adapter!=='workday'||!live())throw Error('Authentication not authorized');
+      async authenticate(credential,submit=true){
+        if(!['workday','account'].includes(config.adapter)||!live())throw Error('Authentication not authorized');
         const {emails,passwords,buttons}=authControls();
-        if(emails.length!==1||!passwords.length||buttons.length!==1||!credential.username||!credential.password)throw Error('Ambiguous authentication');
-        if(emails[0].value&&emails[0].value!==credential.username||passwords.some(e=>e.value&&e.value!==credential.password))throw Error('Existing authentication value conflicts with saved credentials');
+        if(!['create','sign_in'].includes(internAccount.inspect().page)||!credential.username||!credential.password)throw Error('Ambiguous authentication');
+        const auth=internAccount.inspect();
+        if(auth.page==='create'&&(credential.password.length<auth.policy.minimum||credential.password.length>auth.policy.maximum))throw Error('Password length does not meet the form rules');
+        if(auth.page==='create'&&(auth.policy.upper&&!/[A-Z]/.test(credential.password)||auth.policy.lower&&!/[a-z]/.test(credential.password)||auth.policy.digit&&!/\d/.test(credential.password)||auth.policy.symbol&&!/[^a-z\d]/i.test(credential.password)))throw Error('Password characters do not meet the form rules');
+        if(emails.some(e=>e.value&&e.value!==credential.username)||passwords.some(e=>e.value&&e.value!==credential.password))throw Error('Existing authentication value conflicts with saved credentials');
         for(const [selector,element] of handles){
-          if(element===emails[0]||passwords.includes(element))continue;
+          if(emails.includes(element)||passwords.includes(element))continue;
           const p=policies.get(element);
           if(!p||p.value==null&&!p.omit)throw Error('Unapproved authentication question');
           if(p.omit){if(readable(element)!==''&&readable(element)!==false)throw Error('Existing omitted answer');continue;}
@@ -584,7 +587,8 @@
           if(!matches(element,p)||element.validity&&!element.validity.valid)throw Error('Unverified authentication answer');
         }
         const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-        for(const [element,value]of [[emails[0],credential.username],...passwords.map(e=>[e,credential.password])]){setter.call(element,value);element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));}
+        for(const [element,value]of [...emails.map(e=>[e,credential.username]),...passwords.map(e=>[e,credential.password])]){setter.call(element,value);element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));if(element.validity&&!element.validity.valid)throw Error('Credential does not meet this form’s rules');}
+        if(!submit)return;
         const buttonId=buttons[0].getAttribute('data-automation-id');
         // Workday silently drops a sign-in submitted within 500ms of the form appearing (its spam-bot timer), and the bot may have just opened it.
         const earliest=performance.now()+1000;
@@ -593,8 +597,8 @@
           await new Promise(resolve=>native.setTimeout(resolve,50));
           if(!live())throw Error('Authentication stopped');
           const current=authControls();
-          if(current.emails.length!==1||current.passwords.length!==passwords.length||current.buttons.length!==1)continue;
-          if(current.emails[0].value!==credential.username||current.passwords.some(e=>e.value!==credential.password))throw Error('Authentication values changed');
+          if(current.emails.length!==emails.length||current.passwords.length!==passwords.length||current.buttons.length!==1)continue;
+          if(current.emails.some(e=>e.value!==credential.username)||current.passwords.some(e=>e.value!==credential.password))throw Error('Authentication values changed');
           let button=current.buttons[0];
           if(button.getAttribute('data-automation-id')!==buttonId)throw Error('Authentication form changed');
           if(button.getAttribute('aria-hidden')==='true'){
@@ -622,6 +626,7 @@
   chrome.runtime.onMessage.addListener((message,sender,respond)=>{
     if(sender.id!==chrome.runtime.id)return;
     (async()=>{try {
+      if(message.command==='identify'){respond({matches:document.documentElement.dataset.internBotPage===message.nonce});return;}
       if(message.command==='detect') {
         // Registry construction only; no adapter starts and no profile is requested.
         const inert={environment:native,call:(o,k,a,opt)=>opt&&o?.[k]==null?undefined:o[k](...a),assign:(o,k,v)=>(o[k]=v),update:(o,k,op,rhs)=>o[k]??(o[k]=rhs())};
@@ -629,7 +634,7 @@
         let adapters=[...createSpeedyAdapters(inert),...nativeAdapters(inert)].filter(fits);
         if(!adapters.length)adapters=recipeAdapters(inert,message.recipes).filter(fits);
         adapters=adapters.map(a=>({id:a.id,name:a.name}));
-        respond({adapters,document:message.document});return;
+        respond({adapters,account:internAccount.inspect(),document:message.document});return;
       }
       if(message.command==='prepare') {active?.R.stop();active=runtime(message.payload,message.token,message.document);}
       if(!active||active.token!==message.token||active.document!==message.document)throw Error('Stale document or run');
@@ -655,6 +660,7 @@
       else if(message.command==='options')result.options=await active.options(message.payload.selector,message.payload.query);
       else if(message.command==='choose')result.chosen=await active.choose();
       else if(message.command==='authenticate')await active.authenticate(message.payload.credential);
+      else if(message.command==='validate_authentication')await active.authenticate(message.payload.credential,false);
       respond({...result,token:message.token,document:message.document});
     }catch {respond({error:'Local adapter command failed. Reopen or inspect the application.',token:message.token,document:message.document});}})();
     return true;

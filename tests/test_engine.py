@@ -600,7 +600,9 @@ async def test_changed_cover_letter_bytes_invalidate_saved_verification(store, t
     class ManualBridge:
         page = SimpleNamespace(url='https://careers.example.test/job/1')
         binding = None
-        async def discover(self): return {'matches': []}
+        journey = None
+        def sync_page(self): pass
+        async def discover(self, recipes=()): return {'matches': []}
         async def stop(self): pass
     letter = tmp_path / 'cover.txt'
     letter.write_text('First explicitly approved document')

@@ -7,7 +7,7 @@ from pathlib import Path
 from core.automation.engine import ApplicationEngine
 from core.automation.extension_bridge import ExtensionBridge
 from core.automation.fields import FormField
-from core.automation.models import ApplicantProfile, ApplicationRun, Experience, site_key
+from core.automation.models import ApplicantProfile, ApplicationRun, Experience, site_key, AccountContext, account_context
 from core.automation.speedy_profile import translate
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'speedyapply'
@@ -36,17 +36,21 @@ class MemoryLogins:
         pass
 
     def credential(self, site):
-        return dict(self.items.get(site_key(site), {}))
+        account = site if isinstance(site, AccountContext) else account_context(site)
+        return dict(self.items.get(account.key, {})) if account else {}
 
-    def save_credential(self, site, username, password=None, state='verified'):
-        if site_key(site) in self.items:
+    def save_credential(self, site, username, password=None, state='verified', *, password_recipe='24,letters,digits,symbols'):
+        account = site if isinstance(site, AccountContext) else account_context(site)
+        if account.key in self.items:
             raise ValueError('A login for this employer is already in 1Password; edit it there.')
-        self.items[site_key(site)] = {'username': username, 'password': password or 'Generated-by-1Password-1', 'state': state}
+        generated = 'Aa1!' + 'x' * (int(password_recipe.split(',')[0]) - 4)
+        self.items[account.key] = {'username': username, 'password': password or generated, 'state': state}
 
     def set_account_state(self, site, state):
-        if site_key(site) not in self.items:
+        account = site if isinstance(site, AccountContext) else account_context(site)
+        if account.key not in self.items:
             raise ValueError('No saved login for this employer.')
-        self.items[site_key(site)]['state'] = state
+        self.items[account.key]['state'] = state
 
 
 async def until(predicate, timeout=5):
@@ -83,7 +87,8 @@ def account_pages(start, after):
         'signin': email + '<button type=button data-automation-id=createAccountLink onclick="show(`create`)">Create Account</button><button type=button data-automation-id=signInSubmitButton onclick="window.logins=(window.logins||0)+1">Sign In</button>',
         'create': create,
         'error': create + '<div data-automation-id=inputError>An account with this email already exists.</div>',
-        'form': '<label>Preferred Name<input></label>',
+        'form': '<button>Sign Out</button><label>Preferred Name<input></label>',
+        'verification': '<h1>Check your email for the verification email</h1><button onclick=\"show(`signin`)\">Sign In</button>',
     }
     return f'''<div id=root></div><script>
 const pages={json.dumps(pages)};

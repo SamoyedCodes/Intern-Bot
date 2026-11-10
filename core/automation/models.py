@@ -71,6 +71,60 @@ def canonical_url(url: str, *, supported_only=True) -> str:
     return urlunsplit((p.scheme, host, p.path, p.query, p.fragment))
 
 
+class AccountContext(BaseModel):
+    provider: str
+    tenant: str
+    login_url: str
+    return_url: str = ""
+    item_id: str = ""
+
+    @property
+    def key(self):
+        return self.provider + ":" + self.tenant
+
+
+def account_context(url: str) -> AccountContext | None:
+    """Account identity excludes job IDs, locale and expiring authentication parameters."""
+    url = canonical_url(url if "://" in url else "https://" + url)
+    p, name = urlsplit(url), ats_name(url)
+    if name == "Workday":
+        if p.hostname.endswith('.myworkdaysite.com'):
+            match = re.search(r'/recruiting/([^/]+)(/[^/]+)?', p.path)
+            return AccountContext(provider='workday', tenant=p.hostname + '/' + match[1], login_url='https://' + p.hostname + match[0]) if match else None
+        if p.hostname.endswith('.myworkday.com') or p.hostname == 'myworkday.com':
+            return None
+        return AccountContext(provider="workday", tenant=p.hostname, login_url="https://" + p.hostname)
+    if name == "SAP SuccessFactors":
+        company = parse_qsl(p.query, keep_blank_values=True)
+        companies = [value for key, value in company if key == "company"]
+        if len(companies) != 1 or not companies[0]:
+            return None
+        return AccountContext(provider="sap-successfactors", tenant=p.hostname + "/" + companies[0],
+                              login_url="https://" + p.hostname + "/career?" + urlencode({"company": companies[0]}))
+    # Shared hiring/identity providers cannot safely fall back to a hostname-only login.
+    if name or re.search(r"(^|\.)(google|microsoftonline|live|apple|linkedin|auth0|okta)\.com$", p.hostname):
+        return None
+    if any(key.casefold() in {'tenant', 'company', 'organization', 'realm', 'client_id'} for key, _ in parse_qsl(p.query)):
+        return None
+    return AccountContext(provider="generic", tenant=p.hostname, login_url="https://" + p.hostname)
+
+
+def application_scope(url: str) -> str:
+    context = account_context(url)
+    return context.key if context else employer_key(url)
+
+
+def stable_application_url(url: str) -> str:
+    p = urlsplit(canonical_url(url))
+    if ats_name(url) == "SAP SuccessFactors":
+        query = dict(parse_qsl(p.query))
+        stable = {k: query[k] for k in ("company", "career_job_req_id") if k in query}
+        if 'career_job_req_id' in stable:
+            stable['career_ns'] = 'job_listing'
+        return p._replace(query=urlencode(stable), fragment="").geturl()
+    return url
+
+
 class Education(BaseModel):
     school: str = ""
     degree: str = ""
@@ -245,6 +299,10 @@ class ApplicationRun(BaseModel):
     ai_requests: int = 0
     engine_version: str = ""
     authentication_attempted: bool = False
+    account: AccountContext | None = None
+    registration_attempted: bool = False
+    login_attempted: bool = False
+    verification_continued: bool = False
     submitted_by_user: bool = False
 
     @property

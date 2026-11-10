@@ -854,7 +854,7 @@
       "Do name the recipient, the data and the scope before a user sends context or approves an answer."
     ],
     "donts": [
-      "Don't advance a station on a timer, animate an idle queue or use the demo timeline as engine state.",
+      "Don't advance a station on a timer, move the folder or a lamp without an engine checkpoint, or use the demo timeline as engine state.",
       "Don't represent an optional omission as a verified value, a send attempt as a receipt or a manual attestation as machine evidence.",
       "Don't put personal form contents or a submit action in the scene bridge."
     ]

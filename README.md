@@ -53,26 +53,30 @@ Under **Citizenship & eligibility**, **Authorized to work in job's country** def
 
 Use the profile switcher and its ⋯ menu to create, import or export named profiles. Saving a profile affects new applications only. To change one application's copy, use **Edit application profile…** in its inspector.
 
-### 2. Workday logins (optional)
+### 2. Employer accounts (optional)
 
 Employer logins live in a 1Password vault named **Job Sites**. The bot reads them through the 1Password CLI with a service account, so the 1Password app doesn't need to be open and you won't see a prompt. Setup:
 
 1. `brew install 1password-cli`
 2. Create a vault named **Job Sites** in 1Password.
 3. On 1Password.com, open **Developer → Service Accounts** and create one with read and write access to **Job Sites** only. Set an expiry.
-4. Paste the token under **Profile → Workday logins** and click **Save token**. The token is stored in the macOS keychain and checked against the vault right away.
+4. Paste the token under **Profile → Employer accounts** and click **Save token**. The token is stored in the macOS keychain and checked against the vault right away.
 
-The bot matches a login to an employer by the Workday address on the 1Password item, so logins you add to **Job Sites** yourself are picked up too. Each login is used only for its own employer. **Check login** shows which account the bot will use and never shows the password. If you used the keychain-only version before, **Import keychain logins** copies the saved logins for your existing applications into 1Password and leaves the keychain copies as a backup.
+The bot matches a login by its employer account identity: Workday uses the employer hostname or recruiting tenant, SAP SuccessFactors uses the hostname and `company` identifier, and simple employer sites use their dedicated hostname. SAP items need a website URL containing the correct `company`; a bare shared SAP hostname is not enough. Multiple matching items ask you to choose the intended login before automation continues. Logins you add to **Job Sites** yourself are picked up too. **Check login** shows which account the bot will use and never shows the password. If you used the keychain-only version before, **Import keychain logins** copies the saved logins for your existing applications into 1Password and leaves the keychain copies as a backup.
 
 Anyone with the token can read and write **Job Sites** without a prompt. If it leaks, revoke it in 1Password.
 
-With **Create Workday accounts automatically** on, an employer with no saved login gets one with your profile email or a catch-all address such as `{company}_intern@yourdomain.com`. 1Password generates the password and stores the login before the browser sees it. The bot then creates the account once and waits. Open Workday's verification email yourself, click **I've verified my account**, and the bot signs in once. Approve the Create Account terms checkbox with **Employer** scope so you're asked once per employer. CAPTCHAs, mailbox access and unfamiliar sign-in flows stay manual.
+With **Create employer accounts automatically** on, the bot follows the selected job's Apply journey across HTTPS pages, redirects and popups, then checks 1Password at the actual sign-in site. Workday, SAP SuccessFactors and clearly identified simple signup forms are supported. An unknown employer tenant or ambiguous form stays manual.
+
+If no login exists, 1Password generates a password using the signup form's limits and stores it before registration is submitted. New accounts use your profile email or a configured catch-all address such as `{company}_intern@yourdomain.com`. Required account terms and privacy agreements are accepted automatically; optional marketing is left unchecked. Other required facts come from your profile or are asked explicitly.
+
+Email verification, CAPTCHA and MFA stay manual. Open the verification email yourself, then choose **Continue after verification**. If Chromium visibly shows a successful sign-in, the run queues itself to resume. Registration and sign-in attempts are checkpointed separately, and an uncertain registration is never replayed automatically. If the site already authenticated you after registration, the bot continues without another login. Otherwise it signs in with the saved credentials and returns to the selected job. No mailbox access or automatic password resets are used.
 
 ### 3. Add and run applications
 
 In **Applications**, press ⌘N, paste an HTTPS job link and press Return to prepare it with the active profile. **Options…** lets you choose the profile, site mode and whether to queue it first. Unrecognized pages still open for detection but you finish them by hand; ambiguous application frames are handed off to you.
 
-For Workday, choose **Request** mode to answer questions through the API. It never creates accounts.
+For Workday, choose **Request** mode to answer questions through the API after the same browser sign-in and account-creation step.
 
 **Workshop** places the selected application at Intake, Fill, Verify or Dispatch. **Bar field** shows field assessments for up to three visible applications at a time. **List** gives the queue the full left pane. The view is remembered. Turn off worker animation under **Settings → Automation → Workshop display**.
 

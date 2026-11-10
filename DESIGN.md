@@ -263,7 +263,7 @@ The following rows describe what to draw for the selected application. Dispatch 
 | `submission_confirmed` | Receipt slip at Dispatch | “Employer receipt confirmed.” A recognized employer confirmation supplies this evidence. |
 | `submitted_by_user` alone | Dispatch, stationary, no receipt slip | “Submitted by you” and “Submission confirmed by you.” The confirmation dialog explicitly asks whether the user submitted and saw employer confirmation. |
 
-Selection changes the folder's subject and inspector. Only the selected application whose ID also equals the active worker ID can animate, and only while running or actively sending a ready application. Changing selection snaps to that record. An inactive question holds a static pose. A completed job, an idle queue and the other three workers stay still. Hidden documents suspend drawing. System reduced motion or disabling “Animate workers during an active application” under Settings → Automation → Workshop display suppresses work animation. User-directed rotation and native controls remain available.
+Selection changes the folder's subject and inspector. Only the selected application whose ID also equals the active worker ID can do work motion (leaning in, typing, the bobbing folder), and only while running or actively sending a ready application. Changing selection snaps to that record. Every other worker only idles: each breathes, looks around, sways its antenna and blinks on its own phase, and a worker holding a question placard waves it gently. The camera sways slowly around the chosen angle and holds for four seconds after the user drags or presses an arrow key. Idle motion never moves the folder, a lamp or a station, so it carries no information about the application. Hidden documents suspend drawing. System reduced motion or disabling “Animate the workshop crew and camera” under Settings → Automation → Workshop display stops all of it and holds the static poses. User-directed rotation and native controls remain available.
 
 If local Qt WebEngine or WebGL is unavailable, or the render process or context is lost, Qt paints four stills with a station underline or the native assessment bands and flags. The caption and inspector supply the text. List is always available. Keep the web channel display-only. It receives IDs, a company or hostname, station and aggregate dispositions. It can select a visible row or explain a station. Form values, full questions, documents and credentials belong outside the scene. [Projection and fallback](gui/workshop.py) · [Local channel](gui/crew/connect.js) · [Classic checkpoints](core/automation/engine.py) · [Request-mode checkpoints](core/automation/request_engine.py)
 
@@ -321,7 +321,7 @@ Give icon-only or ellipsis controls an accessible name and tooltip. Show selecti
 
 ### Don't
 
-- Don't advance a station on a timer, animate an idle queue or use the demo timeline as engine state.
+- Don't advance a station on a timer, move the folder or a lamp without an engine checkpoint, or use the demo timeline as engine state.
 - Don't represent an optional omission as a verified value, a send attempt as a receipt or a manual attestation as machine evidence.
 - Don't put personal form contents or a submit action in the scene bridge.
 

@@ -3,15 +3,14 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QGuiApplication, QKeySequence, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog,
     QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QScrollArea,
-    QSizePolicy, QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
+    QFrame, QSizePolicy, QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
-from core.automation.accounts import login_address
 from core.automation.assistant import ai_config
 from core.automation.recipes import build_from_capture, recipe_for
 from core.automation.self_teach import consent_text
@@ -258,6 +257,7 @@ class TasksView(QWidget):
         self.service = AutomationService(self.store, self)
         self.service.progress.connect(self.on_progress)
         self.service.finished.connect(self.on_finished)
+        self.service.resume_ready.connect(self.resume_after_verification)
         self.tasks = []
         self._checked_ids = set()
         self._queue = []
@@ -318,11 +318,19 @@ class TasksView(QWidget):
         titles.addWidget(self.stats)
         row.addLayout(titles, 1)
         self.scene_modes = QButtonGroup(self)
+        segments = QFrame()
+        segments.setObjectName("segments")
+        segments.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        segment_row = QHBoxLayout(segments)
+        segment_row.setContentsMargins(3, 3, 3, 3)
+        segment_row.setSpacing(2)
         for index, text in enumerate(("Workshop", "Bar field", "List")):
             mode = button(text, variant="segment")
             mode.setCheckable(True)
             self.scene_modes.addButton(mode, index)
-            row.addWidget(mode)
+            segment_row.addWidget(mode)
+        row.addWidget(segments)
+        row.addSpacing(6)
         saved_mode = self.store.get("application_view", "Workshop")
         self.scene_modes.button({"Bar field": 1, "List": 2}.get(saved_mode, 0)).setChecked(True)
         self.scene_modes.idClicked.connect(self.switch_scene)
@@ -573,6 +581,8 @@ class TasksView(QWidget):
 
         body.addSpacing(4)
         self.tracking_toggle = QToolButton()
+        self.tracking_toggle.setObjectName("disclosure")
+        self.tracking_toggle.setIconSize(QSize(9, 9))
         self.tracking_toggle.setText("Tracking and notes")
         self.tracking_toggle.setCheckable(True)
         self.tracking_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -856,7 +866,7 @@ class TasksView(QWidget):
         self.pause_btn.setVisible(active)
         sent = bool(run) and receipt_unconfirmed(run)
         ready = idle and status == "ready_for_review" and not sent
-        self.start_btn.setText("Check receipt" if sent else "I've verified my account" if run and awaiting_verification(run) else {"needs_input": "Resume", "failed": "Retry", "cancelled": "Restart"}.get(status, "Start"))
+        self.start_btn.setText("Check receipt" if sent else "Continue after verification" if run and awaiting_verification(run) else {"needs_input": "Resume", "failed": "Retry", "cancelled": "Restart"}.get(status, "Start"))
         self.start_btn.setVisible(idle and (sent or status in {"queued", "needs_input", "failed", "cancelled"}))
         self.replace_btn.setVisible(idle and not sent and any(i.kind == "link" for i in run.interventions))
         self.answer_btn.setVisible(idle and any(i.question for i in run.interventions))
@@ -1110,21 +1120,16 @@ class TasksView(QWidget):
         try:
             profile = run.profile_snapshot or ApplicantProfile.model_validate(self.store.get("verified_profile", {}))
             credential = None
-            if ats_name(run.job_url) == "Workday":
-                vault = self.store._vault()
-                if awaiting_verification(run):
-                    # The user confirmed the emailed link, so the new account gets exactly one sign-in attempt.
-                    vault.set_account_state(run.job_url, "verified")
-                    run.authentication_attempted = False
-                    self.store.save_run(run)
-                # ponytail: op runs on the GUI thread (about a second of network), move to a worker if it gets noticeable.
-                credential = vault.credential(run.job_url)
-                # Request mode only signs in; it never creates accounts.
-                if not credential and run.mode == "classic" and self.store.get("auto_create_workday_accounts", False):
-                    # 1Password generates and stores the password before the browser sees it, so it can never be lost.
-                    username = login_address(site_key(run.job_url), profile.email, self.store.get("catchall_domain", ""), self.store.get("catchall_format", ""))
-                    vault.save_credential(run.job_url, username, None, "new")
-                    credential = vault.credential(run.job_url)
+            choice = next((i for i in run.interventions if i.field_key == '1password-item' and i.options), None)
+            if choice and run.account:
+                selected, ok = QInputDialog.getItem(self, 'Choose employer login', '1Password login for this employer:', choice.options, 0, False)
+                if not ok:
+                    return
+                run.account.item_id = selected.split(']', 1)[0].lstrip('[')
+                self.store.save_run(run)
+            if awaiting_verification(run):
+                run.verification_continued = True
+                self.store.save_run(run)
             if self.service.start(run.model_copy(deep=True), profile, credential, inspect_only=inspect_only):
                 self._active_id = run.id
                 run.work_phase = "intake"
@@ -1133,7 +1138,7 @@ class TasksView(QWidget):
                 run.interventions = []
                 self.render()
                 self.notify("Rechecking the draft, then sending it if it still matches what you approved." if run.approved_review else
-                            "Preparing the application in Chromium. The employer may ask you to sign in again. Nothing is sent until you approve it.")
+                            "Preparing the application in Chromium. The employer may ask you to sign in again. Your application stays a draft until you approve submission.")
         except Exception as exc:
             run.status = "failed"
             # RuntimeErrors carry 1Password or keychain setup steps and never contain secrets.
@@ -1148,6 +1153,17 @@ class TasksView(QWidget):
                 self.tasks[index] = run
                 break
         self.render()
+
+    def resume_after_verification(self, run):
+        if self._closing:
+            return
+        current = self.store.get_run(run.id)
+        if not current or current.status != 'queued':
+            return
+        self.on_progress(run)
+        if run.id not in self._queue:
+            self._queue.append(run.id)
+        self._start_next()
 
     def on_finished(self, run):
         self.on_progress(run)
@@ -1167,8 +1183,8 @@ class TasksView(QWidget):
                 text = message.format(run.company or site_key(run.job_url))
             elif awaiting_verification(run):
                 name = run.company or site_key(run.job_url)
-                message, title = "Verify the Workday email for {}, then click I've verified my account.", "Verify your Workday email"
-                text = f"{name}: open the verification link, then click I've verified my account in Intern-Bot."
+                message, title = "Verify the employer email for {}, then choose Continue after verification.", "Verify your employer email"
+                text = f"{name}: open the verification link, then choose Continue after verification in Intern-Bot."
             self.notify(message.format(name), tone)
             if title and not stopped:
                 desktop_notification(title, text)  # Once per finish, so a job waiting on you reaches you away from the window.
@@ -1253,6 +1269,8 @@ class TasksView(QWidget):
             self.notify("That job is already in your list, so the existing application is open.", "warning")
             return
         run.listing_url = run.listing_url or (run.job_url if job_identity(url) != job_identity(run.job_url) else "")
+        run.account = None
+        run.authentication_attempted = run.registration_attempted = run.login_attempted = run.verification_continued = False
         run.job_url, run.fields, run.completed_sections, run.steps, run.step, run.stage = url, {}, [], [], -1, "start"
         run.status, run.interventions, run.approved_review = "queued", [], {}
         self.store.record_event(run.id, "link_replaced", run.stage, f"Now applying through {site_key(url)}.")

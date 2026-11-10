@@ -9,18 +9,26 @@ async function send(binding, command, payload = {}) {
 globalThis.internBot = {
   async command({command, run, binding, payload = {}}) {
     if (command === 'discover') {
-      const tabs = (await chrome.tabs.query({})).filter(t => t.url === payload.url);
+      let tabs = (await chrome.tabs.query({})).filter(t => t.url === payload.url);
+      if(tabs.length>1&&payload.nonce){
+        const selected=[];
+        for(const tab of tabs){
+          try{if((await chrome.tabs.sendMessage(tab.id,{command:'identify',nonce:payload.nonce},{frameId:0}))?.matches)selected.push(tab);}catch{}
+        }
+        tabs=selected;
+      }
       if (tabs.length !== 1) return {matches: [], problem: 'A unique application tab could not be identified.'};
       const frames = await chrome.webNavigation.getAllFrames({tabId: tabs[0].id});
-      const matches = [];
+      const matches = [], accounts = [];
       for (const frame of frames) {
         if (!frame.url.startsWith('https://')) continue;
         try {
           const result = await chrome.tabs.sendMessage(tabs[0].id, {command: 'detect', document: frame.documentId, recipes: payload.recipes || []}, {documentId: frame.documentId});
           for (const adapter of result.adapters || []) matches.push({tab: tabs[0].id, frame: frame.frameId, document: frame.documentId, url: frame.url, adapter});
+          if(result.account?.page || result.account?.signed_in)accounts.push({tab:tabs[0].id,frame:frame.frameId,document:frame.documentId,url:frame.url,adapter:{id:'account',name:'Employer account'},account:result.account});
         } catch { /* A loading or inaccessible frame cannot receive personal data. */ }
       }
-      return {matches};
+      return {matches,accounts};
     }
     if (command === 'prepare') {
       const previous = (await chrome.storage.session.get(key(run)))[key(run)];
