@@ -4,7 +4,7 @@ from pathlib import Path
 
 from core.automation.answers import resolve
 from core.automation.fields import FormField
-from core.automation.models import normalized
+from core.automation.models import normalized, same_choice
 
 
 def workday_review_error(previous, summary, profile, run, answers):
@@ -19,9 +19,10 @@ def workday_review_error(previous, summary, profile, run, answers):
                           group=assessment.group, row=assessment.row, required=assessment.required,
                           split_phone=normalized(assessment.label) == 'phone number' and any(normalized(a.label) == 'country phone code' for a in previous))
         answer = resolve(field, profile, run, answers)
-        if answer.value is None and not answer.omit:
+        if answer.value is None and not answer.omit and assessment.disposition != 'intentionally_omitted':
             return f'The approved answer for {field.label} is no longer available.'
-        value = '' if answer.omit else Path(str(answer.value)).name if field.kind == 'file' else answer.value
+        # A field left blank (an unanswered optional question) is expected blank on the review.
+        value = '' if answer.omit or assessment.disposition == 'intentionally_omitted' else Path(str(answer.value)).name if field.kind == 'file' else answer.value
         key = (normalized(field.label), field.group, field.row)
         if key in expected and expected[key] != value:
             return f'Conflicting preparation checkpoints: {field.label}.'
@@ -76,8 +77,10 @@ def workday_review_error(previous, summary, profile, run, answers):
         expected[email] = profile.email
     for key in expected.keys() | actual.keys():
         value = expected.get(key)
+        if value == '' and key not in actual:
+            continue  # The review may leave out a field that was left blank.
         accepted = ({'yes', 'true', 'checked'} if value else {'no', 'false', 'unchecked'}) if isinstance(value, bool) else {normalized(str(value))}
-        if key not in expected or key not in actual or actual[key] not in accepted:
+        if key not in expected or key not in actual or actual[key] not in accepted and (isinstance(value, bool) or not same_choice(actual[key], value)):
             return f'Cannot reconcile {key[0]} on the saved review.'
     return ''
 

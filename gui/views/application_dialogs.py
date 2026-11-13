@@ -17,7 +17,7 @@ from gui.theme import form_layout, MessageBar, ReadableTree, button, card, dot_i
 
 BOOLEAN_FIELDS = {"work_authorized", "requires_sponsorship", "hispanic_or_latino"}
 ROW_BOOLEANS = {"current", "fluent"}
-LONG_FIELDS = {"summary", "cover_letter"}
+LONG_FIELDS = {"summary", "cover_letter", "standing_answers"}
 FILE_FIELDS = {"resume_path": "Choose resume", "cover_letter_path": "Choose cover letter"}
 TABLES = {"education": (Education, "Add education"), "experience": (Experience, "Add experience"), "language_proficiency": (Language, "Add language")}
 DATE_HINT = "Use dates in the format your target forms expect, such as 2026-05."
@@ -27,6 +27,7 @@ SECTIONS = [
     ("Documents", "Uploaded with their original bytes and file type.", ["resume_path", "cover_letter_path", "cover_letter"]),
     ("Links", "", ["linkedin_url", "github_url", "portfolio_url"]),
     ("Citizenship & eligibility", "For Singapore jobs, work authorization defaults to Yes. Leave a field blank or Unknown to answer for each application.", ["work_authorized", "requires_sponsorship", "citizenship", "nationality", "employment_age"]),
+    ("Standing answers", "Statements that are true for every application. The AI provider you set up reads them to answer declarations such as relatives at the employer, criminal record or citizenship. Its answers stay unconfirmed until you review them.", ["standing_answers"]),
     ("About you", "", ["summary", "skills", "languages"]),
     ("Education", DATE_HINT, "education"),
     ("Experience", DATE_HINT, "experience"),
@@ -49,6 +50,7 @@ LABELS = {
     "work_authorized": ("Authorized to work in job's country", ""), "requires_sponsorship": ("Will require visa sponsorship", ""),
     "citizenship": ("Citizenship (country)", "e.g. Singapore"), "nationality": ("Nationality", "e.g. Singaporean"),
     "employment_age": ("Age", "Only if a form requires it"),
+    "standing_answers": ("Statements", "I am a Singapore citizen (pink IC).\nI am not related to any employee, director or shareholder of any employer I apply to."),
     "summary": ("Summary", ""), "skills": ("Skills", "Python, SQL, Figma"), "languages": ("Languages spoken", "English, Spanish"),
     "gender": ("Gender", ""), "race_ethnicity": ("Race or ethnicity", ""), "hispanic_or_latino": ("Hispanic or Latino", ""),
     "veteran_status": ("Veteran status", ""), "disability_status": ("Disability status", ""),

@@ -1,6 +1,7 @@
 from dataclasses import dataclass, replace
 from datetime import datetime
 import re
+from types import SimpleNamespace
 
 from core.automation.models import ApplicantProfile, ApplicationRun, Language, employer_key, normalized
 
@@ -55,10 +56,14 @@ ALIASES = {
     "veteran status": "veteran_status", "disability status": "disability_status",
 }
 ROW_ALIASES = {
-    "language_proficiency": {"language": "language", "proficiency": "proficiency", "fluent": "fluent", "native language": "fluent", "i am fluent in this language": "fluent", "i am fluent in this language.": "fluent"},
+    # Workday asks a level per skill on its own scale ("2 - Fair"); the row's one level answers each, and the AI repair rewords it
+    # into that scale once per employer.
+    "language_proficiency": {"language": "language", "proficiency": "proficiency", "fluent": "fluent", "native language": "fluent", "i am fluent in this language": "fluent", "i am fluent in this language.": "fluent",
+                             "speaking": "proficiency", "writing": "proficiency", "reading": "proficiency", "comprehension": "proficiency", "overall": "proficiency"},
     "education": {"school": "school", "school or university": "school", "degree": "degree",
                   "field of study": "major", "major": "major", "gpa": "gpa", "currently attending": "current", "from": "start_date", "to": "end_date",
                   "start date": "start_date", "end date": "end_date"},
+    "websites": {"url": "url"},
     "experience": {"company": "employer", "employer": "employer", "job title": "job_title",
                    "location": "location", "from": "start_date", "to": "end_date",
                    "start date": "start_date", "end date": "end_date", "role description": "description",
@@ -162,6 +167,9 @@ def profile_rows(profile, group):
     rows = getattr(profile, group, [])
     if group == 'language_proficiency' and not rows:
         return [Language(language=name.strip()) for name in re.split(r'[,;\n]', profile.languages) if name.strip()]
+    if group == 'websites':
+        # The order Workday's adapter adds website rows in (speedy_profile's websiteData).
+        return [SimpleNamespace(url=url) for url in (profile.linkedin_url, profile.github_url, profile.portfolio_url) if url]
     return rows
 
 
@@ -179,7 +187,10 @@ def approved(field, matches, profile):
     priority = {"application": 0, "employer": 1, "global": 2}
     best = min(priority[a.scope] for a in matches)
     matches = [a for a in matches if priority[a.scope] == best]
-    matches = [a for a in matches if a.origin == "you"] or matches  # Your own answer outranks the AI's.
+    mine = [a for a in matches if a.origin == "you"]
+    # Your own answer outranks the AI's, except an AI answer that only rewords it into the form's option; changing yours ends that.
+    reworded = [a for a in matches if a.rewords and any(normalized(a.rewords) == normalized(str(m.value)) for m in mine)]
+    matches = reworded or mine or matches
     if len({(str(a.value), a.fact, a.omit) for a in matches}) != 1:
         return Resolution(reason="Conflicting approved answers; edit the answer bank.")
     a = matches[-1]

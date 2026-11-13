@@ -448,7 +448,7 @@ def test_desktop_workflow_pauses_asks_and_reaches_review_without_submitting(wind
     app = QApplication.instance()
     url = 'https://boards.greenhouse.io/fixture/jobs/GUI_R1'
     fixture = (FIXTURES / 'greenhouse.html').read_text().replace('</form>',
-        '<label>Available for this internship?<input type="checkbox"></label><button type="button" id="submit_app" onclick="window.submissions++">Submit Application</button></form><script>window.submissions=0</script>')
+        '<label>Available for this internship?<input type="checkbox" aria-required="true"></label><button type="button" id="submit_app" onclick="window.submissions++">Submit Application</button></form><script>window.submissions=0</script>')
     requests = []
     original_goto = Page.goto
     async def intercepted_goto(page, destination, **kwargs):

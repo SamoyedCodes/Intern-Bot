@@ -1,6 +1,13 @@
 /* Adapter writes are proposals; only exact desktop-resolved facts may reach the DOM. */
 (() => {
   const normalize = value => String(value ?? '').trim().replace(/[\s*:✱✳]+$/g, '').replace(/\s+/g, ' ').toLowerCase();
+  // A listed option may differ from the approved answer only in punctuation ("Mr" picks "Mr."); an exact wording always wins.
+  const loose = value => normalize(value).replace(/[^\p{L}\p{N}]+/gu, '');
+  const same = (a, b) => normalize(a) === normalize(b) || !!loose(b) && loose(a) === loose(b);
+  const optionsFor = (items, value, text = o => o.innerText || o.textContent) => {
+    const exact = items.filter(o => normalize(text(o)) === normalize(value));
+    return exact.length ? exact : items.filter(o => !!loose(value) && loose(text(o)) === loose(value));
+  };
   const native = {MutationObserver};
   for (const name of ['setTimeout','clearTimeout','setInterval','clearInterval','requestAnimationFrame','cancelAnimationFrame']) native[name]=window[name].bind(window);
   let active;
@@ -63,7 +70,7 @@
     const readable = e => e instanceof HTMLSelectElement ? (e.value ? e.selectedOptions[0]?.textContent || '' : '') : ['checkbox','radio'].includes(e.type) ? e.checked : e.matches?.('button[aria-haspopup=listbox]') ? shownChoice(e) : e.value ?? e.textContent;
     // Employers reformat phone numbers ("55512345" becomes "5551 2345").
     const phone = p => /^profile:phone(_number)?$/.test(p.ref || ''), digits = v => String(v ?? '').replace(/\D/g, '');
-    const matches = (e, p) => e.type === 'radio' ? e.checked === (normalize(e.labels?.[0]?.textContent || e.getAttribute('aria-label') || e.value) === normalize(p.value)) : e.type === 'checkbox' ? e.checked === p.value : phone(p) || e.type === 'tel' ? digits(readable(e)) === digits(p.value) : normalize(readable(e)) === normalize(p.value);
+    const matches = (e, p) => e.type === 'radio' ? e.checked === (normalize(e.labels?.[0]?.textContent || e.getAttribute('aria-label') || e.value) === normalize(p.value)) : e.type === 'checkbox' ? e.checked === p.value : phone(p) || e.type === 'tel' ? digits(readable(e)) === digits(p.value) : e instanceof HTMLSelectElement || e.matches?.('button[aria-haspopup=listbox]') ? same(readable(e), p.value) : normalize(readable(e)) === normalize(p.value);
     function assign(e, key, value) {
       if (!dom(e)) { e[key] = value; return value; }
       if (!live()) return value;
@@ -78,12 +85,13 @@
       if (e.type === 'password') { report('verification', 'Complete employer sign-in in the browser.'); return value; }
       if (e.type === 'file' || key === 'files') { void upload(value, e); return value; }
       const existing = readable(e);
-      if (existing !== '' && existing !== false && !matches(e,p) && !p.replace && !siteFilled(e)) {
+      // A Workday prompt's box holds search text, not the answer (its chosen items are), so typing a search never conflicts.
+      if (existing !== '' && existing !== false && !matches(e,p) && !p.replace && !siteFilled(e) && !prompt(e)) {
         report('conflict', 'Existing browser value conflicts with the profile. Resolve it before resuming.', p.key); denied.add(e); return value;
       }
       let desired = p.value;
       if (e instanceof HTMLSelectElement) {
-        const options = [...e.options].filter(o=>normalize(o.textContent)===normalize(desired));
+        const options = optionsFor([...e.options], desired, o=>o.textContent);
         if (options.length !== 1) {report('answer', 'The exact approved option is not offered by this form.',p.key);return value;}
         desired = options[0].value;key='value';
       } else if (e.type === 'radio') {desired = normalize(e.labels?.[0]?.textContent || e.getAttribute('aria-label') || e.value) === normalize(p.value);key='checked';}
@@ -147,9 +155,9 @@
         if(picker && !p){proposals.set(picker,{key:'option',value:e});return;}
         // A react-select left blank on purpose or still unanswered: the adapter's guess is dropped and its menu closed; verification asks.
         if(p&&(p.omit||p.value==null)&&reactSelect(picker)){close(picker);return;}
-        if(!p || normalize(e.innerText || e.textContent)!==normalize(p.value)){
+        if(!p || !same(e.innerText || e.textContent, p.value)){
           // The adapter guesses options from the profile; an approved value selects its own exact option instead.
-          const exact=p&&!p.omit&&p.value!=null&&p.value!==''?[...(e.closest('[role=listbox]')?.querySelectorAll('[role=option]')||[])].filter(o=>normalize(o.innerText||o.textContent)===normalize(p.value)):[];
+          const exact=p&&!p.omit&&p.value!=null&&p.value!==''?optionsFor([...(e.closest('[role=listbox]')?.querySelectorAll('[role=option]')||[])],p.value):[];
           if(exact.length!==1){report('answer','Choose the exact approved dropdown option manually.',p?.key||'');return;}
           e=exact[0];
         }
@@ -317,9 +325,9 @@
     }
     async function reactChoose(e,p){
       const shown=reactShown(e);
-      if(normalize(e.getAttribute('data-intern-chosen'))===normalize(p.value)&&e.getAttribute('data-intern-shown')===shown||normalize(shown)===normalize(p.value))return false;
+      if(same(e.getAttribute('data-intern-chosen'),p.value)&&e.getAttribute('data-intern-shown')===shown||same(shown,p.value))return false;
       if(shown&&!p.replace)return false;
-      const exact=(await reactOptions(e,String(p.value))).filter(o=>normalize(o.textContent)===normalize(p.value));
+      const exact=optionsFor(await reactOptions(e,String(p.value)),p.value,o=>o.textContent);
       if(exact.length!==1){typeText(e,'');e.blur();return false;}
       exact[0].click();lastChange=performance.now();
       for(let i=0;i<10&&reactShown(e)===shown;i++)await pause(100);
@@ -328,9 +336,9 @@
       noteChoice(e,exact[0].textContent.trim());
       return true;
     }
+    const promptResults = e => {const id=CSS.escape(e.getAttribute('data-uxi-multiselect-id'));return [...document.querySelectorAll(`[data-uxi-popup-anchor="${id}"] [role=option],[data-associated-widget="${id}"] [role=option]`)];};
     async function search(e,query){
-      const id=CSS.escape(e.getAttribute('data-uxi-multiselect-id'));
-      const results=()=>[...document.querySelectorAll(`[data-uxi-popup-anchor="${id}"] [role=option],[data-associated-widget="${id}"] [role=option]`)];
+      const results=()=>promptResults(e);
       e.focus();typeText(e,query);
       const stale=new Set(results());
       for(const name of ['keydown','keypress','keyup'])e.dispatchEvent(new KeyboardEvent(name,{key:'Enter',code:'Enter',keyCode:13,bubbles:true,cancelable:true}));
@@ -338,13 +346,30 @@
       for(let i=0;i<30&&!(fresh=results().filter(o=>!stale.has(o))).length;i++)await pause(100);
       return fresh.filter(choice);
     }
+    // With nothing to search for, an opened prompt lists its top level; each category (an entry without a radio) lists its own choices once opened.
+    // ponytail: one level deep, within ~4.5 s for the bridge's 8 s limit; nested categories need a recursive walk.
+    async function browse(e){
+      const open=async()=>{close(e);await pause(150);e.click();for(let i=0;i<20&&!promptResults(e).length;i++)await pause(100);return promptResults(e);};
+      const top=await open(), found=top.filter(choice).map(optionText), deadline=performance.now()+4500;
+      for(const name of top.filter(o=>!choice(o)).map(optionText)){
+        if(!live()||performance.now()>deadline)break;
+        const category=(await open()).find(o=>!choice(o)&&optionText(o)===name);
+        if(!category)continue;
+        const stale=new Set(promptResults(e));category.click();
+        let inner=[];
+        for(let i=0;i<20&&!(inner=promptResults(e).filter(o=>!stale.has(o)&&choice(o))).length;i++)await pause(100);
+        found.push(...inner.map(optionText));
+      }
+      close(e);
+      return [...new Set(found)];
+    }
     // Restore the search text and close the results without choosing.
     const dismiss = (e,text) => {typeText(e,text);close(e);};
     async function pick(e,value){
-      const chosen=()=>selections(e).includes(normalize(value));
+      const chosen=()=>selections(e).some(s=>same(s,value));
       // A prompt that already shows a selection is left to verification.
       if(selections(e).length)return false;
-      const text=e.value, exact=(await search(e,value)).filter(o=>normalize(optionText(o))===normalize(value));
+      const text=e.value, exact=optionsFor(await search(e,value),value,optionText);
       if(chosen())return true; // Workday may select a lone result itself.
       if(exact.length!==1){dismiss(e,text);return false;}
       choice(exact[0]).click();lastChange=performance.now();
@@ -426,9 +451,9 @@
       const add=(label,value,node)=>{
         if(!node||!visible(node)||seen.has(node))return;
         seen.add(node);
-        const container=node.closest('[aria-labelledby="Work-Experience-section"],[aria-labelledby="Education-section"],[aria-labelledby="Languages-section"]');
-        const group={'Work-Experience-section':'experience','Education-section':'education','Languages-section':'language_proficiency'}[container?.getAttribute('aria-labelledby')]||'';
-        const rows=container?[...container.querySelectorAll('[role=group][aria-labelledby$="-panel"]')]:[];
+        const container=node.closest('[aria-labelledby="Work-Experience-section"],[aria-labelledby="Education-section"],[aria-labelledby="Languages-section"],[aria-labelledby="Websites-section"]');
+        const group={'Work-Experience-section':'experience','Education-section':'education','Languages-section':'language_proficiency','Websites-section':'websites'}[container?.getAttribute('aria-labelledby')]||'';
+        const rows=container?[...container.querySelectorAll('[role=group][aria-labelledby$="-panel"],[aria-labelledby^="Websites-"][aria-labelledby$="-panel"]')]:[];
         if(group==='education'&&normalize(label)==='to (actual or expected)')label='To';
         result.push({label,value:normalize(value)==='no response'?'':value,group,row:Math.max(0,rows.findIndex(r=>r.contains(node))),layout:'workday'});
       };
@@ -452,7 +477,6 @@
     }
     const observer=new native.MutationObserver(records=>{if(records.some(r=>r.type==='childList'||r.attributeName!=='data-intern-control'))lastChange=performance.now();});
     observer.observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-invalid','disabled','hidden','aria-busy']});observers.add(observer);
-    timers.add(native.setTimeout(()=>{if(live()){report('browser','The adapter reached its bounded wait limit. Inspect the form and resume.');stop();expired=true;}},20000));
     window.addEventListener('unhandledrejection',fail,{signal:abort.signal});
     const authControls=()=>internAccount.controls();
     return {
@@ -480,20 +504,36 @@
       },
       start() {
         if(started)throw Error('Adapter already started');started=true;status='in-progress';
+        // The adapter's deadline runs from its start; a direct fill (config.direct) never starts it, so it has none (seen live: it fired mid-verification).
+        timers.add(native.setTimeout(()=>{if(live()){report('browser','The adapter reached its bounded wait limit. Inspect the form and resume.');stop();expired=true;}},20000));
         const adapter=site||createSpeedyAdapters(R).find(a=>a.id===config.adapter);
         if(!adapter)throw Error('Unknown adapter');
         const ctx={addEventListener:(target,...args)=>R.call(target,'addEventListener',args),onInvalidated:fn=>abort.signal.addEventListener('abort',fn,{once:true})};
         Promise.resolve(adapter.script({getProfile:async()=>config.profile,setMessage:message=>{if(live())status=message||status;},autofillSettings:{autoClickNextPage:true,autoSubmit:true,saveApplications:false,saveResponses:false},accountSettings:{accountEmail:"",accountPassword:""},ctx})).catch(fail);
       },
       snapshot(){return {summary:reviewSummary(),errors:(/\bVPS\|[0-9a-f-]{36}\b/i.test(document.body.innerText)||/something went wrong[\s\S]*please refresh the page and then try again/i.test(document.body.innerText)?1:0)+[...document.querySelectorAll('[role=alert],.field-error-msg,.form-error,[data-automation-id=inputError],[data-automation-id=inputAlert]')].filter(isError).length,status,live:live(),settled:performance.now()-lastChange>350&&timers.size<=1&&!site?.busy?.(policyOf),proposals:proposals.size,expired,events,problems:[...problems.values()],actions:[...actions].filter(([,a])=>a.element.isConnected&&visible(a.element)&&!a.element.disabled).map(([id,a])=>({id,kind:a.kind})),url};},
+      // The desktop retypes this control with real keystrokes when the site never registered its filled value; the mark lets it find the control.
+      mark(selector){
+        const e=handles.get(selector);
+        document.querySelectorAll('[data-intern-retype]').forEach(x=>x.removeAttribute('data-intern-retype'));
+        if(!e?.isConnected||!e.matches('input,textarea'))return false;
+        e.setAttribute('data-intern-retype','');return true;
+      },
       async options(selector,query){
         const e=handles.get(selector);
         if(site?.custom?.(e))return site.options(e,query);
         if(prompt(e)){
           const text=e.value;
-          if(!(query||text))return [];
-          const found=await search(e,query||text);dismiss(e,text);
-          return found.map(optionText);
+          if(!(query||text))return browse(e);
+          // A long answer worded unlike every choice finds nothing ("Data Science and Analytics; Second Major"); its first words find
+          // the choices it means. Two searches at most: one that finds nothing waits ~3 s, inside the bridge's 8 s limit.
+          const words=String(query||text).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+          for(const q of new Set([String(query||text),words.slice(0,2).join(' ')].filter(Boolean))){
+            const found=await search(e,q);
+            if(found.length){dismiss(e,text);return found.map(optionText);}
+          }
+          dismiss(e,text);
+          return [];
         }
         // A typeahead (Ashby's location) lists suggestions only for typed text: the approved answer, else what is already typed.
         if(e?.isConnected&&e.matches('input[role=combobox],input[aria-haspopup=listbox]')){
@@ -531,12 +571,12 @@
           }
           if(prompt(e)){if(await pick(e,String(p.value)))chosen++;continue;}
           if(reactSelect(e)){if(await reactChoose(e,p))chosen++;continue;}
-          if(!e.matches('button[aria-haspopup=listbox]')||shown()===normalize(p.value))continue;
+          if(!e.matches('button[aria-haspopup=listbox]')||same(shown(),p.value))continue;
           if(shown()&&shown()!=='select one'&&!p.replace)continue;
-          const exact=(await listbox(e)).filter(o=>normalize(o.innerText||o.textContent)===normalize(p.value));
+          const exact=optionsFor(await listbox(e),p.value);
           if(exact.length!==1){close(e);continue;}
           exact[0].click();chosen++;lastChange=performance.now();
-          for(let i=0;i<10&&shown()!==normalize(p.value);i++)await pause(100);
+          for(let i=0;i<10&&!same(shown(),p.value);i++)await pause(100);
         }
         return chosen;
       },
@@ -671,6 +711,7 @@
       else if(message.command==='auth_page')result=active.authPage();
       else if(message.command==='options')result.options=await active.options(message.payload.selector,message.payload.query);
       else if(message.command==='choose')result.chosen=await active.choose();
+      else if(message.command==='mark')result.marked=active.mark(message.payload.selector);
       else if(message.command==='authenticate')await active.authenticate(message.payload.credential);
       else if(message.command==='validate_authentication')await active.authenticate(message.payload.credential,false);
       respond({...result,token:message.token,document:message.document});

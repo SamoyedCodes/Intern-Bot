@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 from core.automation.answers import UNANSWERED, applicable, linked, question_for, resolve
 from core.automation.assistant import ai_config, askable, autofill, matchable
-from core.automation.models import CHECKING_LOGIN, CREATING_ACCOUNT, SAVING_LOGIN, SIGNING_IN, ApplicantProfile, ApprovedAnswer, FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url, account_context, application_scope
+from core.automation.models import CHECKING_LOGIN, CREATING_ACCOUNT, SAVING_LOGIN, SIGNING_IN, CHOICE_KINDS, ApplicantProfile, ApprovedAnswer, FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url, account_context, application_scope, same_choice
 from core.automation.accounts import login_address
 from core.automation.journey import ApplicationJourney
 from pathlib import Path
@@ -22,6 +22,8 @@ from core.storage.onepassword import AmbiguousLogins
 ENGINE_VERSION = 'speedyapply-local-2.28.0-v2'
 SIGN_IN_HANDOFF = 'Complete employer sign-in or activation in Chromium, then resume. Saved credentials remain in 1Password; an existing authentication attempt will not be repeated.'
 ACTIVATION_HANDOFF = "Check {} for the employer's verification email and open its link, then choose Continue after verification."
+# Controls the desktop may retype with real keystrokes when the form shows the approved value but rejected it.
+TYPED_KINDS = {'text', 'textarea', 'spinbutton', 'tel', 'email', 'url', 'number', 'date'}
 REJECTED_ACCOUNT = "The employer didn't accept the new account. It may already exist: sign in or reset the password in Chromium, save that login under Profile → Employer accounts, then resume."
 
 
@@ -41,7 +43,7 @@ class ApplicationEngine:
         self._pause = self._cancel = False
         self.bridge = None
         self.recipe = None  # the approved site recipe driving an otherwise unsupported site
-        self.asked = set()  # Normalized labels already sent for AI matching during this run.
+        self.retyped = set()  # Fields already retyped with real keystrokes by this engine.
         self.account_credential = None
         self.verification_returned = False
 
@@ -108,6 +110,7 @@ class ApplicationEngine:
             returned_to_job = False
             stalls = 0
             verification_retries = 0
+            repaired = set()  # Sections filled again after an AI repair; each gets one.
             def stage_of(match, result, fields):
                 section = match['url'] + '|' + (result.get('section') or '|'.join(f.key for f in fields))
                 return match['adapter']['name'] + ':' + hashlib.sha256(section.encode()).hexdigest()[:10]
@@ -229,14 +232,22 @@ class ApplicationEngine:
                     settled = await self.wait_for_section(run, profile)
                 # Each choose stays inside the bridge's command limit; repeat while it still selects approved options.
                 for _ in range(5):
-                    if not settled or self._pause or self._cancel or not (await bridge.command('choose')).get('chosen'):
+                    if not settled or self._pause or self._cancel:
                         break
+                    chosen = (await bridge.command('choose')).get('chosen')
+                    # A search that found no exact option still leaves the site busy (seen on Keppel's Workday picker), so it settles first too.
                     settled = await self.wait_for_section(run, profile)
+                    if not chosen:
+                        break
                 if not settled or self._pause or self._cancel:
                     return run
                 self.report_phase(run, 'verify')
                 scanned = await bridge.command('scan')
                 fields = [FormField(**f) for f in scanned['fields']]
+                if await self.retype(run, profile, fields):
+                    await asyncio.sleep(.6)  # Let the site re-validate before the section is read back.
+                    scanned = await bridge.command('scan')
+                    fields = [FormField(**f) for f in scanned['fields']]
                 await asyncio.sleep(.35)
                 check = await bridge.command('snapshot')
                 confirmed = [FormField(**f) for f in (await bridge.command('scan'))['fields']]
@@ -273,6 +284,13 @@ class ApplicationEngine:
                     self.intervene(run, problem['message'], problem['kind'], field)
                 if not verified or problems:
                     await self.list_options(run, profile, fields)
+                    if run.stage not in repaired and await self.repair(run, profile, fields):
+                        # The AI named listed options for questions still open: fill the section again with them, once.
+                        repaired.add(run.stage)
+                        run.intervention_count -= len(run.interventions)
+                        run.interventions = []
+                        await bridge.stop()
+                        continue
                     return run
                 if settled.get('errors'):
                     self.intervene(run, 'The application reports validation errors. Correct them before continuing.', 'validation')
@@ -605,40 +623,74 @@ class ApplicationEngine:
         ids = {'answer:' + a.id for a in self.store.answers() if a.origin == 'ai'}
         return sum(f.answer_ref in ids for f in run.fields.values())
 
-    async def ai_autofill(self, run, profile, fields):
-        """Ask the optional AI provider about unanswered factual questions and record what it can answer from your own data."""
+    async def ai_autofill(self, run, profile, fields, listed=False):
+        """Ask the optional AI provider about unanswered factual questions and record what it can answer from your own data.
+
+        listed: the fields carry options listed by opening their dropdowns after verification failed. Those questions are asked once more,
+        and an answer the form didn't take (no listed option has its wording) goes with them, so the reply can name the form's option for it.
+        Returns how many answers were saved."""
         answers = self.store.answers()
-        questions = {}
+        questions, current = {}, {}
+        asked, rows = {}, set()
         for field in fields:
-            if askable(field) and normalized(field.label) not in self.asked and resolve(field, profile, run, answers).reason == UNANSWERED:
-                question = questions.setdefault(field.label, replace(field, options=list(field.options)))
+            if not askable(field, bool(profile.standing_answers.strip())):
+                continue
+            found = resolve(field, profile, run, answers)
+            mismatched = listed and field.options and found.value is not None and not isinstance(found.value, bool) and not any(same_choice(o, found.value) for o in field.options)
+            # A row's listed question is asked and answered under its row's name ("Language — Chinese (Mandarin)"): saved under the bare
+            # label, an answer counts as the first row's (seen live: a match for the Mandarin row would have changed the English row).
+            name = question_for(field, profile) if listed and field.group else field.label
+            # A different answer the form didn't take is a new question for the AI; the same one is never sent twice.
+            key = normalized(name) + ('|listed' if listed else '') + ('=' + normalized(str(found.value)) if mismatched else '')
+            if key in run.ai_asked:
+                continue
+            if found.reason == UNANSWERED or mismatched:
+                asked[name] = key
+                if name != field.label:
+                    rows.add(name)
+                question = questions.setdefault(name, replace(field, label=name, options=list(field.options)))
                 if field.kind == 'radio' and field.option and field.option not in question.options:
                     question.options.append(field.option)  # Each radio button is its own field; the question offers them all.
+                if mismatched:
+                    current[name] = (found.value, found.ref)
         if not questions or not self.store.get('automation_options', {}).get('ai_match', True):
-            return
-        self.asked.update(map(normalized, questions))
+            return 0
         try:
             cfg = ai_config(self.store)
         except Exception:
             cfg = None  # The keychain could not be read; the questions are asked as usual.
         if not cfg:
-            return
+            return 0
+        if not cfg['facts']:
+            # Your answers, and the schools, employers and languages that name your rows, are career data: they leave only where career facts may.
+            questions = {label: q for label, q in questions.items() if label not in current and label not in rows}
+            current = {}
+            if not questions:
+                return 0
+        # Kept with the run, so a resume never sends the same question again.
+        run.ai_asked.extend(asked[label] for label in questions)
         known = [a for a in applicable(answers, profile, run) if matchable(a)]
         seconds = self.AI_LOCAL_SECONDS if cfg['local'] else self.AI_MATCH_SECONDS
         run.ai_requests += 1
         # The log records what kind of data left, never the content.
         self.store.record_event(run.id, 'ai_request', run.stage, f"{cfg['name']} {'on this Mac' if cfg['local'] else '(cloud)'}: "
-                                f"{len(questions)} question{'s' if len(questions) > 1 else ''}; career facts {'included' if cfg['facts'] else 'not sent'}.")
+                                f"{len(questions)} question{'s' if len(questions) > 1 else ''}; career facts {'included' if cfg['facts'] else 'not sent'}{'; standing answers included' if profile.standing_answers.strip() else ''}.")
         try:
-            results = await asyncio.wait_for(asyncio.to_thread(autofill, cfg, list(questions.values()), [a.question for a in known], profile), seconds)
+            results = await asyncio.wait_for(asyncio.to_thread(autofill, cfg, list(questions.values()), [a.question for a in known], profile,
+                                                               {label: value for label, (value, _) in current.items()}), seconds)
         except TimeoutError:
             self.store.record_event(run.id, 'ai_match_failed', run.stage, f'The AI did not answer within {seconds} s; these questions are asked instead.')
-            return
+            return 0
         except Exception as exc:
             # AI is a convenience: unanswered questions are still asked as usual.
             self.store.record_event(run.id, 'ai_match_failed', run.stage, str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
-            return
+            return 0
+        saved = 0
         for label, (kind, value) in results.items():
+            saved += 1
+            if label in current and kind != 'value':
+                saved -= 1
+                continue  # Only one of the listed options can replace an answer the form didn't take.
             if kind == 'saved':
                 answer = known[value]
                 answer.variants.append(label)
@@ -648,16 +700,63 @@ class ApplicationEngine:
             field = questions[label]
             if kind == 'fact':
                 found = linked(field, profile, value).value
-                if found is None or (field.options and not any(normalized(o) == normalized(str(found)) for o in field.options)):
+                if found is None or (field.options and not any(same_choice(o, found) for o in field.options)):
+                    saved -= 1
                     continue  # The profile's wording isn't one of the form's options; ask instead.
                 answer = ApprovedAnswer(question=label, fact=value, profile_name=run.profile_name, scope='global', origin='ai')
                 note = f'AI linked “{label}” to your profile ({value}).'
+            elif label in current:
+                # The form's own option for your answer, at your answer's scope; one for every employer is kept for this employer,
+                # whose form will list the same options next time.
+                mine, ref = current[label]
+                source = next((a for a in answers if 'answer:' + a.id == ref), None)
+                scope = 'employer' if source is None or source.scope == 'global' else source.scope
+                answer = ApprovedAnswer(question=label, value=value, profile_name=run.profile_name, scope=scope, rewords=str(mine),
+                                        scope_key=employer_key(run.job_url) if scope == 'employer' else source.scope_key, origin='ai')
+                note = f'AI matched your answer for “{label}” to the form\'s option “{value}”.'
             else:
-                # Derived from today's facts, so it applies to this application only.
+                # Derived from today's facts or statements, so it applies to this application only.
                 answer = ApprovedAnswer(question=label, value=value, profile_name=run.profile_name, scope='application', scope_key=run.id, origin='ai')
-                note = f'AI answered “{label}” from your career facts.'
+                note = f"AI answered “{label}” from your {'standing answers' if kind == 'standing' else 'career facts'}."
             self.store.save_answer(answer)
             self.store.record_event(run.id, 'answer_ai', run.stage, note + ' Confirm it under Answers.')
+        return saved
+
+    @staticmethod
+    def shows(field, value):
+        """Whether the control displays this value (a month spinbutton may show "06" for 6)."""
+        held, wanted = str(field.value), str(value)
+        return normalized(held) == normalized(wanted) or field.kind == 'spinbutton' and held.isdigit() and wanted.isdigit() and int(held) == int(wanted)
+
+    async def retype(self, run, profile, fields):
+        """Retype, with real keystrokes, approved values that a control shows but the site rejected.
+
+        Seen on Workday: a date part filled by the extension looks right, yet the form calls it invalid until a person types it."""
+        answers, typed = self.store.answers(), 0
+        binding = (self.bridge.binding or {}).get('url')
+        frame = next((f for f in self.bridge.page.frames if f.url == binding), self.bridge.page.main_frame)
+        for field in fields:
+            if not field.invalid or field.kind not in TYPED_KINDS or (run.stage, field.key) in self.retyped or self._pause or self._cancel:
+                continue
+            value = resolve(field, profile, run, answers).value
+            if value is None or isinstance(value, bool) or not self.shows(field, value):
+                continue
+            self.retyped.add((run.stage, field.key))
+            if not (await self.bridge.command('mark', {'selector': field.selector})).get('marked'):
+                continue
+            control = frame.locator('[data-intern-retype]')
+            text = f'{int(value):02d}' if field.kind == 'spinbutton' and normalized(field.label).endswith('month') and str(value).isdigit() else str(value)
+            try:
+                await control.click(timeout=2000)
+                await control.press('ControlOrMeta+a')
+                await control.press('Backspace')
+                await control.press_sequentially(text, delay=40)
+                await control.press('Tab')  # Workday saves date parts and text on blur.
+            except Exception:
+                continue  # The control moved or vanished; verification asks for it as before.
+            typed += 1
+            self.store.record_event(run.id, 'retyped', run.stage, f'The form rejected “{field.label}” as filled, so it was typed again key by key.')
+        return typed
 
     async def wait_for_section(self, run, profile):
         for _ in range(self.SECTION_POLLS):
@@ -672,6 +771,15 @@ class ApplicationEngine:
             await asyncio.sleep(.1)
         self.intervene(run, 'The adapter did not finish within its bounded wait. Inspect the form and resume.')
         return None
+
+    async def repair(self, run, profile, fields):
+        """The one AI call made after the free fixes: questions still open whose dropdown options are now listed."""
+        answers = self.store.answers()
+        # Options the scan already had (radios, selects) went with the first request; only an answer they didn't take goes again.
+        listed = [replace(field, options=request.options) for request in run.interventions if request.options and request.field_key
+                  for field in fields if field.key == request.field_key and field.kind in CHOICE_KINDS
+                  and not (field.options and resolve(field, profile, run, answers).reason == UNANSWERED)]
+        return await self.ai_autofill(run, profile, listed, listed=True) if listed else 0
 
     async def list_options(self, run, profile, fields):
         # Workday dropdowns render their options only while open; list them so the answer can be an exact choice.
@@ -694,7 +802,8 @@ class ApplicationEngine:
             reason = ''
             # A control with no readable label has no question to ask or answer to keep: what you set in the browser stands.
             unlabelled = not field.label and resolution.value is None
-            omitted = (resolution.omit or unlabelled) and not field.required and field.value in ('', False)
+            # An optional question with no answer is left blank (the review shows it) instead of stopping the run.
+            omitted = (resolution.omit or unlabelled or resolution.reason == UNANSWERED) and not field.required and field.value in ('', False)
             if omitted:
                 matched = True
             elif unlabelled:
@@ -708,8 +817,13 @@ class ApplicationEngine:
                 matched = bool(descriptor) and field.file_digest == descriptor['digest'] and not field.invalid
                 reason = 'The exact uploaded file and its accepted state could not be verified.'
             elif field.kind == 'radio':
-                offered = any(f.kind == 'radio' and f.label == field.label and f.group == field.group and f.row == field.row and normalized(f.option) == normalized(str(resolution.value)) for f in fields)
-                matched = offered and field.value == (normalized(field.option) == normalized(str(resolution.value))) and not field.invalid
+                offered = any(f.kind == 'radio' and f.label == field.label and f.group == field.group and f.row == field.row and same_choice(f.option, resolution.value) for f in fields)
+                matched = offered and field.value == same_choice(field.option, resolution.value) and not field.invalid
+            elif field.kind in CHOICE_KINDS and not isinstance(resolution.value, bool):
+                # A listed option may differ from the answer only in punctuation ("Mr." for "Mr").
+                matched = same_choice(field.value, resolution.value) and not field.invalid
+            elif field.kind == 'spinbutton' and str(field.value).isdigit() and str(resolution.value).isdigit():
+                matched = int(field.value) == int(resolution.value) and not field.invalid  # A typed month reads back "06" for 6.
             elif resolution.ref in ('profile:phone', 'profile:phone_number') or field.kind == 'tel':
                 # Employers reformat phone numbers ("55512345" becomes "5551 2345").
                 matched = re.sub(r'\D', '', str(field.value)) == re.sub(r'\D', '', str(resolution.value)) and not field.invalid
@@ -720,7 +834,7 @@ class ApplicationEngine:
                 matched = (field.value == resolution.value if isinstance(resolution.value, bool) else normalized(str(field.value)) == normalized(str(resolution.value))) and not field.invalid
             if not matched:
                 ok = False
-                reason = reason or ('The form rejected this value. Answer it in the format the form asks for.' if field.invalid and field.value not in ('', False) and resolution.value is not None and normalized(str(field.value)) == normalized(str(resolution.value))
+                reason = reason or ('The form rejected this value. Answer it in the format the form asks for.' if field.invalid and field.value not in ('', False) and resolution.value is not None and self.shows(field, resolution.value)
                                     else 'Existing browser value conflicts with the profile. Resolve it before resuming.' if field.value not in ('', False)
                                     else 'The form did not take the approved value. Set this field in Chromium, then resume, or correct the answer.')
             key = run.stage + ':' + field.key

@@ -20,6 +20,15 @@ def normalized(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().rstrip("*:✱✳ ")).casefold()
 
 
+CHOICE_KINDS = {"combobox", "select-one", "select-multiple", "radio"}
+
+
+def same_choice(a, b) -> bool:
+    """Two wordings of one listed option: equal, or equal once punctuation is ignored ("Mr" is "Mr.")."""
+    loose = lambda text: re.sub(r"[\W_]+", "", normalized(str(text)))
+    return normalized(str(a)) == normalized(str(b)) or bool(loose(b)) and loose(a) == loose(b)
+
+
 def site_key(url: str) -> str:
     return (urlsplit(url if "://" in url else "https://" + url).hostname or "").lower()
 
@@ -170,6 +179,8 @@ class ApplicantProfile(BaseModel):
     work_authorized: bool | None = True
     requires_sponsorship: bool | None = None
     citizenship: str = ""
+    # Your own plain statements ("I have no relatives at any employer I apply to"); an AI provider reads them to answer declarations.
+    standing_answers: str = ""
     nationality: str = ""
     hispanic_or_latino: bool | None = None
     employment_age: int | None = None
@@ -226,6 +237,8 @@ class ApprovedAnswer(BaseModel):
     omit: bool = False
     # A live link to a profile fact ("email", "education.0.end_date.year"): the answer is that fact's current value.
     fact: str = ""
+    # An AI answer that rewords this answer of yours into the form's own option ("Company careers page" as "Company Website").
+    rewords: str = ""
     # "ai" answers fill forms but block sending until you confirm them (approving a review that shows them does), which makes them yours.
     origin: Literal["you", "ai"] = "you"
     approved_at: str = Field(default_factory=now)
@@ -302,6 +315,7 @@ class ApplicationRun(BaseModel):
     elapsed_seconds: float = 0
     intervention_count: int = 0
     ai_requests: int = 0
+    ai_asked: list[str] = Field(default_factory=list)  # Questions already sent to the AI for this application, normalized.
     engine_version: str = ""
     authentication_attempted: bool = False
     account: AccountContext | None = None

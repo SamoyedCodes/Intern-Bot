@@ -538,8 +538,9 @@ async def test_the_greenhouse_adapter_opens_dropdowns_with_a_press_and_never_wai
         # The adapter's own pick of the approved option reads back in full, though the form shows only "+65".
         assert next(f for f in run.fields.values() if f.label == 'Country').value == 'Singapore +65'
     else:
-        # Its guess for an unanswered dropdown is dropped; the question arrives with the dropdown's real options.
-        assert [(i.question, i.options) for i in run.interventions] == [('Country', ['Malaysia +60', 'Singapore +65'])]
+        # Its guess for an unanswered optional dropdown is dropped, and the dropdown is left blank for the review.
+        assert run.status == 'ready_for_review', run.interventions
+        assert next(f for f in run.fields.values() if f.label == 'Country').disposition == 'intentionally_omitted'
         assert await page.locator('.x-singleValue').count() == 0
 
 
@@ -675,7 +676,7 @@ def test_an_unlabelled_field_keeps_what_you_set_and_never_becomes_an_invisible_q
 def ai_questions(monkeypatch, results):
     """Replace the provider call; returns what each request asked as (labels, options, saved questions)."""
     sent = []
-    monkeypatch.setattr(engine_module, 'autofill', lambda cfg, questions, saved, profile:
+    monkeypatch.setattr(engine_module, 'autofill', lambda cfg, questions, saved, profile, current=None:
                         sent.append(([q.label for q in questions], [q.options for q in questions], saved)) or results)
     return sent
 
@@ -730,6 +731,21 @@ async def test_a_local_model_links_facts_for_every_application_and_answers_this_
     assert resolve(fields[0], profile, other, store.answers()).value == '2027'
     assert resolve(fields[1], profile, other, store.answers()).value is None
     assert any(e['kind'] == 'ai_request' and 'on this Mac' in e['note'] and 'career facts included' in e['note'] for e in store.events(run.id))
+
+
+async def test_standing_answers_let_the_ai_answer_declarations_for_this_application(store, monkeypatch):
+    store.put('ai_provider', 'compatible')
+    store.put('compatible_model', 'qwen3:8b')
+    run = ApplicationRun(job_url='https://jobs.lever.co/example/1')
+    fields = [FormField('a', 'Have you ever been convicted of any offence?', '', 'select-one', options=['Yes', 'No'])]
+    sent = ai_questions(monkeypatch, {fields[0].label: ('standing', 'No')})
+    await ApplicationEngine(store).ai_autofill(run, ApplicantProfile(), fields)
+    assert sent == []  # No standing answers: the question never leaves.
+    profile = ApplicantProfile(standing_answers='I have never been charged or convicted.')
+    await ApplicationEngine(store).ai_autofill(run, profile, fields)
+    found = resolve(fields[0], profile, run, store.answers())
+    assert (found.value, found.ai) == ('No', True)
+    assert any('standing answers included' in e['note'] for e in store.events(run.id))
 
 
 async def test_answers_to_sensitive_questions_are_never_offered_for_matching(store, monkeypatch):
@@ -798,9 +814,23 @@ async def test_an_unlisted_degree_or_open_search_popup_does_not_stop_the_workday
 
 def test_a_row_question_is_asked_for_its_own_row(store):
     run = ApplicationRun(job_url='https://example.wd1.myworkdayjobs.com/job', profile_snapshot=ApplicantProfile(language_proficiency=[Language(language='English'), Language(language='Chinese (Mandarin)')]))
-    speaking = FormField('speaking', 'Speaking', '', 'select-one', group='language_proficiency', row=1)
+    speaking = FormField('speaking', 'Speaking', '', 'select-one', group='language_proficiency', row=1, required=True)
     assert not ApplicationEngine(store).verify(run, run.profile_snapshot, [speaking], {'files': {}})
     assert run.interventions[0].question == 'Speaking — Chinese (Mandarin)'
+
+
+def test_unanswered_optional_questions_are_left_blank_and_choices_ignore_punctuation(store):
+    run = ApplicationRun(job_url='https://uob.wd3.myworkdayjobs.com/job')
+    profile = ApplicantProfile(name_prefix='Mr')
+    fields = [FormField('ext', 'Phone Extension', '', 'text'),  # Optional, unanswered: left blank.
+              FormField('prefix', 'Prefix', '', 'combobox', value='Mr.', required=True),  # The form's wording of "Mr".
+              FormField('typed', 'Address Line 2', '', 'text', value='Blk 1.')]  # Typed by you, unanswered: still asked.
+    assert not ApplicationEngine(store).verify(run, profile, fields, {'files': {}})
+    assert {a.label: a.disposition for a in run.fields.values()} == {'Phone Extension': 'intentionally_omitted', 'Prefix': 'verified', 'Address Line 2': 'needs_input'}
+    assert [i.question for i in run.interventions] == ['Address Line 2']
+    run.interventions, run.fields = [], {}
+    # Free text keeps exact verification: "Mr." is not the "Mr" the profile holds.
+    assert not ApplicationEngine(store).verify(run, profile, [FormField('prefix', 'Prefix', '', 'text', value='Mr.', required=True)], {'files': {}})
 
 
 @pytest.mark.parametrize('existing', ['', 'Existing employer'])
@@ -1050,9 +1080,9 @@ async def test_an_ashby_location_lists_its_suggestions_and_selects_the_approved_
     # As an AI link to the profile's country would: the adapter types "SG" and clicks the first suggestion, which isn't "SG".
     store.save_answer(ApprovedAnswer(question='Location', fact='country', scope='global', profile_name=run.profile_name))
     run = await apply(store, page, run, profile)
-    # Asked together: the unanswered radio, and the location whose typed "SG" reads back as the answer but was never picked.
+    # The location's typed "SG" reads back as the answer but was never picked; the optional, unanswered radio is left blank.
     asked = {i.question: i.options for i in run.interventions}
-    assert asked == {'Location': ['Singapore', 'South Georgia and the South Sandwich Islands'], 'Are you a Singapore citizen?': ['Yes', 'No']}, run.interventions
+    assert asked == {'Location': ['Singapore', 'South Georgia and the South Sandwich Islands']}, run.interventions
     assert not await page.evaluate('window.picked')
     store.save_answer(ApprovedAnswer(question='Location', value='Singapore', scope_key=run.id, profile_name=run.profile_name))
     store.save_answer(ApprovedAnswer(question='Are you a Singapore citizen?', value='Yes', scope_key=run.id, profile_name=run.profile_name))
@@ -1060,3 +1090,169 @@ async def test_an_ashby_location_lists_its_suggestions_and_selects_the_approved_
     assert await page.evaluate('window.picked') == 'Singapore'
     assert await page.locator('#c0').is_checked()
     assert not any(i.question for i in run.interventions), run.interventions
+
+
+async def test_the_ai_repair_matches_an_answer_to_a_listed_option_once_per_application(store, monkeypatch):
+    store.put('ai_provider', 'compatible')
+    store.put('compatible_model', 'qwen3:8b')  # A model on this Mac may see your answers.
+    run = ApplicationRun(job_url='https://uob.wd3.myworkdayjobs.com/en-US/UOBExternal/job/x/apply')
+    store.save_answer(ApprovedAnswer(question='How Did You Hear About Us?', value='Company Website', scope='global', profile_name=run.profile_name))
+    field = FormField('heard', 'How Did You Hear About Us?', '', 'combobox', required=True)
+    sent = []
+    monkeypatch.setattr(engine_module, 'autofill', lambda cfg, questions, saved, profile, current=None:
+                        sent.append((questions[0].options, current)) or {questions[0].label: ('value', 'UOB Careers Website')})
+    engine = ApplicationEngine(store)
+    assert not engine.verify(run, ApplicantProfile(), [field], {'files': {}})
+    run.interventions[0].options = ['UOB Careers Website', 'LinkedIn']  # Listed by opening the dropdown.
+    assert await engine.repair(run, ApplicantProfile(), [field]) == 1
+    assert sent == [(['UOB Careers Website', 'LinkedIn'], {field.label: 'Company Website'})]
+    found = resolve(field, ApplicantProfile(), run, store.answers())
+    assert (found.value, found.ai) == ('UOB Careers Website', True)
+    assert next(a for a in store.answers() if a.origin == 'ai').scope == 'employer'  # The same employer's form reuses it without a call.
+    # A resume (a new engine) never sends the same question again.
+    assert await ApplicationEngine(store).repair(run, ApplicantProfile(), [field]) == 0 and len(sent) == 1
+
+
+async def test_a_cloud_provider_without_career_facts_never_receives_your_answers(store, monkeypatch):
+    store.put('ai_provider', 'gemini')
+    store._vault().set('gemini-api-key', 'key')
+    run = ApplicationRun(job_url='https://uob.wd3.myworkdayjobs.com/job')
+    store.save_answer(ApprovedAnswer(question='How Did You Hear About Us?', value='Company Website', scope='global', profile_name=run.profile_name))
+    sent = ai_questions(monkeypatch, {})
+    field = FormField('heard', 'How Did You Hear About Us?', '', 'combobox', options=['UOB Careers Website'])
+    assert await ApplicationEngine(store).ai_autofill(run, ApplicantProfile(), [field], listed=True) == 0
+    assert sent == []
+
+
+WORKDAY_REJECTED_DATE = '''<div data-automation-id="myExperiencePage"><div data-intern-group="experience"><div data-intern-row>
+<fieldset><legend>From*</legend><div data-automation-id="dateInputWrapper">
+<label>Month<input role="spinbutton" onkeydown="if(event.isTrusted&&/\\d/.test(event.key))this.dataset.typed=1" onblur="check()"></label>
+<label>Year<input role="spinbutton" onkeydown="if(event.isTrusted&&/\\d/.test(event.key))this.dataset.typed=1" onblur="check()"></label>
+</div><p data-automation-id="inputAlert" hidden>Enter a valid date.</p></fieldset></div></div></div>
+<script>
+// Like Workday seen live: a filled value shows, but the form accepts the date only once a person types it.
+function check(){document.querySelector('[data-automation-id=inputAlert]').hidden=[...document.querySelectorAll('input')].every(i=>i.dataset.typed);}
+</script>'''
+
+
+async def test_a_date_the_form_rejected_as_filled_is_typed_again_key_by_key(context, store):
+    page = await open_fixture(context, 'workday', WORKDAY_REJECTED_DATE)
+    profile = ApplicantProfile(experience=[Experience(start_date='2026-06')])
+    run = await apply(store, page, ApplicationRun(job_url=page.url, auto_advance=False), profile)
+    assert all(f.disposition == 'verified' for f in run.fields.values()), run.interventions
+    assert await page.locator('input').evaluate_all('l=>l.map(i=>i.value)') == ['06', '2026']
+    assert sum(e['kind'] == 'retyped' for e in store.events(run.id)) == 2
+
+
+WORKDAY_SOURCE = '''<div data-automation-id="applyFlowMyInfoPage"><h2>My Information</h2>
+<div data-automation-id="formField-source"><label for="source">How Did You Hear About Us?*</label>
+<div data-automation-id="multiselectInputContainer"><ul role="listbox"></ul>
+<input id="source" aria-required="true" data-uxi-widget-type="selectinput" data-uxi-multiselect-id="source-prompt" onclick="show(firstLevel)" onkeydown="if(event.key==='Escape')closeResults()"></div></div></div>
+<script>
+// Clicking opens the top level; a category (no radio) replaces the list with its own choices.
+const firstLevel=[['Job Board'],['UOB Careers Website',1]], boards=[['LinkedIn',1],['JobStreet',1]];
+const closeResults=()=>document.querySelector('[data-associated-widget]')?.remove();
+function show(list){
+    closeResults();
+    const popup=document.createElement('div');popup.dataset.associatedWidget='source-prompt';
+    popup.innerHTML=list.map(([name,leaf])=>leaf?`<div role="option"><input type="radio"><div data-automation-id="promptOption">${name}</div></div>`
+        :`<div role="option" onclick="show(boards)"><div data-automation-id="promptOption">${name}</div></div>`).join('');
+    document.body.append(popup);
+}
+</script>'''
+
+
+async def test_an_unanswered_workday_prompt_lists_its_choices_one_category_deep(context, store):
+    page = await open_fixture(context, 'workday', WORKDAY_SOURCE)
+    bridge, *_ = await prepare(page, store, 'workday', ApplicantProfile())
+    field = next(f for f in (await bridge.command('scan'))['fields'] if f['label'] == 'How Did You Hear About Us?')
+    options = (await bridge.command('options', {'selector': field['selector'], 'query': ''}))['options']
+    assert options == ['UOB Careers Website', 'LinkedIn', 'JobStreet']
+    assert not await page.locator('[data-associated-widget]').count()  # Closed again without choosing.
+
+
+async def test_workday_website_rows_take_the_profiles_links_in_order(context, store):
+    rows = ''.join(f'<div role="group" aria-labelledby="Websites-{n}-panel"><label>URL*<input data-automation-id="website" required></label></div>' for n in (1, 2, 3))
+    page = await open_fixture(context, 'workday', f'<div data-automation-id="myExperiencePage"><div aria-labelledby="Websites-section">{rows}</div></div>')
+    profile = ApplicantProfile(linkedin_url='https://linkedin.com/in/ada', github_url='https://github.com/ada', portfolio_url='https://ada.dev')
+    bridge, engine, run, _, config = await prepare(page, store, 'workday', profile)
+    assert config['profile']['websiteData']['websites'] == []  # The portfolio is listed once, so no duplicate row is added.
+    fields = [FormField(**f) for f in (await bridge.command('scan'))['fields']]
+    assert [(f.group, f.row, f.value) for f in fields] == [('websites', 0, 'https://linkedin.com/in/ada'), ('websites', 1, 'https://github.com/ada'), ('websites', 2, 'https://ada.dev')]
+    assert engine.verify(run, profile, fields, config)
+
+
+async def test_the_repair_skips_options_already_sent_and_retries_only_a_new_answer(store, monkeypatch):
+    store.put('ai_provider', 'compatible')
+    store.put('compatible_model', 'qwen3:8b')
+    run = ApplicationRun(job_url='https://keppel.wd3.myworkdayjobs.com/job')
+    sent = ai_questions(monkeypatch, {})
+    radio = FormField('r', 'Have you worked with us before?', '', 'radio', options=['Yes', 'No'], option='No', required=True)
+    heard = FormField('h', 'How Did You Hear About Us?', '', 'combobox', required=True)
+    engine = ApplicationEngine(store)
+    assert not engine.verify(run, ApplicantProfile(), [radio, heard], {'files': {}})
+    for request in run.interventions:
+        request.options = request.options or ['Company Website', 'LinkedIn']  # Listed by opening the dropdown.
+    await engine.repair(run, ApplicantProfile(), [radio, heard])
+    assert [labels for labels, *_ in sent] == [['How Did You Hear About Us?']]  # The radio's options went with the first request.
+    store.save_answer(ApprovedAnswer(question=heard.label, value='Company careers page', scope_key=run.id, profile_name=run.profile_name))
+    monkeypatch.setattr(engine_module, 'autofill', lambda cfg, questions, saved, profile, current=None: sent.append(current) or {heard.label: ('value', 'Company Website')})
+    await engine.repair(run, ApplicantProfile(), [radio, heard])
+    await engine.repair(run, ApplicantProfile(), [radio, heard])
+    assert sent[1:] == [{heard.label: 'Company careers page'}]  # Your new answer is matched once, never again.
+    # Seen live on Keppel: your answer for this application outranked the AI's match at the same scope, so the form never got it.
+    assert resolve(heard, ApplicantProfile(), run, store.answers()).value == 'Company Website'
+    yours = next(a for a in store.answers() if a.origin == 'you')
+    store.save_answer(yours.model_copy(update={'value': 'LinkedIn'}))
+    assert resolve(heard, ApplicantProfile(), run, store.answers()).value == 'LinkedIn'  # A changed answer of yours wins again.
+
+
+async def test_a_listed_row_question_is_matched_for_its_own_row_only(store, monkeypatch):
+    store.put('ai_provider', 'compatible')
+    store.put('compatible_model', 'qwen3:8b')
+    profile = ApplicantProfile(language_proficiency=[Language(language='English'), Language(language='Chinese (Mandarin)')])
+    run = ApplicationRun(job_url='https://keppel.wd3.myworkdayjobs.com/job', profile_snapshot=profile)
+    english = FormField('l0', 'Language', '', 'combobox', group='language_proficiency', row=0, value='English', required=True)
+    mandarin = FormField('l1', 'Language', '', 'combobox', group='language_proficiency', row=1, required=True)
+    sent = []
+    # Seen live: the reply may point at a saved question instead of naming an option; only an option replaces your answer.
+    monkeypatch.setattr(engine_module, 'autofill', lambda cfg, questions, saved, profile, current=None:
+                        sent.append((questions[0].label, current)) or {questions[0].label: ('value', 'Chinese')})
+    engine = ApplicationEngine(store)
+    assert not engine.verify(run, profile, [english, mandarin], {'files': {}})
+    run.interventions[0].options = ['Chinese', 'English']
+    assert await engine.repair(run, profile, [english, mandarin]) == 1
+    assert sent == [('Language — Chinese (Mandarin)', {'Language — Chinese (Mandarin)': 'Chinese (Mandarin)'})]
+    assert resolve(mandarin, profile, run, store.answers()).value == 'Chinese'
+    assert resolve(english, profile, run, store.answers()).value == 'English'  # The other row keeps its own language.
+
+
+async def test_a_long_answer_lists_the_prompt_choices_its_first_words_find(context, store):
+    page = await open_fixture(context, 'workday', WORKDAY_PROMPT)
+    bridge, *_ = await prepare(page, store, 'workday', ApplicantProfile())
+    field = next(f for f in (await bridge.command('scan'))['fields'] if f['label'] == 'Field of Study')
+    # Seen live on Keppel: searching the whole answer found nothing, so there was nothing to match it to.
+    found = await bridge.command('options', {'selector': field['selector'], 'query': 'Computer Science and Business; Second Major'})
+    assert found['options'] == ['Computer Science']
+    assert not await page.locator('[data-associated-widget]').count()
+
+
+async def test_a_language_skill_level_comes_from_the_profile_and_is_reworded_into_each_employers_scale(store, monkeypatch):
+    store.put('ai_provider', 'compatible')
+    store.put('compatible_model', 'qwen3:8b')
+    profile = ApplicantProfile(language_proficiency=[Language(language='English', proficiency='Native'), Language(language='Chinese', proficiency='Native')])
+    run = ApplicationRun(job_url='https://keppel.wd3.myworkdayjobs.com/job', profile_snapshot=profile)
+    speaking = FormField('s1', 'Speaking', '', 'combobox', group='language_proficiency', row=1, required=True)
+    found = resolve(speaking, profile, run, store.answers())
+    assert (found.value, found.ref) == ('Native', 'profile:language_proficiency.1.proficiency')  # Asked of you no more.
+    sent = []
+    monkeypatch.setattr(engine_module, 'autofill', lambda cfg, questions, saved, profile, current=None:
+                        sent.append((questions[0].label, current)) or {questions[0].label: ('value', '3 - Fluent')})
+    engine = ApplicationEngine(store)
+    assert not engine.verify(run, profile, [speaking], {'files': {}})  # "Native" is not on this form's scale.
+    run.interventions[0].options = ['1 - Slight', '2 - Fair', '3 - Fluent']
+    assert await engine.repair(run, profile, [speaking]) == 1
+    assert sent == [('Speaking — Chinese', {'Speaking — Chinese': 'Native'})]
+    assert resolve(speaking, profile, run, store.answers()).value == '3 - Fluent'
+    # Another employer may use another scale, so it starts from your own level again.
+    assert resolve(speaking, profile, ApplicationRun(job_url='https://uobgroup.wd3.myworkdayjobs.com/job'), store.answers()).value == 'Native'

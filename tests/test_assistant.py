@@ -262,3 +262,27 @@ def test_an_unparseable_reply_fills_nothing(network):
     network['payload'] = reply(text='No idea.')
     with pytest.raises(ValueError, match='not a question mapping'):
         autofill(cfg(), [FormField('a', 'Q?', '', 'text')], ['Saved?'], PERSON)
+
+
+def test_standing_answers_settle_declarations_with_one_of_the_forms_options(network):
+    person = PERSON.model_copy(update={'standing_answers': 'I, Jonathan Tanaka, am a Singapore citizen. I am not related to any employee of any employer.'})
+    relative = FormField('a', 'Are you a relative of any UOB employee?', '', 'select-one', options=['Yes', 'No'])
+    citizen = FormField('b', 'Citizenship status', '', 'select-one', options=['Singapore Citizen', 'Permanent Resident', 'Foreigner'])
+    assert askable(citizen, True) and not askable(citizen)  # Legal-status questions are sent only with standing answers.
+    assert not askable(FormField('c', 'Gender', '', 'select-one'), True)
+    network['payload'] = reply(text=json.dumps({'q1': {'standing': 'no'}, 'q2': {'standing': 'Singaporean'}}))
+    assert autofill(cfg(), [relative, citizen], [], person) == {relative.label: ('standing', 'No')}  # "Singaporean" is not an option.
+    text = sent_text(network)
+    assert 'not related to any employee' in text and 'Jonathan' not in text
+    assert autofill(cfg(), [relative], [], PERSON) == {}  # Without statements the same reply is dropped.
+    assert 'standing_answers' not in sent_text(network)
+
+
+def test_an_answer_the_form_did_not_take_is_sent_masked_and_matched_only_to_a_listed_option(network):
+    heard = FormField('a', 'How Did You Hear About Us?', '', 'combobox', options=['UOB Careers Website', 'LinkedIn'])
+    prefix = FormField('b', 'Prefix', '', 'combobox', options=['Mr.', 'Ms.'])
+    network['payload'] = reply(text=json.dumps({'q1': {'value': 'UOB Careers Website'}, 'q2': {'value': 'Sir'}}))
+    found = autofill(cfg(), [heard, prefix], [], PERSON, {heard.label: f'Company website, said {PERSON.first_name}'})
+    assert found == {heard.label: ('value', 'UOB Careers Website')}  # "Sir" is not listed, and q2 had no answer to match.
+    text = sent_text(network)
+    assert '"answer": "Company website, said [name]"' in text and PERSON.first_name not in text

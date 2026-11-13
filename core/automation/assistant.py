@@ -1,11 +1,12 @@
-"""Opt-in AI assistance. Unless career facts are allowed, a provider sees only question wording, form options and profile field names."""
+"""Opt-in AI assistance. Unless career facts are allowed, a provider sees only question wording, form options, profile field names
+and the standing answers you wrote for it."""
 import json
 import re
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from core.automation.answers import fact_allowed, fact_catalog
-from core.automation.models import normalized
+from core.automation.models import normalized, same_choice
 from core.automation.privacy import redact
 
 # Store keys: "ai_provider", "<provider>_model", "<provider>_url", "<provider>_facts"; keychain: "<provider>-api-key".
@@ -25,20 +26,22 @@ FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "clau
 
 # Only short factual controls go to an AI: no essays, uploads, passwords, or lone checkboxes (nearly always a consent).
 AI_KINDS = {"text", "email", "tel", "url", "number", "date", "month", "select-one", "select-multiple", "combobox", "radio", "spinbutton"}
-# Questions an AI never answers: demographics, legal status, health, pay, and anything you agree to or declare.
-SENSITIVE = re.compile(r"gender|\bsex\b|\brace\b|ethnic|hispanic|latin[oax]|veteran|military|disab|sponsor|visa|authori[sz]|citizen|nationality|"
-                       r"immigra|criminal|convict|felon|arrest|birth|\bage\b|how old|religio|sexual|orientation|pronoun|marital|pregnan|"
-                       r"vaccin|medical|health|salary|compensation|\bpay\b|agree|consent|terms|certify|acknowledge|attest|signature|privacy|declar|"
+# Questions an AI never answers: demographics, health, pay, and anything you agree to.
+SENSITIVE = re.compile(r"gender|\bsex\b|\brace\b|ethnic|hispanic|latin[oax]|veteran|military|disab|"
+                       r"birth|\bage\b|how old|religio|sexual|orientation|pronoun|marital|pregnan|"
+                       r"vaccin|medical|health|salary|compensation|\bpay\b|agree|consent|terms|certify|acknowledge|attest|signature|privacy|"
                        r"confirm|understand|accept|i have read", re.I)
+# Legal status and declarations: sent only when the profile has standing answers, the one source an AI may answer them from.
+LEGAL = re.compile(r"sponsor|visa|authori[sz]|citizen|nationality|immigra|criminal|convict|felon|arrest|declar", re.I)
 
 
-def askable(field):
-    return field.kind in AI_KINDS and not SENSITIVE.search(field.label)
+def askable(field, standing=False):
+    return field.kind in AI_KINDS and not SENSITIVE.search(field.label) and (standing or not LEGAL.search(field.label))
 
 
 def matchable(answer):
-    """A saved answer an AI may reuse for a reworded question: never one to a sensitive question."""
-    return not any(SENSITIVE.search(q) for q in (answer.question, *answer.variants))
+    """A saved answer an AI may reuse for a reworded question: never one to a sensitive or legal question."""
+    return not any(SENSITIVE.search(q) or LEGAL.search(q) for q in (answer.question, *answer.variants))
 
 
 def career_facts(profile):
@@ -102,6 +105,10 @@ TASKS = {
                 "(a different country, employer, period, document or a negated question is a different question); "
                 '{"fact": "key"} when the profile fact with that key answers it directly; when the question asks only for the year or the month of a date fact, append ".year" or ".month" to its key; '
                 '{"value": "answer"} only when career facts are supplied and state the answer outright: a short factual answer, exactly one listed option when options are given; '
+                'a question with an "answer" was already answered by the applicant in other words: reply {"value": "option"} with the one listed option that means the same, or null if none does; '
+                '{"standing": "answer"} only when standing answers are supplied and one of those statements settles the question for any employer or country '
+                '(a statement that the applicant has no relatives at any employer answers "Are you related to an employee of X?" with "No"): '
+                'exactly the listed option a person who made that statement would pick when options are given (such as "No", "Not applicable" or "Singapore Citizen"), otherwise a short answer such as "No" or "N/A"; '
                 "null for anything else, including opinions, essays and anything you would have to guess. "
                 'Reply with only a JSON object with one entry per question id, like {"q1": {"fact": "email"}, "q2": {"saved": "s3"}, "q3": null}.',
     "self_teach": "You are filling one page of a job application form, described as data: fields (f1, f2, …) with their label, kind, options "
@@ -139,21 +146,29 @@ def checked(field, value):
     """The AI's answer as something this form accepts, or None."""
     text = ("Yes" if value else "No") if isinstance(value, bool) else str(value).strip()
     if field.options:
-        return next((o for o in field.options if normalized(o) == normalized(text)), None)
+        exact = next((o for o in field.options if normalized(o) == normalized(text)), None)
+        close = [o for o in field.options if same_choice(o, text)]
+        return exact or (close[0] if len(close) == 1 else None)
     return text if text and len(text) <= 120 and "\n" not in text else None
 
 
-def autofill(cfg, questions, saved, profile):
+def autofill(cfg, questions, saved, profile, current=None):
     """Map form questions (FormFields) to a saved question, a profile fact or, with career facts allowed, a short answer.
 
-    Returns {label: ("saved", index) | ("fact", key) | ("value", answer)}. Anything outside those closed sets is dropped."""
+    current: {label: answer} for questions whose approved answer the form didn't take; sent (masked) so the reply can name the form's option for it.
+    Returns {label: ("saved", index) | ("fact", key) | ("value", answer) | ("standing", answer)}. Anything outside those closed sets is dropped."""
+    current = current or {}
     catalog = fact_catalog(profile)
+    standing = profile.standing_answers.strip()
     context = json.dumps({
         # Distinct q/s ids: small models confuse two lists numbered from 1.
-        "questions": {f"q{i}": dict(question=q.label, kind=q.kind, **({"options": q.options[:250]} if q.options else {}))
+        "questions": {f"q{i}": dict(question=q.label, kind=q.kind, **({"options": q.options[:250]} if q.options else {}),
+                                    **({"answer": redact(str(current[q.label]), profile)} if q.label in current else {}))
                       for i, q in enumerate(questions, 1)},
         "saved_questions": {f"s{i}": s for i, s in enumerate(saved, 1)},
         "profile_facts": catalog,
+        # Written by the applicant for exactly this purpose, so they go to any provider; identity is still masked.
+        **({"standing_answers": redact(standing, profile)} if standing else {}),
     }, ensure_ascii=False)
     if cfg["facts"]:
         # Questions and options are the employer's text; the applicant's own career text is masked.
@@ -176,8 +191,8 @@ def autofill(cfg, questions, saved, profile):
             results[question.label] = ("saved", s)
         elif kind == "fact" and isinstance(value, str) and fact_allowed(value, catalog):
             results[question.label] = ("fact", value)
-        elif kind == "value" and cfg["facts"] and isinstance(value, (str, bool)) and (answer := checked(question, value)) is not None:
-            results[question.label] = ("value", answer)
+        elif (kind == "value" and (cfg["facts"] or question.label in current) or kind == "standing" and standing) and isinstance(value, (str, bool)) and (answer := checked(question, value)) is not None:
+            results[question.label] = (kind, answer)
     return results
 
 

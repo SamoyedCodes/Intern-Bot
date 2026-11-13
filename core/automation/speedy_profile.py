@@ -49,7 +49,8 @@ def translate(profile, run, answers):
         'languageData': languages,
         'skillsData': [s.strip() for s in re.split(r'[,;\n]', profile.skills) if s.strip()] or None,
         'resumeData': files.get(profile.resume_path, {}),
-        'websiteData': dict(websites=[profile.portfolio_url] if profile.portfolio_url else [],github=profile.github_url,
+        # The portfolio goes in once, as the personal site: listing it in websites too made Workday add a second, duplicate row.
+        'websiteData': dict(websites=[],github=profile.github_url,
                             linkedin=profile.linkedin_url,personal=profile.portfolio_url),
         # The vendor's legacy key also drives generic work-authorization controls; resolve() approves each actual question.
         'employmentData': dict(eligibilityUS=profile.work_authorized,sponsorship=profile.requires_sponsorship,

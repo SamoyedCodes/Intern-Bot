@@ -48,9 +48,10 @@ globalThis.scanInternFields = (rootSelector) => {
         dateRequired = /[*✱✳]/.test(legend);
       }
     }
-    const groupContainer = e.closest('[data-intern-group], [data-automation-id="workExperienceSection"], [data-automation-id="educationSection"], [role="group"][aria-labelledby="Work-Experience-section"], [role="group"][aria-labelledby="Education-section"], [role="group"][aria-labelledby="Languages-section"]');
-    const group = groupContainer?.getAttribute('data-intern-group') || (groupContainer?.getAttribute('aria-labelledby') === 'Languages-section' ? 'language_proficiency' : groupContainer?.getAttribute('data-automation-id') === 'workExperienceSection' || groupContainer?.getAttribute('aria-labelledby') === 'Work-Experience-section' ? 'experience' : groupContainer ? 'education' : '');
-    const rows = groupContainer ? [...groupContainer.querySelectorAll('[data-intern-row],[data-automation-id="workExperience"],[data-automation-id="education"],[role="group"][aria-labelledby$="-panel"]')] : [];
+    // Workday labels every website row just "URL"; its rows line up with the profile's links.
+    const groupContainer = e.closest('[data-intern-group], [data-automation-id="workExperienceSection"], [data-automation-id="educationSection"], [role="group"][aria-labelledby="Work-Experience-section"], [role="group"][aria-labelledby="Education-section"], [role="group"][aria-labelledby="Languages-section"], [aria-labelledby="Websites-section"]');
+    const group = groupContainer?.getAttribute('data-intern-group') || (groupContainer?.getAttribute('aria-labelledby') === 'Languages-section' ? 'language_proficiency' : groupContainer?.getAttribute('aria-labelledby') === 'Websites-section' ? 'websites' : groupContainer?.getAttribute('data-automation-id') === 'workExperienceSection' || groupContainer?.getAttribute('aria-labelledby') === 'Work-Experience-section' ? 'experience' : groupContainer ? 'education' : '');
+    const rows = groupContainer ? [...groupContainer.querySelectorAll('[data-intern-row],[data-automation-id="workExperience"],[data-automation-id="education"],[role="group"][aria-labelledby$="-panel"],[aria-labelledby^="Websites-"][aria-labelledby$="-panel"]')] : [];
     const row = Math.max(0, rows.findIndex(r => r.contains(e)));
     // Ashby asks yes/no questions with a pair of pressed-state buttons.
     const pressed = e.matches('button[aria-pressed]');
