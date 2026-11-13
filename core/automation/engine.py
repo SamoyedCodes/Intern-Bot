@@ -162,6 +162,10 @@ class ApplicationEngine:
                         continue
                     return run
                 signed_in = any(a['account'].get('signed_in') for a in found.get('accounts', []))
+                if signed_in and (run.login_attempted or run.authentication_attempted):
+                    # Reaching the application settles the sign-in attempt; a session that expires later (overnight) needs a new one.
+                    run.login_attempted = run.authentication_attempted = False
+                    self.checkpoint(run)
                 if signed_in and run.account and not self.account_credential:
                     self.account_credential = await asyncio.to_thread(self.store._vault().credential, run.account)
                 if signed_in and self.account_credential and self.account_credential.get('state') != 'verified':
@@ -185,6 +189,11 @@ class ApplicationEngine:
                     else:
                         self.intervene(run, SIGN_IN_HANDOFF, 'verification')
                     return run
+                if fields and (run.login_attempted or run.authentication_attempted):
+                    # An application section without a sign-in form proves the sign-in worked. Workday hides Sign Out in a menu,
+                    # so signed_in alone misses it, and a stale flag would refuse the saved login once the session expires overnight.
+                    run.login_attempted = run.authentication_attempted = False
+                    self.checkpoint(run)
                 opened = not fields and (await bridge.command('open_application')).get('opened')
                 if opened == 'ready':
                     continue  # A native adapter's form rendered after this scan.
@@ -269,7 +278,11 @@ class ApplicationEngine:
                     self.intervene(run, 'The application reports validation errors. Correct them before continuing.', 'validation')
                     return run
                 if not fields and not settled.get("summary"):
-                    self.intervene(run, 'No verifiable fields were found in this section. Review the application manually before continuing.')
+                    # Seen on UOB's Workday after you submitted the application yourself. Only you can confirm it was sent.
+                    if re.search(r"you(?:'|’)ve already applied|you have already applied", await bridge.page.inner_text('body'), re.I):
+                        self.intervene(run, "The employer says you've already applied for this job. If you sent it, press I submitted it.", 'validation')
+                    else:
+                        self.intervene(run, 'No verifiable fields were found in this section. Review the application manually before continuing.')
                     return run
                 self.checkpoint(run)
                 if self._pause or self._cancel:
@@ -510,11 +523,15 @@ class ApplicationEngine:
                 terms = field.kind == 'checkbox' and (field.required or field.selector in auth.get('required_terms', [])) and bool(re.search(r'terms|privacy', label))
                 resolution = resolve(field, profile, run, self.store.answers())
                 value = False if marketing else True if terms else resolution.value
+                # An optional box nobody answered ("Notification: receive new job postings", seen on Halliburton) stays unticked; one that reads like consent is still asked.
+                optional = field.kind == 'checkbox' and value is None and not resolution.omit and not field.required and not re.search(r'terms|privacy|agree|consent|accept', label)
+                if optional:
+                    value = False
                 omit = resolution.omit or value is None and not field.required and field.kind != 'checkbox'
                 if value is None and not omit:
                     self.intervene(run, resolution.reason, 'answer', field)
                     return False
-                policies[field.selector] = dict(key=field.key, label=field.label, value=value, omit=omit, ref=resolution.ref, replace=terms or marketing)
+                policies[field.selector] = dict(key=field.key, label=field.label, value=value, omit=omit, ref=resolution.ref, replace=terms or marketing or optional)
             await bridge.command('authorize', {'policies': policies})
             try:
                 await bridge.command('validate_authentication', {'credential': {'username': credential['username'], 'password': credential['password']}})

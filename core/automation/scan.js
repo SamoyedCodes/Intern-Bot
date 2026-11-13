@@ -56,7 +56,7 @@
     const pressed = e.matches('button[aria-pressed]');
     const type = e.getAttribute('data-intern-kind') || (pressed ? 'radio' : uploaded ? 'file' : prompt || e.getAttribute('aria-haspopup') === 'listbox' ? 'combobox' : e.getAttribute('role') || e.type || e.tagName.toLowerCase());
     const radio = type === 'radio';
-    if (radio) label = (fieldset && (text(fieldset.querySelector('legend,[data-question]')) || fieldset.getAttribute('aria-label') || labelText(fieldset.querySelector(':scope > label:not(:has(input))') || document.createElement('i')))) || groupQuestion || label;
+    if (radio) label = (fieldset && (text(fieldset.querySelector('legend,[data-question]')) || fieldset.getAttribute('aria-label') || text(document.getElementById(fieldset.getAttribute('aria-labelledby'))) || labelText(fieldset.querySelector(':scope > label:not(:has(input))') || document.createElement('i')))) || groupQuestion || label;
     if (type === 'checkbox' && !e.closest('[data-automation-id$="-CheckboxGroup"]') && groupQuestion && choiceGroup.querySelectorAll('input[type=checkbox]').length > 1 && label !== groupQuestion)
       label = groupQuestion + ' — ' + label;
     const base = `${group}:${row}:${label.toLowerCase()}:${radio ? e.name : ''}`;

@@ -89,15 +89,25 @@ async def test_a_saved_draft_continues_its_application(context, store):
     assert await page.evaluate('clicks') == ['continue']
 
 
-async def test_a_slow_sign_in_continues_into_the_application(context, store, monkeypatch):
+# Workday keeps Sign Out in a closed menu, so the form it opens shows no visible sign-out control.
+@pytest.mark.parametrize('sign_out', [True, False])
+async def test_a_slow_sign_in_continues_into_the_application(context, store, monkeypatch, sign_out):
     monkeypatch.setattr(ApplicationEngine, 'AUTH_POLLS', 40)
     monkeypatch.setattr(ApplicationEngine, 'SECTION_POLLS', 20)  # The plain follow-up form is not a section any adapter completes.
     html = account_pages('signin', 'signin').replace('window.logins=(window.logins||0)+1', 'window.logins=(window.logins||0)+1,setTimeout(()=>show(`form`),1500)')
+    if not sign_out:
+        html = html.replace('<button>Sign Out</button>', '')
     page = await open_fixture(context, 'workday', html)
     run = ApplicationRun(job_url=page.url)
     await ApplicationEngine(store).start(run, ApplicantProfile(), ExtensionBridge(page, run.id), {'username': LOGIN, 'password': PASSWORD})
     assert await page.evaluate('window.logins') == 1
     assert run.interventions and all(i.kind != 'verification' for i in run.interventions), run.interventions
+    assert not run.login_attempted  # Settled: the application opened.
+    # Seen live on UOB: the next day's session had expired, and a stale attempt flag refused the saved login for good.
+    await page.evaluate('show(`signin`)')
+    await ApplicationEngine(store).resume(run, ApplicantProfile(), ExtensionBridge(page, run.id), {'username': LOGIN, 'password': PASSWORD})
+    assert await page.evaluate('window.logins') == 2
+    assert all(i.kind != 'verification' for i in run.interventions), run.interventions
 
 
 async def test_the_history_shows_the_1password_login_and_sign_in(context, store, vault, monkeypatch):
@@ -218,3 +228,21 @@ async def test_the_creation_outcome_updates_the_saved_login(context, store, vaul
     assert vault.credential(page.url)['state'] == state
     if handoff:
         assert run.interventions[-1].kind == 'verification' and handoff in run.interventions[-1].message
+
+
+async def test_a_saved_login_leaves_create_account_for_sign_in_despite_a_header_sign_in_button(context, store):
+    # Seen live on UOB: the header's "Sign In" button and the form's own link both matched, so nothing was clicked.
+    html = account_pages('create', 'signin').replace('<div id=root>', '<button type=button data-automation-id=utilityButtonSignIn onclick="window.header=1">Sign In</button><div id=root>')
+    page = await open_fixture(context, 'workday', html)
+    run = ApplicationRun(job_url=page.url)
+    await ApplicationEngine(store).start(run, ApplicantProfile(), ExtensionBridge(page, run.id), {'username': LOGIN, 'password': PASSWORD})
+    assert await page.evaluate('[window.logins || 0, window.creates || 0, window.header || 0]') == [1, 0, 0]
+
+
+async def test_a_job_you_already_applied_for_says_so_instead_of_asking_for_fields(context, store):
+    # Seen live on UOB once the application had been sent from the browser.
+    html = '<div data-automation-id="jobPostingPage"><h2>Product Management Intern</h2><p>You&rsquo;ve already applied for this job.</p><a href="#">View My Applications</a></div>'
+    page = await open_fixture(context, 'workday', html)
+    run = await ApplicationEngine(store).start(ApplicationRun(job_url=page.url), ApplicantProfile(), ExtensionBridge(page, 'already-applied'))
+    assert [i.message for i in run.interventions] == ["The employer says you've already applied for this job. If you sent it, press I submitted it."]
+    assert not run.is_submitted  # Only you confirm a send.

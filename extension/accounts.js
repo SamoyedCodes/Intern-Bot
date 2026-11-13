@@ -50,6 +50,9 @@
     return {page:create?'create':'sign_in',signed_in,form_error:error,action:buttons[0].form?.action||'',policy:{minimum,maximum:Math.min(...maxima),symbols:!/no (?:special characters|symbols)|only (?:letters|alphanumeric)/i.test(rules),upper:/upper[ -]?case/i.test(rules),lower:/lower[ -]?case/i.test(rules),digit:/at least (?:one|1) (?:number|digit)/i.test(rules)&&!/(?:number|digit) or/i.test(rules),symbol:/at least (?:one|1) (?:special|symbol|punctuation)/i.test(rules)}};
   }
   function open(kind){
+    // Workday's own link beside the form; its header also shows a "Sign In" button (seen on UOB), which made the caption match ambiguous.
+    const own=[...document.querySelectorAll(`[data-automation-id=${kind==='create'?'createAccountLink':'signInLink'}]`)].filter(visible);
+    if(own.length===1){own[0].click();return true;}
     const names=kind==='create'?/^(create (an? )?(account|profile)|register|sign up|signup)$/i:/^(sign in(?: with email)?|log in|login|please sign in)$/i;
     const links=[...document.querySelectorAll('a,button,[role=button]')].filter(e=>visible(e)&&names.test(caption(e))&&!e.matches('[data-automation-id=signInSubmitButton],[data-automation-id=createAccountSubmitButton]'));
     if(links.length!==1)return false;

@@ -5,7 +5,7 @@ import pytest
 
 from core.automation.engine import ApplicationEngine
 from core.automation.extension_bridge import ExtensionBridge
-from core.automation.models import ApplicationRun, account_context, application_scope
+from core.automation.models import ApplicationRun, ApprovedAnswer, account_context, application_scope
 from tests.support import FIXTURES, open_fixture, profile_for
 
 SAP = 'https://career44.sapsf.com/career?company=fictional&career_job_req_id=42'
@@ -173,6 +173,29 @@ async def test_sap_hidden_password_rules_and_acknowledgement_marketing_are_respe
     run, page, _ = await run_account(context, store, html=html)
     assert len(vault.credential(SAP)['password']) == 20
     assert run.registration_attempted and await page.evaluate('window.sent.at(-1)') is False
+
+
+async def test_sap_residence_visibility_notification_and_terms_dialog(context, store, vault):
+    # Halliburton's sign-up form: a country picker, a required radiogroup named by aria-labelledby, an optional opt-in, terms in a dialog.
+    store.put('auto_create_accounts', True)
+    extra = '''<select aria-label="Country/Region of Residence" required><option value="">- Select -<option value=SG>Singapore<option value=MY>Malaysia</select>
+      <label id=vis>Make My Profile Visible to:<span>*</span></label><div role=radiogroup aria-labelledby=vis aria-required=true>
+        <input type=radio name=pref value=1 aria-label="Any company recruiter worldwide"><label>Any company recruiter worldwide</label>
+        <input type=radio name=pref value=2 aria-label="Only recruiters managing jobs I apply to"><label>Only recruiters managing jobs I apply to</label></div>
+      <label for=notify>Notification:</label><div><input type=checkbox id=notify><span>Receive new job posting notifications</span></div>
+      <a id=dataPrivacyId role=button onclick="document.getElementById('dlg').hidden=false">Read and accept the data privacy statement.</a>
+      <input type=hidden id=fbclc_dpcsId><div id=dlg role=dialog hidden><button type=button onclick="document.getElementById('fbclc_dpcsId').value='7';this.parentElement.hidden=true">Accept</button><button type=button>Decline</button></div>'''
+    html = signup(extra=extra).replace('window.sent=', "window.form=[document.querySelector('select').value,document.querySelector('[name=pref]:checked')?.value,document.getElementById('notify').checked,document.getElementById('fbclc_dpcsId').value];window.sent=")
+    profile = profile_for('sap-successfactors').model_copy(update={'country': 'Singapore'})
+    page = await open_fixture(context, 'sap-successfactors', html, url=SAP)
+    run, engine = ApplicationRun(job_url=SAP), ApplicationEngine(store)
+    engine.SECTION_POLLS, engine.AUTH_POLLS = 2, 3
+    await engine.start(run, profile, ExtensionBridge(page, run.id))
+    # Only the visibility choice is yours to make; the country came from the profile and the opt-in was never asked.
+    assert not run.registration_attempted and [i.question for i in run.interventions] == ['Make My Profile Visible to:']
+    store.save_answer(ApprovedAnswer(question='Make My Profile Visible to:', value='Only recruiters managing jobs I apply to', scope='global'))
+    await engine.resume(run, profile, ExtensionBridge(page, run.id))
+    assert run.registration_attempted and await page.evaluate('window.form') == ['SG', '2', False, '7']
 
 
 async def test_captcha_pauses_before_signup_and_can_continue_after_manual_completion(context, store):

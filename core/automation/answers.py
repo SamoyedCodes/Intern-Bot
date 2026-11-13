@@ -40,7 +40,7 @@ ALIASES = {
     "phone": "phone", "phone number": "phone", "address line 1": "address_line1",
     "address line 2": "address_line2", "city": "city", "state": "region", "province": "region",
     "state/province": "region", "postal code": "postal_code", "zip code": "postal_code",
-    "country": "country", "linkedin": "linkedin_url", "linkedin url": "linkedin_url",
+    "country": "country", "country of residence": "country", "country/region of residence": "country", "country/region": "country", "linkedin": "linkedin_url", "linkedin url": "linkedin_url",
     "github": "github_url", "website": "portfolio_url", "resume": "resume_path",
     "resume/cv": "resume_path",
     "given name(s) - western script": "first_name", "family name - western script": "last_name",

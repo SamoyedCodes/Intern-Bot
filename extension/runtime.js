@@ -63,7 +63,7 @@
     const readable = e => e instanceof HTMLSelectElement ? (e.value ? e.selectedOptions[0]?.textContent || '' : '') : ['checkbox','radio'].includes(e.type) ? e.checked : e.matches?.('button[aria-haspopup=listbox]') ? shownChoice(e) : e.value ?? e.textContent;
     // Employers reformat phone numbers ("55512345" becomes "5551 2345").
     const phone = p => /^profile:phone(_number)?$/.test(p.ref || ''), digits = v => String(v ?? '').replace(/\D/g, '');
-    const matches = (e, p) => e.type === 'radio' ? e.checked === (normalize(e.labels?.[0]?.textContent || e.value) === normalize(p.value)) : e.type === 'checkbox' ? e.checked === p.value : phone(p) || e.type === 'tel' ? digits(readable(e)) === digits(p.value) : normalize(readable(e)) === normalize(p.value);
+    const matches = (e, p) => e.type === 'radio' ? e.checked === (normalize(e.labels?.[0]?.textContent || e.getAttribute('aria-label') || e.value) === normalize(p.value)) : e.type === 'checkbox' ? e.checked === p.value : phone(p) || e.type === 'tel' ? digits(readable(e)) === digits(p.value) : normalize(readable(e)) === normalize(p.value);
     function assign(e, key, value) {
       if (!dom(e)) { e[key] = value; return value; }
       if (!live()) return value;
@@ -86,7 +86,7 @@
         const options = [...e.options].filter(o=>normalize(o.textContent)===normalize(desired));
         if (options.length !== 1) {report('answer', 'The exact approved option is not offered by this form.',p.key);return value;}
         desired = options[0].value;key='value';
-      } else if (e.type === 'radio') {desired = normalize(e.labels?.[0]?.textContent || e.value) === normalize(p.value);key='checked';}
+      } else if (e.type === 'radio') {desired = normalize(e.labels?.[0]?.textContent || e.getAttribute('aria-label') || e.value) === normalize(p.value);key='checked';}
       else if (e.type === 'checkbox') {if(typeof desired!=='boolean'){report('answer','Approve a Boolean answer for this checkbox.',p.key);return value;}key='checked';}
       const proto = e instanceof HTMLInputElement ? HTMLInputElement.prototype : e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : null;
       const setter = proto && Object.getOwnPropertyDescriptor(proto,key)?.set;
@@ -589,6 +589,18 @@
         const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
         for(const [element,value]of [...emails.map(e=>[e,credential.username]),...passwords.map(e=>[e,credential.password])]){setter.call(element,value);element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));if(element.validity&&!element.validity.valid)throw Error('Credential does not meet this form’s rules');}
         if(!submit)return;
+        // SAP SuccessFactors keeps its required terms in a dialog, not a checkbox (seen on Halliburton): accept it as a required terms box is ticked.
+        const terms=document.getElementById('dataPrivacyId'),accepted=document.getElementById('fbclc_dpcsId');
+        if(auth.page==='create'&&terms&&visible(terms)&&accepted&&!accepted.value){
+          terms.click();
+          for(let attempt=0,clicked=false;attempt<100&&!accepted.value;attempt++){
+            await new Promise(resolve=>native.setTimeout(resolve,100));
+            if(!live())throw Error('Authentication stopped');
+            const accept=[...document.querySelectorAll('button,[role=button]')].filter(e=>visible(e)&&/^accept$/i.test((e.innerText||'').trim()));
+            if(!clicked&&accept.length===1){accept[0].click();clicked=true;}
+          }
+          if(!accepted.value)throw Error('Terms were not accepted');
+        }
         const buttonId=buttons[0].getAttribute('data-automation-id');
         // Workday silently drops a sign-in submitted within 500ms of the form appearing (its spam-bot timer), and the bot may have just opened it.
         const earliest=performance.now()+1000;
