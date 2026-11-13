@@ -6,7 +6,7 @@ import pytest
 
 from core.automation.engine import SIGN_IN_HANDOFF, ApplicationEngine
 from core.automation.extension_bridge import ExtensionBridge
-from core.automation.models import ApplicantProfile, ApplicationRun, ApprovedAnswer, employer_key
+from core.automation.models import CHECKING_LOGIN, SIGNING_IN, ApplicantProfile, ApplicationRun, ApprovedAnswer, employer_key
 from tests.support import account_pages, open_fixture, prepare
 
 LOGIN, PASSWORD = 'acme_intern@apps.example.test', 'Fixture-only-1!'
@@ -98,6 +98,19 @@ async def test_a_slow_sign_in_continues_into_the_application(context, store, mon
     await ApplicationEngine(store).start(run, ApplicantProfile(), ExtensionBridge(page, run.id), {'username': LOGIN, 'password': PASSWORD})
     assert await page.evaluate('window.logins') == 1
     assert run.interventions and all(i.kind != 'verification' for i in run.interventions), run.interventions
+
+
+async def test_the_history_shows_the_1password_login_and_sign_in(context, store, vault, monkeypatch):
+    monkeypatch.setattr(ApplicationEngine, 'AUTH_POLLS', 40)
+    monkeypatch.setattr(ApplicationEngine, 'SECTION_POLLS', 20)
+    html = account_pages('signin', 'signin').replace('window.logins=(window.logins||0)+1', 'window.logins=(window.logins||0)+1,setTimeout(()=>show(`form`),1500)')
+    page = await open_fixture(context, 'workday', html)
+    vault.save_credential(page.url, LOGIN, PASSWORD)
+    run, stages = ApplicationRun(job_url=page.url), []
+    await ApplicationEngine(store, lambda r: stages.append(r.stage)).start(run, ApplicantProfile(), ExtensionBridge(page, run.id))
+    kinds = [e['kind'] for e in store.events(run.id) if e['kind'] in {'login_found', 'sign_in_attempted', 'signed_in'}]
+    assert kinds == ['login_found', 'sign_in_attempted', 'signed_in']
+    assert {CHECKING_LOGIN, SIGNING_IN} <= set(stages)
 
 
 async def test_sign_in_waits_out_workdays_spam_bot_timer(context, store):

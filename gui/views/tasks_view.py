@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 from core.automation.assistant import ai_config
 from core.automation.recipes import build_from_capture, recipe_for
 from core.automation.self_teach import consent_text
-from core.automation.models import ApplicantProfile, ApplicationRun, InterventionRequest, ats_name, canonical_url, job_identity, now, site_key
+from core.automation.models import ACCOUNT_STAGES, ApplicantProfile, ApplicationRun, InterventionRequest, ats_name, canonical_url, job_identity, now, site_key
 from core.automation.review import review_values
 from core.automation.service import AutomationService
 from core.storage.local_store import LocalStore
@@ -92,7 +92,7 @@ def ago(iso):
 
 
 def stage_text(run):
-    if 0 <= run.step < len(run.steps):
+    if run.stage not in ACCOUNT_STAGES and 0 <= run.step < len(run.steps):
         return f"{run.steps[run.step]} · step {run.step + 1} of {len(run.steps)}"
     if run.stage == "start":
         return "Not started"

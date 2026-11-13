@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 from core.automation.answers import UNANSWERED, applicable, linked, question_for, resolve
 from core.automation.assistant import ai_config, askable, autofill, matchable
-from core.automation.models import ApplicantProfile, ApprovedAnswer, FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url, account_context, application_scope
+from core.automation.models import CHECKING_LOGIN, CREATING_ACCOUNT, SAVING_LOGIN, SIGNING_IN, ApplicantProfile, ApprovedAnswer, FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url, account_context, application_scope
 from core.automation.accounts import login_address
 from core.automation.journey import ApplicationJourney
 from pathlib import Path
@@ -407,10 +407,12 @@ class ApplicationEngine:
             run.registration_attempted = run.login_attempted = False
         run.account = context
         try:
-            run.stage = 'Checking employer login'
+            run.stage = CHECKING_LOGIN
             self.checkpoint(run)
             if credential is None:
                 credential = await asyncio.to_thread(self.store._vault().credential, context)
+                if credential:
+                    self.store.record_event(run.id, 'login_found', run.stage, f'Found the saved login for {context.tenant} in 1Password.')
             if credential:
                 credential.setdefault('state', 'verified')
             self.account_credential = credential
@@ -458,12 +460,13 @@ class ApplicationEngine:
                     return False
                 recipe = str(length) + ',letters,digits' + (',symbols' if policy.get('symbols', True) else '')
                 username = login_address(context.tenant.split('/')[-1], profile.email, self.store.get('catchall_domain', ''), self.store.get('catchall_format', ''))
-                run.stage = 'Saving new login in 1Password'
+                run.stage = SAVING_LOGIN
                 self.checkpoint(run)
                 await asyncio.to_thread(self.store._vault().save_credential, context, username, None, 'new', password_recipe=recipe)
                 credential = await asyncio.to_thread(self.store._vault().credential, context)
                 if not credential.get('username') or not credential.get('password'):
                     raise RuntimeError('The saved 1Password login could not be read back. No account was submitted.')
+                self.store.record_event(run.id, 'login_saved', run.stage, f'Saved a new login for {context.tenant} in 1Password.')
                 self.account_credential = credential
                 self.checkpoint(run)
             state = credential.get('state', 'verified')
@@ -521,7 +524,9 @@ class ApplicationEngine:
             if self._pause or self._cancel:
                 return False
             # Write the uncertain state before the remote click, including across runs for the same account.
-            run.stage = 'Creating employer account' if create else 'Signing in'
+            run.stage = CREATING_ACCOUNT if create else SIGNING_IN
+            self.store.record_event(run.id, 'account_creation_attempted' if create else 'sign_in_attempted', run.stage,
+                                    f"{'Creating an account on' if create else 'Signing in to'} {context.tenant} with the 1Password login.")
             if create:
                 await self.account_state(run, 'creation_attempted')
                 run.registration_attempted = True
@@ -543,6 +548,7 @@ class ApplicationEngine:
                 accounts = found.get('accounts', [])
                 observation = accounts[0]['account'] if len(accounts) == 1 else {}
                 if observation.get('signed_in') or await self.account_signed_in():
+                    self.store.record_event(run.id, 'signed_in', run.stage, f'Signed in to {context.tenant}.')
                     if credential.get('state') != 'verified':
                         await self.account_state(run, 'verified')
                     return True

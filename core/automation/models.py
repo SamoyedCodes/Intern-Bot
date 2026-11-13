@@ -71,6 +71,11 @@ def canonical_url(url: str, *, supported_only=True) -> str:
     return urlunsplit((p.scheme, host, p.path, p.query, p.fragment))
 
 
+# Sign-in stages; the task view shows these over the site's step list, which a re-sign-in leaves in place.
+ACCOUNT_STAGES = CHECKING_LOGIN, SAVING_LOGIN, CREATING_ACCOUNT, SIGNING_IN = (
+    "Checking employer login", "Saving new login in 1Password", "Creating employer account", "Signing in")
+
+
 class AccountContext(BaseModel):
     provider: str
     tenant: str

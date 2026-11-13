@@ -19,7 +19,7 @@ from core.automation.speedy_profile import translate
 from core.browser.playwright_mgr import AsyncPlaywrightManager
 from gui.views.application_dialogs import RunDetailsDialog
 from gui.views.assistant_dialog import AssistantDialog
-from gui.views.tasks_view import TaskDialog
+from gui.views.tasks_view import TaskDialog, stage_text
 from tests.support import FIXTURES
 
 URL = 'https://a.wd1.myworkdayjobs.com/job/R123'
@@ -924,3 +924,11 @@ async def test_retry_and_restart_in_an_existing_tab(window, monkeypatch, status,
     await service._run(run, ApplicantProfile(), None)
     assert open_job.await_count == int(expected_navigation)
     prepare.assert_awaited_once()
+
+
+def test_signing_in_again_shows_over_the_sites_step_list():
+    # An expired Workday session signs in again with the step list from the earlier run still on the task.
+    run = ApplicationRun(job_url=URL, steps=['My Information', 'Review'], step=0, stage='Signing in')
+    assert stage_text(run) == 'Signing in'
+    run.stage = 'workday:abc123'
+    assert stage_text(run) == 'My Information · step 1 of 2'
