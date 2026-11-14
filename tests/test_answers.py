@@ -216,3 +216,35 @@ def test_self_identification_reworded_fills_only_a_listed_option(run, kind, opti
 def test_a_bare_yes_or_no_self_identification_is_never_borrowed(run):
     field = FormField('q', 'Do you need an accommodation for a disability?', '', 'radio', options=['Yes', 'No'])
     assert resolve(field, PROFILE.model_copy(update=dict(disability_status='No')), run, []).value is None
+
+
+def test_organising_changes_only_what_the_answers_themselves_support(store):
+    from core.automation.answers import canonical, plan_organise, tidy
+    profile = ApplicantProfile(email='ada@example.test')
+    saved = [ApprovedAnswer(question='When can you start?', value='Jan 2027', scope='employer', scope_key='a.example'),
+             ApprovedAnswer(question='Earliest start date', value='jan 2027', scope='application', scope_key='run-1', variants=['Start?']),
+             ApprovedAnswer(question='Contact email', value='ada@example.test', scope='global'),
+             ApprovedAnswer(question='Work email', value='other@example.test', scope='global'),
+             ApprovedAnswer(question='Notice period', value='None', scope='employer', scope_key='a.example'),
+             ApprovedAnswer(question='Notice period?', value='1 month', scope='employer', scope_key='b.example'),
+             ApprovedAnswer(question='Why us?', value='A', scope='employer', scope_key='a.example'),
+             ApprovedAnswer(question='Why this company?', value='B', scope='employer', scope_key='b.example'),
+             ApprovedAnswer(question='Hobbies', value='Chess', scope='global', origin='ai'),
+             ApprovedAnswer(question='Country code', value='+65', scope='employer', scope_key='a.example'),
+             ApprovedAnswer(question='Country code', value='+65', scope='employer', scope_key='b.example', country='Singapore')]
+    for answer in saved:
+        store.save_answer(answer)
+    topic = lambda i: canonical(saved[i].question)
+    advice = {'same': [[topic(0), topic(1)], [topic(6), topic(7)]], 'facts': {topic(2): 'email', topic(3): 'email'},
+              'category': {topic(0): 'Availability', topic(2): 'Contact'}, 'generic': [topic(0), topic(4), topic(8), topic(9)]}
+    categories, proposals = plan_organise(store.answers(), profile, advice)
+    assert categories == {saved[0].id: 'Availability', saved[2].id: 'Contact'}
+    # Answers given for different countries stay apart, the differing work email is not linked, "Why us?" differs per employer by design, and the unconfirmed AI answer is left alone.
+    assert [(p.ids, p.scope, p.fact, p.conflict) for p in proposals] == [
+        ([saved[0].id, saved[1].id], 'global', '', False), ([saved[2].id], '', 'email', False), ([saved[4].id, saved[5].id], '', '', True)]
+    assert [tidy(store, p) for p in proposals] == [True, True, False]
+    kept = {a.question: a for a in store.answers()}
+    assert len(store.answers()) == 10 and kept['Contact email'].fact == 'email' and kept['Notice period'].value == 'None'
+    start = kept['When can you start?']
+    assert (start.value, start.scope, start.scope_key, start.variants) == ('Jan 2027', 'global', '', ['Earliest start date', 'Start?'])
+    assert tidy(store, proposals[0]) and len(store.answers()) == 10  # Applying again changes nothing more.

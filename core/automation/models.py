@@ -251,6 +251,8 @@ class ApprovedAnswer(BaseModel):
     rewords: str = ""
     # "ai" answers fill forms but block sending until you confirm them (approving a review that shows them does), which makes them yours.
     origin: Literal["you", "ai"] = "you"
+    # A heading for the answer library, chosen when you organise it.
+    category: str = ""
     approved_at: str = Field(default_factory=now)
 
 

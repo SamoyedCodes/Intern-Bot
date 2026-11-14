@@ -724,7 +724,7 @@ async def test_a_local_model_links_facts_for_every_application_and_answers_this_
     sent = ai_questions(monkeypatch, {'Expected graduation year': ('fact', 'education.0.end_date.year'), 'Degree level': ('value', "Bachelor's"),
                                       'Highest degree': ('fact', 'education.0.degree')})
     await ApplicationEngine(store).ai_autofill(run, profile, fields)
-    assert sent[0][0] == ['Expected graduation year', 'Degree level', 'Highest degree']  # Never the sensitive or essay questions.
+    assert sent[0][0] == ['Expected graduation year', 'Degree level', 'Highest degree', 'Gender']  # Never the essay; Gender goes as wording only.
     year, level, degree = (resolve(f, profile, run, store.answers()) for f in fields[:3])
     assert (year.value, year.ai, level.value, level.ai) == ('2027', True, "Bachelor's", True)
     assert degree.value is None  # "BSc Data Science" is not one of the form's options, so no link was kept.
@@ -740,7 +740,8 @@ async def test_standing_answers_let_the_ai_answer_declarations_for_this_employer
     fields = [FormField('a', 'Have you ever been convicted of any offence?', '', 'select-one', options=['Yes', 'No'])]
     sent = ai_questions(monkeypatch, {fields[0].label: ('standing', 'No')})
     await ApplicationEngine(store).ai_autofill(run, ApplicantProfile(), fields)
-    assert sent == []  # No standing answers: the question never leaves.
+    # No standing answers: the wording goes, but only a saved answer or profile field may settle it, never the AI's own words.
+    assert len(sent) == 1 and store.answers() == []
     profile = ApplicantProfile(standing_answers='I have never been charged or convicted.')
     await ApplicationEngine(store).ai_autofill(run, profile, fields)
     found = resolve(fields[0], profile, run, store.answers())
@@ -1359,3 +1360,33 @@ async def test_a_problem_about_a_control_no_longer_on_the_page_is_not_asked(cont
     bridge.command = stale
     await ApplicationEngine(store).start(run, profile_for('greenhouse'), bridge)
     assert run.status == 'ready_for_review', run.interventions
+
+
+async def test_an_answer_from_another_employer_is_borrowed_unconfirmed_and_personal_questions_only_point(store, monkeypatch):
+    store.put('ai_provider', 'compatible')
+    store.put('compatible_model', 'qwen3:8b')
+    store.save_answer(ApprovedAnswer(question='When can you start?', value='Jan 2027', scope='employer', scope_key='other.example'))
+    # Seen live: the same wording answered for two other applications, once as No and once as an unticked box.
+    store.save_answer(ApprovedAnswer(question='Worked here before?', value='No', scope='application', scope_key='another-run'))
+    store.save_answer(ApprovedAnswer(question='Worked here before?', value=False, scope='employer', scope_key='other.example'))
+    store.save_answer(ApprovedAnswer(question='Why us?', value='A', scope='employer', scope_key='a.example'))
+    store.save_answer(ApprovedAnswer(question='Why us?', value='B', scope='employer', scope_key='b.example'))
+    store.save_answer(ApprovedAnswer(question='Do you require sponsorship to work?', value=False, scope='global'))
+    store.save_answer(ApprovedAnswer(question='I agree to the terms', value=True, scope='global'))
+    run = ApplicationRun(job_url='https://jobs.lever.co/example/1')
+    profile = ApplicantProfile(gender='Female')
+    fields = [FormField('s', 'Earliest start date', '', 'text'), FormField('v', 'Will you need visa sponsorship?', '', 'select-one', options=['Yes', 'No']),
+              FormField('g', 'Gender identity', '', 'text'), FormField('p', 'Expected salary', '', 'text'), FormField('t', 'I accept the terms', '', 'radio'),
+              FormField('w', 'Worked here before?', '', 'radio', option='Yes'), FormField('x', 'Worked here before?', '', 'radio', option='No')]
+    sent = ai_questions(monkeypatch, {'Earliest start date': ('saved', 1), 'Will you need visa sponsorship?': ('saved', 0),
+                                      'Gender identity': ('fact', 'gender'), 'Expected salary': ('value', '5000'), 'Worked here before?': ('saved', 2)})
+    await ApplicationEngine(store).ai_autofill(run, profile, fields)
+    # The consent question and answer never leave; "Why us?" has two different answers, so it is not offered.
+    assert sent == [(['Earliest start date', 'Will you need visa sponsorship?', 'Gender identity', 'Expected salary', 'Worked here before?'], [[], ['Yes', 'No'], [], [], ['Yes', 'No']],
+                     ['Do you require sponsorship to work?', 'When can you start?', 'Worked here before?'])]
+    assert resolve(fields[5], profile, run, store.answers()).value == 'No'  # The very wording, answered elsewhere, is borrowed too.
+    start, visa, gender, salary = (resolve(f, profile, run, store.answers()) for f in fields[:4])
+    assert (start.value, start.ai, visa.value, visa.ai, gender.value, gender.ai) == ('Jan 2027', True, 'No', True, 'Female', True)
+    assert salary.value is None  # Never the AI's own words for a personal question.
+    other = ApplicationRun(job_url='https://jobs.lever.co/example/2')
+    assert all(resolve(f, profile, other, store.answers()).value is None for f in fields[:3])  # This application only, until you confirm.

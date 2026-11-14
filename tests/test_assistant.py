@@ -5,7 +5,7 @@ import anthropic
 import pytest
 
 from core.automation import assistant
-from core.automation.assistant import PROVIDERS, NoRedirect, askable, autofill, career_facts, endpoint, generate_text, check_connection
+from core.automation.assistant import PROVIDERS, NoRedirect, askable, autofill, pointer_only, career_facts, endpoint, generate_text, check_connection
 from core.automation.fields import FormField
 from core.automation.models import ApplicantProfile, Education, Experience
 from core.automation.privacy import redact
@@ -286,3 +286,35 @@ def test_an_answer_the_form_did_not_take_is_sent_masked_and_matched_only_to_a_li
     assert found == {heard.label: ('value', 'UOB Careers Website')}  # "Sir" is not listed, and q2 had no answer to match.
     text = sent_text(network)
     assert '"answer": "Company website, said [name]"' in text and PERSON.first_name not in text
+
+
+def test_personal_and_legal_questions_go_as_wording_and_come_back_only_as_pointers(network):
+    person = PERSON.model_copy(update={'gender': 'Non-binary', 'citizenship': 'Singaporean', 'requires_sponsorship': False})
+    questions = [FormField('a', 'Gender', '', 'select-one', options=['Female', 'Male', 'Non-binary']), FormField('b', 'Visa sponsorship needed?', '', 'radio', options=['Yes', 'No']),
+                 FormField('c', 'Expected salary', '', 'text'), FormField('d', 'Nationality', '', 'text')]
+    network['payload'] = reply(text=json.dumps({'q1': {'fact': 'gender'}, 'q2': {'value': 'No'}, 'q3': {'standing': '5000'}, 'q4': {'saved': 's1'}}))
+    assert autofill(cfg(facts=True), questions, ['Country of citizenship?'], person) == {'Gender': ('fact', 'gender'), 'Nationality': ('saved', 0)}
+    text = sent_text(network).split('Career facts:')[0]
+    assert '"pointer_only": true' in text and '"gender": "gender"' in text
+    assert 'Singaporean' not in sent_text(network) and '"requires_sponsorship": false' not in text
+    assert [pointer_only(FormField('a', label, '', kind)) for label, kind in
+            (('Gender', 'text'), ('Visa status', 'text'), ('I agree to share my gender', 'radio'), ('School', 'text'), ('Gender', 'checkbox'))] == [True, True, False, False, False]
+
+
+def test_organising_sends_wordings_and_fact_names_only_and_keeps_replies_inside_the_closed_sets(network):
+    from core.automation.assistant import organise
+    from core.automation.models import ApprovedAnswer
+    answers = [ApprovedAnswer(question='When can you start?', value='SECRET-A', scope='employer', scope_key='secret-employer.example'),
+               ApprovedAnswer(question='Earliest start date?', value='SECRET-B', variants=['Start']), ApprovedAnswer(question='Email', fact='email'),
+               ApprovedAnswer(question='I agree to the terms', value=True), ApprovedAnswer(question='when can you start', value='SECRET-C')]
+    network['payload'] = reply(text=json.dumps({'same': [['t1', 't2', 't9'], ['t3'], 'x'], 'facts': {'t3': 'email', 't1': 'password', 't8': 'email'},
+                                                'category': {'t1': 'Availability', 't2': 'Nonsense'}, 'generic': ['t1', 't7']}))
+    assert organise(cfg(), answers, PERSON) == {'same': [['when can you start', 'earliest start date']], 'facts': {'email': 'email'},
+                                                'category': {'when can you start': 'Availability'}, 'generic': ['when can you start']}
+    text = sent_text(network)
+    assert json.loads(text)['questions'] == {'t1': 'When can you start?', 't2': 'Earliest start date?', 't3': 'Email'}
+    for value in ('SECRET', 'secret-employer', 'agree', 'Jonathan', 'jon@private.test', 'Example University'):
+        assert value not in text
+    network['payload'] = reply(text='Sorry.')
+    with pytest.raises(ValueError, match='nothing was changed'):
+        organise(cfg(), answers, PERSON)

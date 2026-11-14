@@ -34,7 +34,7 @@ SAFETY_FACTS = [
     "Final submission is yours by default. Automatic submission needs your authorization for each application and stops if anything can't be verified.",
     "Applications run in a separate, visible Chromium window. Employers may ask you to sign in again.",
     "Profiles, answers and history stay in a local database on this Mac. Employer logins and API keys are kept only in the system keychain.",
-    "AI autofill receives question wording and permitted career facts. Scout sends its previewed search context and public postings to your selected provider. Contact details, documents, credentials and application pages stay private.",
+    "AI autofill receives question wording, the wording of your saved questions, the names of your profile fields and permitted career facts; personal and legal questions are only ever pointed at your own saved answer or profile field. Scout sends its previewed search context and public postings to your selected provider. Contact details, documents, credentials and application pages stay private.",
     "Preview: adapters are tested against fictional forms. Live employer acceptance testing is still pending.",
 ]
 

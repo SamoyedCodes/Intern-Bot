@@ -5,7 +5,7 @@ import re
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from core.automation.answers import fact_allowed, fact_catalog
+from core.automation.answers import CATEGORIES, canonical, fact_allowed, fact_catalog, names_row
 from core.automation.models import normalized, same_choice
 from core.automation.privacy import redact
 
@@ -26,11 +26,13 @@ FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "clau
 
 # Only short factual controls go to an AI: no essays, uploads, passwords, or lone checkboxes (nearly always a consent).
 AI_KINDS = {"text", "email", "tel", "url", "number", "date", "month", "select-one", "select-multiple", "combobox", "radio", "spinbutton"}
-# Questions an AI never answers: demographics, health, pay, and anything you agree to.
-SENSITIVE = re.compile(r"gender|\bsex\b|\brace\b|ethnic|hispanic|latin[oax]|veteran|military|disab|"
-                       r"birth|\bage\b|how old|religio|sexual|orientation|pronoun|marital|pregnan|"
-                       r"vaccin|medical|health|salary|compensation|\bpay\b|agree|consent|terms|certify|acknowledge|attest|signature|privacy|"
-                       r"confirm|understand|accept|i have read", re.I)
+# Anything you agree to never reaches an AI.
+CONSENT = re.compile(r"agree|consent|terms|certify|acknowledge|attest|signature|privacy|confirm|understand|accept|i have read", re.I)
+# Demographics, health and pay: an AI never words an answer to these, it may only point at your saved answer or profile field.
+PERSONAL = re.compile(r"gender|\bsex\b|\brace\b|ethnic|hispanic|latin[oax]|veteran|military|disab|"
+                      r"birth|\bage\b|how old|religio|sexual|orientation|pronoun|marital|pregnan|"
+                      r"vaccin|medical|health|salary|compensation|\bpay\b", re.I)
+SENSITIVE = re.compile(PERSONAL.pattern + "|" + CONSENT.pattern, re.I)
 # Legal status and declarations: sent only when the profile has standing answers, the one source an AI may answer them from.
 LEGAL = re.compile(r"sponsor|visa|authori[sz]|citizen|nationality|immigra|criminal|convict|felon|arrest|declar", re.I)
 
@@ -39,9 +41,17 @@ def askable(field, standing=False):
     return field.kind in AI_KINDS and not SENSITIVE.search(field.label) and (standing or not LEGAL.search(field.label))
 
 
-def matchable(answer):
-    """A saved answer an AI may reuse for a reworded question: never one to a sensitive or legal question."""
-    return not any(SENSITIVE.search(q) or LEGAL.search(q) for q in (answer.question, *answer.variants))
+def pointer_only(field):
+    """A demographic, pay or legal question: its wording may be sent, and the reply may only name a saved answer or profile field."""
+    return field.kind in AI_KINDS and not CONSENT.search(field.label) and bool(PERSONAL.search(field.label) or LEGAL.search(field.label))
+
+
+def matchable(answer, personal=False):
+    """A saved answer an AI may reuse for a reworded question: never a consent, and one to a personal or legal question only for
+    a question of that kind (personal=True)."""
+    # A ticked option of a personal question ("Male, Please select your gender:") would give the answer away in its wording.
+    return not any(CONSENT.search(q) or (not personal or answer.value is True) and (PERSONAL.search(q) or LEGAL.search(q))
+                   for q in (answer.question, *answer.variants))
 
 
 def career_facts(profile):
@@ -109,6 +119,7 @@ TASKS = {
                 '{"standing": "answer"} only when standing answers are supplied and one of those statements settles the question for any employer or country '
                 '(a statement that the applicant has no relatives at any employer answers "Are you related to an employee of X?" with "No"): '
                 'exactly the listed option a person who made that statement would pick when options are given (such as "No", "Not applicable" or "Singapore Citizen"), otherwise a short answer such as "No" or "N/A"; '
+                'a question marked "pointer_only" is personal or legal: reply only {"saved": …} or {"fact": …} for it, or null; '
                 "null for anything else, including opinions, essays and anything you would have to guess. "
                 'Reply with only a JSON object with one entry per question id, like {"q1": {"fact": "email"}, "q2": {"saved": "s3"}, "q3": null}.',
     "self_teach": "You are filling one page of a job application form, described as data: fields (f1, f2, …) with their label, kind, options "
@@ -124,6 +135,16 @@ TASKS = {
                   'Then choose "advance": the id of the button that continues to the next page (never one whose kind is submit), '
                   'or "done": "review" when this is the final review page with only a submit button left, or "done": "blocked" with a short "reason". '
                   'Reply with only a JSON object like {"fields": {"f1": {"widget": "native", "fact": "email"}, "f2": {"widget": "aria-combobox"}}, "advance": "b3"}.',
+    "organise": "You are tidying a job applicant's library of saved application-form questions (t1, t2, …). You see only the questions, "
+                "never the answers. Reply with only a JSON object with four keys: "
+                '"same": lists of ids that ask for exactly the same fact, so one answer is equally correct for all of them '
+                "(a different country, employer, period, document or a negated question is a different question); "
+                '"facts": for each question that one of the listed profile facts answers directly, its fact key '
+                '(append ".year" or ".month" when it asks only for that part of a date fact); '
+                '"category": for every question, exactly one of the listed categories; '
+                '"generic": ids of questions whose answer would be the same at any employer and for any job '
+                "(contact details, education, availability, eligibility), never ones about a specific employer, role, team or posting. "
+                'Like {"same": [["t1", "t7"]], "facts": {"t3": "email"}, "category": {"t1": "Contact"}, "generic": ["t1", "t3"]}.',
     "ping": "Reply with only the word OK.",
 }
 TEST_TOKENS = 16  # The cheapest reply every provider accepts (OpenAI's minimum).
@@ -158,12 +179,15 @@ def autofill(cfg, questions, saved, profile, current=None):
     current: {label: answer} for questions whose approved answer the form didn't take; sent (masked) so the reply can name the form's option for it.
     Returns {label: ("saved", index) | ("fact", key) | ("value", answer) | ("standing", answer)}. Anything outside those closed sets is dropped."""
     current = current or {}
-    catalog = fact_catalog(profile)
     standing = profile.standing_answers.strip()
+    # Personal and legal questions (unless your standing answers cover legal ones) are resolved by pointer only.
+    pointers = {q.label for q in questions if not askable(q, bool(standing))}
+    catalog = fact_catalog(profile, personal=bool(pointers))
     context = json.dumps({
         # Distinct q/s ids: small models confuse two lists numbered from 1.
         "questions": {f"q{i}": dict(question=q.label, kind=q.kind, **({"options": q.options[:250]} if q.options else {}),
-                                    **({"answer": redact(str(current[q.label]), profile)} if q.label in current else {}))
+                                    **({"pointer_only": True} if q.label in pointers else {}),
+                                    **({"answer": redact(str(current[q.label]), profile)} if q.label in current and q.label not in pointers else {}))
                       for i, q in enumerate(questions, 1)},
         "saved_questions": {f"s{i}": s for i, s in enumerate(saved, 1)},
         "profile_facts": catalog,
@@ -191,9 +215,40 @@ def autofill(cfg, questions, saved, profile, current=None):
             results[question.label] = ("saved", s)
         elif kind == "fact" and isinstance(value, str) and fact_allowed(value, catalog):
             results[question.label] = ("fact", value)
+        elif question.label in pointers:
+            continue
         elif (kind == "value" and (cfg["facts"] or question.label in current) or kind == "standing" and standing) and isinstance(value, (str, bool)) and (answer := checked(question, value)) is not None:
             results[question.label] = (kind, answer)
     return results
+
+
+def organise(cfg, answers, profile):
+    """Ask how the saved questions relate: which ask the same thing, which profile fact each repeats, its category and whether it is generic.
+
+    Only question wordings and profile fact names are sent: never an answer, an employer or an application; consents and questions
+    that name one of your schools, employers or languages, or a personal option you ticked, are left out.
+    Returns {"same": [[question, …]], "facts": {question: key}, "category": {question: name}, "generic": [question]} keyed by
+    canonical question, which answers.plan_organise checks against your answers on this Mac."""
+    # ponytail: one request within generate_text's 60,000 characters; send the library in parts if it outgrows that.
+    topics = list(dict.fromkeys(canonical(a.question) for a in answers
+                                if matchable(a, personal=True) and not names_row(a.question, profile)))
+    shown = {canonical(a.question): a.question for a in reversed(answers)}
+    catalog = fact_catalog(profile, personal=True)
+    reply = generate_text(cfg, "organise", json.dumps({"questions": {f"t{i}": shown[t][:300] for i, t in enumerate(topics, 1)},
+                                                       "profile_facts": catalog, "categories": CATEGORIES}, ensure_ascii=False), 16000)
+    try:
+        advice = json.loads(re.search(r"\{.*\}", re.sub(r"<think>.*?</think>", "", reply, flags=re.S), re.S)[0])
+        if not isinstance(advice, dict):
+            raise ValueError
+    except (TypeError, ValueError):
+        raise ValueError("The AI reply was not an organising plan; nothing was changed.") from None
+    topic = lambda ref: topics[int(m[1]) - 1] if (m := re.fullmatch(r"t?(\d+)", str(ref))) and 1 <= int(m[1]) <= len(topics) else None
+    listed = lambda value: value if isinstance(value, list) else []
+    paired = lambda value: value.items() if isinstance(value, dict) else ()
+    return {"same": [group for g in listed(advice.get("same")) if len(group := list(dict.fromkeys(t for ref in listed(g) if (t := topic(ref))))) > 1],
+            "facts": {topic(ref): key for ref, key in paired(advice.get("facts")) if topic(ref) and isinstance(key, str) and fact_allowed(key, catalog)},
+            "category": {topic(ref): name for ref, name in paired(advice.get("category")) if topic(ref) and name in CATEGORIES},
+            "generic": [t for ref in listed(advice.get("generic")) if (t := topic(ref))]}
 
 
 class NoRedirect(HTTPRedirectHandler):

@@ -30,7 +30,7 @@ Everything runs locally and the user stays in control of submission. Field value
 - Native Qt controls handle every application action. WebGL visualizes the same records and has a still-image fallback.
 - Employer logins via 1Password CLI, scoped to the employer tenant; API keys and the vault token stay in the macOS keychain.
 - Optional automatic account creation saves the login first, accepts required signup terms, and leaves marketing unchecked. Email verification, CAPTCHA, MFA and ambiguous account forms require the user.
-- Optional AI providers (local, Claude, OpenAI, Gemini, DeepSeek, OpenAI-compatible).
+- Optional AI providers (local, Claude, OpenAI, Gemini, DeepSeek, OpenAI-compatible). For matching and for organising the answer library an AI sees question wording and profile field names and replies with which saved answer or field to use; values are looked up on the Mac. Personal and legal questions are pointer-only, consents are never sent.
 - Automatic submission off by default, authorized per application.
 
 ## Brand Commitments

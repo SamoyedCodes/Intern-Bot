@@ -7,8 +7,8 @@ import re
 import time
 from urllib.parse import urlsplit
 
-from core.automation.answers import UNANSWERED, applicable, asks, linked, profile_rows, question_for, resolve
-from core.automation.assistant import ai_config, askable, autofill, matchable
+from core.automation.answers import UNANSWERED, applicable, asks, canonical, field_value, linked, names_row, profile_rows, question_for, resolve
+from core.automation.assistant import ai_config, askable, autofill, matchable, pointer_only
 from core.automation.models import CHECKING_LOGIN, CREATING_ACCOUNT, SAVING_LOGIN, SIGNING_IN, CHOICE_KINDS, ApplicantProfile, ApprovedAnswer, FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url, account_context, application_scope, same_choice, same_choices
 from core.automation.accounts import login_address
 from core.automation.journey import ApplicationJourney
@@ -674,16 +674,20 @@ class ApplicationEngine:
         answers = self.store.answers()
         questions, current = {}, {}
         asked, rows = {}, set()
+        standing = bool(profile.standing_answers.strip())
         for field in fields:
-            if not askable(field, bool(profile.standing_answers.strip())):
+            # A personal or legal question goes as wording only, to be pointed at your saved answer or profile field; your answer to
+            # one never leaves, so it has no repair.
+            factual = askable(field, standing)
+            if not (factual or pointer_only(field)):
                 continue
             found = resolve(field, profile, run, answers)
-            mismatched = listed and field.options and found.value is not None and not isinstance(found.value, bool) and not any(same_choice(o, found.value) for o in field.options)
+            mismatched = factual and listed and field.options and found.value is not None and not isinstance(found.value, bool) and not any(same_choice(o, found.value) for o in field.options)
             # A row's listed question is asked and answered under its row's name ("Language — Chinese (Mandarin)"): saved under the bare
             # label, an answer counts as the first row's (seen live: a match for the Mandarin row would have changed the English row).
             name = question_for(field, profile) if listed and field.group else field.label
             # A different answer the form didn't take is a new question for the AI; the same one is never sent twice.
-            key = normalized(name) + ('|listed' if listed else '') + ('=' + normalized(str(found.value)) if mismatched else '')
+            key = normalized(name) + ('|listed' if listed else '') + ('' if factual else '|pointer') + ('=' + normalized(str(found.value)) if mismatched else '')
             if key in run.ai_asked:
                 continue
             if found.reason == UNANSWERED or mismatched:
@@ -709,7 +713,22 @@ class ApplicationEngine:
             current = {}
             if not questions:
                 return 0
-        known = [a for a in applicable(answers, profile, run) if matchable(a)]
+        pointers = {label for label, q in questions.items() if not askable(q, standing)}
+        usable = applicable(answers, profile, run)
+        # A saved question that names one of your rows is career data, like the row questions above.
+        offered = lambda a: matchable(a, bool(pointers)) and (cfg['facts'] or not names_row(a.question, profile))
+        known = [a for a in usable if offered(a)]
+        # Your own answers given for another application or employer are offered too, by wording alone. Each wording is offered once,
+        # and only when every answer to it agrees.
+        # ponytail: a wording with differing answers ("Why us?") is skipped; rank by recency if that drops too much.
+        taken, others = {canonical(a.question) for a in known}, {}
+        for a in answers if run.reuse_answers else ():
+            if (a not in usable and a.profile_name == run.profile_name and a.origin == 'you' and not a.omit and not a.rewords
+                    and (not a.country or normalized(a.country) == normalized(profile.country)) and offered(a)
+                    and canonical(a.question) not in taken):
+                others.setdefault(canonical(a.question), []).append(a)
+        said = lambda a: (normalized(str(field_value(FormField('', '', '', 'text'), a.value))), a.fact)  # True is "Yes" wherever it was saved.
+        known += [group[0] for group in others.values() if len({said(a) for a in group}) == 1]
         seconds = self.AI_LOCAL_SECONDS if cfg['local'] else self.AI_MATCH_SECONDS
         run.ai_requests += 1
         # The log records what kind of data left, never the content.
@@ -733,22 +752,36 @@ class ApplicationEngine:
             if label in current and kind != 'value':
                 saved -= 1
                 continue  # Only one of the listed options can replace an answer the form didn't take.
+            field = questions[label]
+            if label in pointers and kind not in ('saved', 'fact'):
+                saved -= 1
+                continue  # A personal or legal question is never answered in the AI's words.
             if kind == 'saved':
                 answer = known[value]
-                if asks(answer, label):
+                if (answer in usable and asks(answer, label)) or (label not in pointers and not matchable(answer)):
                     saved -= 1
-                    continue  # Matched to the answer it already has (seen live), which the form didn't take: nothing new.
-                answer.variants.append(label)
-                self.store.save_answer(answer)
-                self.store.record_event(run.id, 'answer_matched', run.stage, f'AI matched “{label}” to your answer for “{answer.question}”.')
-                continue
-            field = questions[label]
-            if kind == 'fact':
+                    continue  # Matched to the answer it already has (seen live), or a factual question to a personal answer: nothing new.
+                if answer in usable and label not in pointers:
+                    answer.variants.append(label)
+                    self.store.save_answer(answer)
+                    self.store.record_event(run.id, 'answer_matched', run.stage, f'AI matched “{label}” to your answer for “{answer.question}”.')
+                    continue
+                # Borrowed from another application or employer, or a personal or legal match: copied here on this Mac for this
+                # application only, and unconfirmed until you review it.
+                found = linked(field, profile, answer.fact).value if answer.fact else field_value(field, answer.value)
+                if found in (None, '') or (field.options and not any(same_choice(o, found) for o in field.options)):
+                    saved -= 1
+                    continue  # Your answer isn't one of this form's options; ask instead.
+                answer = ApprovedAnswer(question=label, value=answer.value, fact=answer.fact, profile_name=run.profile_name, scope='application',
+                                        scope_key=run.id, country=answer.country, origin='ai')
+                note = f'AI matched “{label}” to your answer for “{known[value].question}”.'
+            elif kind == 'fact':
                 found = linked(field, profile, value).value
                 if found is None or (field.options and not any(same_choice(o, found) for o in field.options)):
                     saved -= 1
                     continue  # The profile's wording isn't one of the form's options; ask instead.
-                answer = ApprovedAnswer(question=label, fact=value, profile_name=run.profile_name, scope='global', origin='ai')
+                answer = ApprovedAnswer(question=label, fact=value, profile_name=run.profile_name, origin='ai',
+                                        **(dict(scope='application', scope_key=run.id) if label in pointers else dict(scope='global')))
                 note = f'AI linked “{label}” to your profile ({value}).'
             elif label in current:
                 # The form's own option for your answer, at your answer's scope; one for every employer is kept for this employer,

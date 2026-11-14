@@ -972,3 +972,31 @@ def test_signing_in_again_shows_over_the_sites_step_list():
     assert stage_text(run) == 'Signing in'
     run.stage = 'workday:abc123'
     assert stage_text(run) == 'My Information · step 1 of 2'
+
+
+def test_organising_groups_answers_and_applies_only_the_ticked_changes(window, monkeypatch):
+    import gui.views.application_dialogs as dialogs
+    store, bank = window.store, window.answers_view
+    name = store.get('active_profile', 'Default')
+    for question, scope, key in (('When can you start?', 'employer', 'a.example'), ('Earliest start date', 'employer', 'b.example'), ('Hobbies', 'global', '')):
+        store.save_answer(ApprovedAnswer(question=question, value='Jan 2027', scope=scope, scope_key=key, profile_name=name))
+    bank.organise()
+    assert 'AI provider' in bank.notice.text() and bank.organise_btn.isEnabled()  # Nothing is sent without a provider.
+    advice = {'same': [['when can you start', 'earliest start date']], 'facts': {}, 'category': {'when can you start': 'Availability'},
+              'generic': ['when can you start', 'hobbies']}
+    seen = []
+    def untick_the_second(dialog):
+        seen.extend(dialog.list.item(i).text() for i in range(dialog.list.count()))
+        assert dialog.apply_btn.text() == 'Apply 1 change'
+        return QDialog.Accepted
+    monkeypatch.setattr(dialogs.OrganiseDialog, 'exec', untick_the_second)
+    bank.organised(name, store.profiles()[name], advice)
+    assert seen == ['Merge 2 answers to “When can you start?” into one and use it for any application.']
+    answers = {a.question: a for a in store.answers()}
+    assert set(answers) == {'When can you start?', 'Hobbies'} and answers['When can you start?'].scope == 'global'
+    headings = [bank.tree.topLevelItem(i) for i in range(bank.tree.topLevelItemCount())]
+    assert [h.text(0) for h in headings] == ['Availability  ·  1', 'Uncategorised  ·  1']
+    bank.tree.setCurrentItem(headings[0])
+    assert not bank.remove_btn.isEnabled()  # A heading is not an answer.
+    bank.tree.setCurrentItem(headings[0].child(0))
+    assert bank.remove_btn.isEnabled() and headings[0].child(0).childCount() == 1

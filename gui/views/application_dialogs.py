@@ -1,4 +1,5 @@
 """Structured profile editing, guided answer approval, the review you approve before sending, and the approved-answer bank."""
+import json
 import re
 from difflib import SequenceMatcher
 
@@ -9,10 +10,12 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
-from core.automation.answers import UNANSWERED, applicable, asks, fact_name
+from core.automation.answers import CATEGORIES, UNANSWERED, applicable, asks, fact_name, plan_organise, tidy
+from core.automation.assistant import ai_config, organise
 from core.automation.models import ApplicantProfile, ApprovedAnswer, Education, Experience, Language, ats_name, employer_key, normalized, site_key
 from core.automation.recipes import save_recipe
 from core.automation.review import shown_value
+from gui.views.assistant_dialog import AssistWorker
 from gui.theme import form_layout, MessageBar, ReadableTree, button, card, dot_icon, label, restyle, shortcut, station_heading
 
 BOOLEAN_FIELDS = {"work_authorized", "requires_sponsorship", "hispanic_or_latino"}
@@ -793,6 +796,49 @@ class RecipeReviewDialog(QDialog):
         self.reject()
 
 
+class OrganiseDialog(QDialog):
+    """The changes organising proposes: each ticked one is applied, and answers that disagree are listed for you to settle."""
+
+    def __init__(self, proposals, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Organise answers")
+        self.resize(680, 520)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(10)
+        layout.addWidget(station_heading("Organise answers", "verify", "Untick anything you want left as it is. No answer's value changes.", compact=True))
+        self.list = QListWidget()
+        self.list.setWordWrap(True)
+        self.list.setAccessibleName("Proposed changes")
+        for proposal in proposals:
+            item = QListWidgetItem(("Needs you · " if proposal.conflict else "") + proposal.text, self.list)
+            item.setData(Qt.UserRole, proposal)
+            item.setToolTip(item.text())
+            if proposal.conflict:
+                item.setFlags(Qt.ItemIsEnabled)
+            else:
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+                item.setCheckState(Qt.Checked)
+        self.list.itemChanged.connect(self.count)
+        layout.addWidget(self.list, 1)
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(button("Close", self.reject))
+        self.apply_btn = button("", self.accept, "primary")
+        row.addWidget(self.apply_btn)
+        layout.addLayout(row)
+        self.count()
+
+    def chosen(self):
+        items = (self.list.item(i) for i in range(self.list.count()))
+        return [item.data(Qt.UserRole) for item in items if item.flags() & Qt.ItemIsUserCheckable and item.checkState() == Qt.Checked]
+
+    def count(self, *_):
+        n = len(self.chosen())
+        self.apply_btn.setText(f"Apply {n} change{'' if n == 1 else 's'}")
+        self.apply_btn.setEnabled(bool(n))
+
+
 class AnswersView(QWidget):
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -834,6 +880,9 @@ class AnswersView(QWidget):
         self.empty.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.empty, 1)
         row = QHBoxLayout()
+        self.worker = None
+        self.organise_btn = button("Organise with AI…", self.organise, tip="Merge duplicate questions, link answers to your profile and group them. Only question wording is sent.")
+        row.addWidget(self.organise_btn)
         row.addStretch()
         self.confirm_btn = button("Confirm AI answer", self.confirm, "primary")
         row.addWidget(self.confirm_btn)
@@ -853,7 +902,10 @@ class AnswersView(QWidget):
         companies = {run.id: run.company or site_key(run.job_url) for run in self.store.runs()}
         query = self.search.text().strip().casefold()
         self.tree.clear()
-        for answer in self.answers:
+        # Once organised, answers sit under their category; the rest follow under Uncategorised.
+        grouped, headings = any(a.category for a in self.answers), {}
+        order = lambda a: CATEGORIES.index(a.category) if a.category in CATEGORIES else len(CATEGORIES)
+        for answer in sorted(self.answers, key=order) if grouped else self.answers:
             if self.filter.currentIndex() == 1 and answer.origin != "ai":
                 continue
             if self.filter.currentIndex() == 2 and answer.origin == "ai":
@@ -864,7 +916,14 @@ class AnswersView(QWidget):
                        "employer": f"All applications at {answer.scope_key}", "global": "Any application"}[answer.scope]
             count = len(answer.variants)
             question = answer.question + (f"  ·  {count} more wording{'s' if count > 1 else ''}" if count else "")
-            item = QTreeWidgetItem(self.tree, [question, shown(answer), applies, answer.profile_name, answer.country or "—"])
+            parent = self.tree
+            if grouped:
+                name = answer.category if answer.category in CATEGORIES else "Uncategorised"
+                if name not in headings:
+                    headings[name] = QTreeWidgetItem(self.tree, [name])
+                    headings[name].setExpanded(True)
+                parent = headings[name]
+            item = QTreeWidgetItem(parent, [question, shown(answer), applies, answer.profile_name, answer.country or "—"])
             item.setData(0, Qt.UserRole, answer.id)
             for column in range(5):
                 item.setToolTip(column, item.text(column))
@@ -875,6 +934,9 @@ class AnswersView(QWidget):
                 child.setToolTip(0, f"Also asked as “{variant}”")
             # Searching for a wording opens its answer so the match is visible.
             item.setExpanded(bool(query) and any(query in v.casefold() for v in answer.variants))
+        for name, heading in headings.items():
+            heading.setText(0, f"{name}  ·  {heading.childCount()}")
+            heading.setFirstColumnSpanned(True)
         has_matches = bool(self.tree.topLevelItemCount())
         self.tree.setVisible(has_matches)
         self.empty.setVisible(not has_matches)
@@ -884,6 +946,8 @@ class AnswersView(QWidget):
 
     def update_actions(self):
         item = self.tree.currentItem() if self.tree.selectedItems() else None
+        if item and not item.data(0, Qt.UserRole):
+            item = None  # A category heading.
         self.remove_btn.setEnabled(bool(item))
         self.remove_btn.setText("Remove wording…" if item and item.data(0, Qt.UserRole + 1) else "Delete answer…")
         answer = next((a for a in self.answers if item and a.id == item.data(0, Qt.UserRole)), None)
@@ -897,8 +961,61 @@ class AnswersView(QWidget):
         self.refresh()
         self.notice.notify("Confirmed. It now counts as your own answer, including for sending.", "success")
 
+    def organise(self):
+        try:
+            cfg = ai_config(self.store)
+        except Exception:
+            cfg = None
+        name = self.store.get("active_profile", "Default")
+        profile = self.store.profiles().get(name)
+        mine = [a for a in self.store.answers() if a.profile_name == name]
+        if not cfg or not profile or not mine:
+            self.notice.notify("Set up an AI provider in Settings first." if not cfg else f"The {name} profile has no saved answers to organise.", "warning")
+            return
+        where = "a model on this Mac" if cfg["local"] else f"{cfg['name']} (cloud)"
+        if QMessageBox.question(self, "Organise answers with AI?", f"Send the wording of the {len(mine)} saved question{'s' if len(mine) > 1 else ''} for the {name} profile, "
+                                f"and the names of your profile fields, to {where}?\n\nNo answer, profile value, employer or application is sent, and consents "
+                                "are left out. Categories are applied straight away; merges, profile links and wider reuse wait for your approval.") != QMessageBox.Yes:
+            return
+        self.organise_btn.setEnabled(False)
+        self.organise_btn.setText("Organising…")
+        self.worker = AssistWorker(self, cfg, mine, profile, func=lambda *args: json.dumps(organise(*args)))
+        self.organising = (name, profile)
+        # Bound methods, so the replies are handled on the interface thread.
+        self.worker.completed.connect(self.organise_done)
+        self.worker.failed.connect(self.organise_failed)
+        self.worker.start()
+
+    def organise_done(self, text):
+        self.organised(*self.organising, json.loads(text))
+
+    def organise_failed(self, text):
+        self.organised(*self.organising, None, text)
+
+    def organised(self, name, profile, advice, error=""):
+        self.organise_btn.setEnabled(True)
+        self.organise_btn.setText("Organise with AI…")
+        if advice is None:
+            self.notice.notify(error, "warning")
+            return
+        # Checked against the answers as they are now: an application may have saved one while the AI was reading.
+        mine = [a for a in self.store.answers() if a.profile_name == name]
+        categories, proposals = plan_organise(mine, profile, advice)
+        for answer in mine:
+            if answer.id in categories:
+                answer.category = categories[answer.id]
+                self.store.save_answer(answer)
+        applied = 0
+        if proposals:
+            dialog = OrganiseDialog(proposals, self)
+            if dialog.exec() == QDialog.Accepted:
+                applied = sum(tidy(self.store, proposal) for proposal in dialog.chosen())
+        self.refresh()
+        self.notice.notify(f"Grouped {len(categories)} answer{'' if len(categories) == 1 else 's'}; applied {applied} of {sum(not p.conflict for p in proposals)} "
+                           "proposed changes." if categories or proposals else "Your answers are already organised.", "success")
+
     def remove(self):
-        if not self.tree.selectedItems():
+        if not self.tree.selectedItems() or not self.tree.currentItem().data(0, Qt.UserRole):
             return
         item = self.tree.currentItem()
         answer = next(a for a in self.answers if a.id == item.data(0, Qt.UserRole))

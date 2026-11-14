@@ -3,6 +3,7 @@ from datetime import datetime
 import re
 from types import SimpleNamespace
 
+from core.automation.fields import FormField
 from core.automation.models import CHOICE_KINDS, ApplicantProfile, ApplicationRun, Language, employer_key, normalized, same_choice
 
 
@@ -108,10 +109,21 @@ ROW_FACTS = {
 FACT = re.compile(r"(?:(education|experience|language_proficiency)\.(\d+)\.)?(\w+)(?:\.(year|month))?")
 
 
-def fact_catalog(profile):
+# Offered only alongside a personal or legal question, which an AI may point at one of these but never answer in its own words.
+PERSONAL_FACTS = {
+    "gender": "gender", "pronouns": "pronouns", "race_ethnicity": "race or ethnicity", "hispanic_or_latino": "Hispanic or Latino",
+    "veteran_status": "veteran status", "disability_status": "disability status", "citizenship": "country of citizenship",
+    "nationality": "nationality", "work_authorized": "authorized to work in the country of the job",
+    "work_authorized_us": "authorized to work in the United States", "requires_sponsorship": "requires visa sponsorship",
+}
+
+
+def fact_catalog(profile, personal=False):
     """Names and plain descriptions of the profile facts that have a value; never the values themselves."""
     catalog = {key: text for key, text in FACTS.items()
                if (profile.first_name and profile.last_name if key == "full_name" else getattr(profile, key))}
+    if personal:
+        catalog.update({key: text for key, text in PERSONAL_FACTS.items() if getattr(profile, key) not in ("", None)})
     for group, (noun, attrs) in ROW_FACTS.items():
         for row, entry in enumerate(profile_rows(profile, group)):
             catalog.update({f"{group}.{row}.{attr}": f"{noun} #{row + 1} {text}" for attr, text in attrs.items()
@@ -126,7 +138,7 @@ def fact_name(fact):
         noun, attrs = ROW_FACTS[match[1]]
         text = f"{noun} #{int(match[2]) + 1} {attrs.get(match[3], match[3])}"
     else:
-        text = FACTS.get(match[3], match[3])
+        text = FACTS.get(match[3]) or PERSONAL_FACTS.get(match[3], match[3])
     return text + (f" ({match[4]})" if match[4] else "")
 
 
@@ -188,6 +200,11 @@ def profile_rows(profile, group):
         # The order Workday's adapter adds website rows in (speedy_profile's websiteData).
         return [SimpleNamespace(url=url) for url in (profile.linkedin_url, profile.github_url, profile.portfolio_url) if url]
     return rows
+
+
+def names_row(question, profile):
+    """Whether a saved question carries one of your schools, employers or languages ("Speaking — English"): career data, not form wording."""
+    return any(str(question).endswith(f" — {name}") for group, attr in ROW_NAMES.items() for entry in profile_rows(profile, group) if (name := getattr(entry, attr)))
 
 
 def question_for(field, profile: ApplicantProfile):
@@ -310,3 +327,88 @@ def profile_fact(field, profile: ApplicantProfile) -> Resolution:
             prefix = f"{field.group}.{field.row}." if field.group else ""
             return Resolution(field_value(field, value), "profile:" + prefix + attr)
     return Resolution(reason=UNANSWERED)
+
+
+CATEGORIES = ["Contact", "Education", "Experience", "Work eligibility", "Availability", "Diversity", "Employer-specific", "Other"]
+
+
+@dataclass
+class Tidy:
+    """One change to the answer library that organising proposes; nothing changes until tidy() applies it."""
+    text: str
+    ids: list  # The answers concerned; the first is kept and the others are folded into it.
+    scope: str = ""  # "global" to use the kept answer for any application.
+    fact: str = ""  # A profile fact to link the kept answer to.
+    conflict: bool = False  # The answers disagree: shown for you to settle, never applied.
+
+
+def plan_organise(answers, profile, advice):
+    """Check an AI's advice about question wordings (assistant.organise) against the answers themselves, which it never saw.
+
+    Returns ({answer id: category}, [Tidy]). Answers are merged only when their values already agree, linked to a profile fact only
+    when it holds the same value, and never widened over a different answer. Only your own confirmed answers are changed."""
+    cluster = {}
+    for group in advice["same"]:
+        merged = set(group).union(*(cluster.get(t, ()) for t in group))
+        cluster.update(dict.fromkeys(merged, merged))
+    generic, quoted = set(advice["generic"]), lambda a: f"“{a.question}”"
+    categories = {a.id: advice["category"][canonical(a.question)] for a in answers
+                  if advice["category"].get(canonical(a.question), a.category) != a.category}
+    groups = {}
+    for a in answers:
+        if a.origin == "you" and not a.omit and not a.rewords:
+            topic = canonical(a.question)
+            groups.setdefault((min(cluster.get(topic, {topic})), a.profile_name), []).append(a)
+    text_field = FormField("", "", "", "text")
+
+    def link(a, topics):
+        """The profile fact advised for these wordings, when it holds this answer's value today."""
+        for key in dict.fromkeys(advice["facts"][t] for t in topics if t in advice["facts"]):
+            found = linked(replace(text_field, label=a.question), profile, key).value
+            if not a.fact and found is not None and same_choice(found, field_value(text_field, a.value)):
+                return key
+        return ""
+
+    proposals = []
+    for (root, _), members in groups.items():
+        topics = cluster.get(root, {root})
+        everywhere = bool(topics & generic)
+        value = lambda a: (normalized(str(field_value(text_field, a.value))), a.fact)
+        if len({(value(a), normalized(a.country)) for a in members}) > 1:
+            # Different answers per employer are normal ("Why us?"); they are a conflict only where one answer should serve everywhere.
+            # Answers that differ only in the country they were given for are left as they are.
+            if everywhere and len({value(a) for a in members}) > 1:
+                proposals.append(Tidy(f"{len(members)} answers to {quoted(members[0])} disagree. Decide which one is right.", [a.id for a in members], conflict=True))
+            continue
+        # A question asked the same everywhere becomes one answer for any application; otherwise only duplicates in one place are merged.
+        places = {}
+        for a in members:
+            places.setdefault(None if everywhere else (a.scope, a.scope_key), []).append(a)
+        for same in places.values():
+            same.sort(key=lambda a: a.scope != "global")  # An answer already used everywhere is the one kept.
+            keep, widen, fact = same[0], everywhere and same[0].scope != "global", link(same[0], topics)
+            if len(same) == 1 and not widen and not fact:
+                continue
+            parts = ([f"Merge {len(same)} answers to {quoted(keep)} into one"] if len(same) > 1 else []) \
+                + ([("and use it" if len(same) > 1 else f"Use your answer to {quoted(keep)}") + " for any application"] if widen else []) \
+                + ([("and link it" if len(same) > 1 or widen else f"Link {quoted(keep)}") + f" to your profile ({fact_name(fact)})"] if fact else [])
+            proposals.append(Tidy(" ".join(parts) + ".", [a.id for a in same], "global" if widen else "", fact))
+    return categories, proposals
+
+
+def tidy(store, proposal):
+    """Apply one proposal to the stored answers as they are now; one whose answers have since gone is skipped."""
+    held = {a.id: a for a in store.answers()}
+    found = [held[i] for i in proposal.ids if i in held]
+    if proposal.conflict or not found:
+        return False
+    keep, rest = found[0], found[1:]
+    wordings = [w for a in found for w in (a.question, *a.variants)]
+    keep.variants = [w for w in dict.fromkeys(wordings) if normalized(w) != normalized(keep.question)]
+    if proposal.scope:
+        keep.scope, keep.scope_key = proposal.scope, ""
+    keep.fact = proposal.fact or keep.fact
+    for a in rest:
+        store.delete_answer(a.id)
+    store.save_answer(keep)
+    return True
