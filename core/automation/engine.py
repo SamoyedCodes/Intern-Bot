@@ -7,9 +7,9 @@ import re
 import time
 from urllib.parse import urlsplit
 
-from core.automation.answers import UNANSWERED, applicable, linked, question_for, resolve
+from core.automation.answers import UNANSWERED, applicable, asks, linked, profile_rows, question_for, resolve
 from core.automation.assistant import ai_config, askable, autofill, matchable
-from core.automation.models import CHECKING_LOGIN, CREATING_ACCOUNT, SAVING_LOGIN, SIGNING_IN, CHOICE_KINDS, ApplicantProfile, ApprovedAnswer, FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url, account_context, application_scope, same_choice
+from core.automation.models import CHECKING_LOGIN, CREATING_ACCOUNT, SAVING_LOGIN, SIGNING_IN, CHOICE_KINDS, ApplicantProfile, ApprovedAnswer, FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url, account_context, application_scope, same_choice, same_choices
 from core.automation.accounts import login_address
 from core.automation.journey import ApplicationJourney
 from pathlib import Path
@@ -25,6 +25,15 @@ ACTIVATION_HANDOFF = "Check {} for the employer's verification email and open it
 # Controls the desktop may retype with real keystrokes when the form shows the approved value but rejected it.
 TYPED_KINDS = {'text', 'textarea', 'spinbutton', 'tel', 'email', 'url', 'number', 'date'}
 REJECTED_ACCOUNT = "The employer didn't accept the new account. It may already exist: sign in or reset the password in Chromium, save that login under Profile → Employer accounts, then resume."
+
+
+def password_recipe(auth):
+    """1Password's generator recipe for this account form's password rules, or '' when its length limits conflict."""
+    policy = auth.get('policy', {})
+    length = min(24, policy.get('maximum', 64))
+    if length < max(1, policy.get('minimum', 0)):
+        return ''
+    return str(length) + ',letters,digits' + (',symbols' if policy.get('symbols', True) else '')
 
 
 class ApplicationEngine:
@@ -165,15 +174,7 @@ class ApplicationEngine:
                         last_advanced_stage = None
                         continue
                     return run
-                signed_in = any(a['account'].get('signed_in') for a in found.get('accounts', []))
-                if signed_in and (run.login_attempted or run.authentication_attempted):
-                    # Reaching the application settles the sign-in attempt; a session that expires later (overnight) needs a new one.
-                    run.login_attempted = run.authentication_attempted = False
-                    self.checkpoint(run)
-                if signed_in and run.account and not self.account_credential:
-                    self.account_credential = await asyncio.to_thread(self.store._vault().credential, run.account)
-                if signed_in and self.account_credential and self.account_credential.get('state') != 'verified':
-                    await self.account_state(run, 'verified')
+                await self.settle_sign_in(run, found)
                 if result.get('steps'):
                     run.steps, run.step = result['steps'], result['step']
                 if run.stage == last_advanced_stage:
@@ -197,6 +198,9 @@ class ApplicationEngine:
                     # An application section without a sign-in form proves the sign-in worked. Workday hides Sign Out in a menu,
                     # so signed_in alone misses it, and a stale flag would refuse the saved login once the session expires overnight.
                     run.login_attempted = run.authentication_attempted = False
+                    if self.account_credential and self.account_credential.get('state') != 'verified':
+                        # A new account that opens its application needs no email check (seen on Halliburton's SuccessFactors).
+                        await self.account_state(run, 'verified')
                     self.checkpoint(run)
                 opened = not fields and (await bridge.command('open_application')).get('opened')
                 if opened == 'ready':
@@ -221,24 +225,37 @@ class ApplicationEngine:
                 self.report_phase(run, 'fill')
                 await bridge.command('start')
                 settled = await self.wait_for_section(run, profile)
+                if run.login_attempted or run.authentication_attempted or (self.account_credential or {}).get('state', 'verified') != 'verified':
+                    # SuccessFactors renders Sign Out seconds after its application page is first seen (Halliburton), so look again.
+                    await self.settle_sign_in(run, await bridge.discover([self.recipe.model_dump()] if self.recipe else []))
                 if settled and match['frame'] == 0 and settled['url'] != bridge.page.url and not (self._pause or self._cancel):
                     # Workday normalizes /apply/applyManually to /apply after rendering the form.
                     continue
                 if settled and settled.get('expired') and not any(f.kind == 'password' for f in fields) and not (self._pause or self._cancel):
                     # The site's adapter ran out of time waiting on a control that never appeared, with the rest of the section untouched.
                     # A fresh runtime, which never starts the adapter, fills every field that has an approved value directly.
-                    self.store.record_event(run.id, 'adapter_stalled', run.stage, "The site's adapter stopped partway; the rest was filled directly from your profile and answers.")
                     result = await bridge.command('prepare', {**config, 'direct': True}, binding=match)
-                    await self.authorize(run, profile, [FormField(**f) for f in result['fields']])
+                    left = [FormField(**f) for f in result['fields']]
+                    if any(f.kind == 'password' for f in left):
+                        # The sign-in form rendered while the adapter waited on an empty page (seen on Acronis's Workday). Filled here, its
+                        # email box got the profile address, which the account flow then refused against a catch-all login.
+                        await bridge.stop()
+                        continue
+                    # The first approved control still empty is where the adapter most likely waited; the log names it to find the cause.
+                    answers = self.store.answers()
+                    stuck = next((f.label for f in left if f.value in ('', False) and f.kind != 'file' and not (f.readonly or f.disabled) and resolve(f, profile, run, answers).value is not None), '')
+                    self.store.record_event(run.id, 'adapter_stalled', run.stage, "The site's adapter stopped partway" + (f' near “{stuck}”' if stuck else '') +
+                                            '; the rest was filled directly from your profile and answers.')
+                    await self.authorize(run, profile, left)
                     settled = await self.wait_for_section(run, profile)
-                # Each choose stays inside the bridge's command limit; repeat while it still selects approved options.
-                for _ in range(5):
+                # Each choose stays inside the bridge's command limit; repeat while it still selects approved options or has controls left.
+                for _ in range(20):
                     if not settled or self._pause or self._cancel:
                         break
-                    chosen = (await bridge.command('choose')).get('chosen')
+                    picked = await bridge.command('choose')
                     # A search that found no exact option still leaves the site busy (seen on Keppel's Workday picker), so it settles first too.
                     settled = await self.wait_for_section(run, profile)
-                    if not chosen:
+                    if not (picked.get('chosen') or picked.get('more')):
                         break
                 if not settled or self._pause or self._cancel:
                     return run
@@ -252,6 +269,8 @@ class ApplicationEngine:
                 await asyncio.sleep(.35)
                 check = await bridge.command('snapshot')
                 confirmed = [FormField(**f) for f in (await bridge.command('scan'))['fields']]
+                # A change here restarts the section rather than re-reading it: a revealed conditional field or a re-render that
+                # cleared values needs filling, not just verifying.
                 if fields != confirmed or not check['settled'] or bridge.pending:
                     if verification_retries < 3:
                         verification_retries += 1
@@ -279,7 +298,9 @@ class ApplicationEngine:
                 # A field's blocked choice (a typeahead suggestion that isn't the approved answer) is asked with the other questions,
                 # even though its typed text reads back as the answer.
                 asked = {i.field_key for i in run.interventions if i.field_key}
-                problems = [p for p in settled['problems'] if verified or (p.get('field') and p['field'] not in asked)]
+                # A problem about a control no longer on the page (seen live: one left over between Workday steps) has nothing to answer.
+                present = {f.key for f in fields}
+                problems = [p for p in settled['problems'] if (not p.get('field') or p['field'] in present) and (verified or (p.get('field') and p['field'] not in asked))]
                 for problem in problems:
                     field = next((f for f in fields if f.key == problem.get('field')), None)
                     self.intervene(run, problem['message'], problem['kind'], field)
@@ -376,6 +397,19 @@ class ApplicationEngine:
         return run
 
     resume = start
+
+    async def settle_sign_in(self, run, found):
+        """A signed-in page settles the sign-in attempt and proves the saved login works."""
+        if not any(a['account'].get('signed_in') for a in found.get('accounts', [])):
+            return
+        if run.login_attempted or run.authentication_attempted:
+            # A session that expires later (overnight) needs a new attempt.
+            run.login_attempted = run.authentication_attempted = False
+            self.checkpoint(run)
+        if run.account and not self.account_credential:
+            self.account_credential = await asyncio.to_thread(self.store._vault().credential, run.account)
+        if self.account_credential and self.account_credential.get('state') != 'verified':
+            await self.account_state(run, 'verified')
 
     async def account_state(self, run, state):
         await asyncio.to_thread(self.store._vault().set_account_state, run.account, state)
@@ -485,12 +519,10 @@ class ApplicationEngine:
                         return True
                     self.intervene(run, 'No account-creation link could be identified. Open Create Account in Chromium, then resume.', 'verification')
                     return False
-                policy = auth.get('policy', {})
-                length = min(24, policy.get('maximum', 64))
-                if length < max(1, policy.get('minimum', 0)):
+                recipe = password_recipe(auth)
+                if not recipe:
                     self.intervene(run, 'The password requirements could not be satisfied. Create the login in 1Password and continue manually.', 'verification')
                     return False
-                recipe = str(length) + ',letters,digits' + (',symbols' if policy.get('symbols', True) else '')
                 username = login_address(context.tenant.split('/')[-1], profile.email, self.store.get('catchall_domain', ''), self.store.get('catchall_format', ''))
                 run.stage = SAVING_LOGIN
                 self.checkpoint(run)
@@ -502,6 +534,13 @@ class ApplicationEngine:
                 self.account_credential = credential
                 self.checkpoint(run)
             state = credential.get('state', 'verified')
+            policy = auth.get('policy', {})
+            if state == 'new' and auth['page'] == 'create' and self.store.get('auto_create_accounts', self.store.get('auto_create_workday_accounts', False)) and not policy.get('minimum', 0) <= len(credential['password']) <= policy.get('maximum', 64) and password_recipe(auth):
+                # A login the bot saved but never submitted, whose password this form's length rule rejects (seen on Halliburton: 24 saved, 20 allowed).
+                await asyncio.to_thread(self.store._vault().regenerate_password, context, password_recipe(auth))
+                credential = await asyncio.to_thread(self.store._vault().credential, context)
+                self.store.record_event(run.id, 'login_saved', run.stage, f'Replaced the unused password for {context.tenant} in 1Password with one the form accepts.')
+                self.account_credential = credential
             if auth['page'] == 'created':
                 await self.account_state(run, 'created')
                 if await self.switch_account_page(run, bridge):
@@ -617,6 +656,8 @@ class ApplicationEngine:
             resolution = resolve(field, profile, run, answers)
             policies[field.selector] = dict(key=field.key, label=field.label, value=resolution.value, omit=resolution.omit, ref=resolution.ref,
                                            replace=resolution.ref.startswith('answer:') and not resolution.ai)
+            if resolution.value is not None and field.kind not in ('file', 'password') and field.value not in ('', False) and self.holds(field, resolution.value, resolution.ref, fields):
+                policies[field.selector]['held'] = field.value  # Already right: the page keeps it while it still shows this.
         await self.bridge.command('authorize', {'policies': policies})
 
     def unconfirmed(self, run):
@@ -668,8 +709,6 @@ class ApplicationEngine:
             current = {}
             if not questions:
                 return 0
-        # Kept with the run, so a resume never sends the same question again.
-        run.ai_asked.extend(asked[label] for label in questions)
         known = [a for a in applicable(answers, profile, run) if matchable(a)]
         seconds = self.AI_LOCAL_SECONDS if cfg['local'] else self.AI_MATCH_SECONDS
         run.ai_requests += 1
@@ -685,7 +724,9 @@ class ApplicationEngine:
         except Exception as exc:
             # AI is a convenience: unanswered questions are still asked as usual.
             self.store.record_event(run.id, 'ai_match_failed', run.stage, str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
-            return 0
+            return 0  # Not recorded as asked, so the next section or resume tries these questions again.
+        # Kept with the run once answered, so a resume never sends the same question again.
+        run.ai_asked.extend(asked[label] for label in questions)
         saved = 0
         for label, (kind, value) in results.items():
             saved += 1
@@ -694,6 +735,9 @@ class ApplicationEngine:
                 continue  # Only one of the listed options can replace an answer the form didn't take.
             if kind == 'saved':
                 answer = known[value]
+                if asks(answer, label):
+                    saved -= 1
+                    continue  # Matched to the answer it already has (seen live), which the form didn't take: nothing new.
                 answer.variants.append(label)
                 self.store.save_answer(answer)
                 self.store.record_event(run.id, 'answer_matched', run.stage, f'AI matched “{label}” to your answer for “{answer.question}”.')
@@ -715,10 +759,14 @@ class ApplicationEngine:
                 answer = ApprovedAnswer(question=label, value=value, profile_name=run.profile_name, scope=scope, rewords=str(mine),
                                         scope_key=employer_key(run.job_url) if scope == 'employer' else source.scope_key, origin='ai')
                 note = f'AI matched your answer for “{label}” to the form\'s option “{value}”.'
+            elif kind == 'standing':
+                # Your standing statements hold for every application, and this employer's next form words the question the same way.
+                answer = ApprovedAnswer(question=label, value=value, profile_name=run.profile_name, scope='employer', scope_key=employer_key(run.job_url), origin='ai')
+                note = f'AI answered “{label}” from your standing answers.'
             else:
-                # Derived from today's facts or statements, so it applies to this application only.
+                # Derived from today's career facts, so it applies to this application only.
                 answer = ApprovedAnswer(question=label, value=value, profile_name=run.profile_name, scope='application', scope_key=run.id, origin='ai')
-                note = f"AI answered “{label}” from your {'standing answers' if kind == 'standing' else 'career facts'}."
+                note = f'AI answered “{label}” from your career facts.'
             self.store.save_answer(answer)
             self.store.record_event(run.id, 'answer_ai', run.stage, note + ' Confirm it under Answers.')
         return saved
@@ -728,6 +776,25 @@ class ApplicationEngine:
         """Whether the control displays this value (a month spinbutton may show "06" for 6)."""
         held, wanted = str(field.value), str(value)
         return normalized(held) == normalized(wanted) or field.kind == 'spinbutton' and held.isdigit() and wanted.isdigit() and int(held) == int(wanted)
+
+    @staticmethod
+    def holds(field, value, ref, fields):
+        """Whether a (non-file) control already shows this approved value. Verification and the page's fill both use it,
+        so the bot never calls its own earlier fill a conflict."""
+        if field.kind == 'radio':
+            offered = any(f.kind == 'radio' and f.label == field.label and f.group == field.group and f.row == field.row and same_choice(f.option, value) for f in fields)
+            return offered and field.value == same_choice(field.option, value)
+        if field.kind in CHOICE_KINDS and not isinstance(value, bool):
+            return same_choices(field.value, value)  # "Mr." for "Mr", "Singapore, SGP" for "Singapore", every skill of a list.
+        if field.kind == 'spinbutton' and str(field.value).isdigit() and str(value).isdigit():
+            return int(field.value) == int(value)  # A typed month reads back "06" for 6.
+        if ref in ('profile:phone', 'profile:phone_number') or field.kind == 'tel':
+            # Employers reformat phone numbers ("55512345" becomes "5551 2345").
+            return re.sub(r'\D', '', str(field.value)) == re.sub(r'\D', '', str(value))
+        if isinstance(value, bool):
+            return field.value == value
+        # Location typeaheads add the region to the place you picked ("Singapore" becomes "Singapore, SGP" on Lever).
+        return normalized(str(field.value)) == normalized(str(value)) or bool(re.search(r'location|city', field.label, re.I)) and same_choice(field.value, value)
 
     async def retype(self, run, profile, fields):
         """Retype, with real keystrokes, approved values that a control shows but the site rejected.
@@ -790,7 +857,10 @@ class ApplicationEngine:
             field = next((f for f in fields if f.key == request.field_key and f.kind == 'combobox' and not f.options), None)
             if field and not request.options:
                 query = resolve(field, profile, run, answers).value
-                request.options = (await self.bridge.command('options', {'selector': field.selector, 'query': '' if query is None else str(query)})).get('options', [])
+                try:
+                    request.options = (await self.bridge.command('options', {'selector': field.selector, 'query': '' if query is None else str(query)})).get('options', [])
+                except TimeoutError:
+                    continue  # A slow search leaves this question without listed options instead of ending the run.
         self.checkpoint(run)
 
     def verify(self, run, profile, fields, config):
@@ -817,22 +887,8 @@ class ApplicationEngine:
                 descriptor = config['files'].get(str(resolution.value), {})
                 matched = bool(descriptor) and field.file_digest == descriptor['digest'] and not field.invalid
                 reason = 'The exact uploaded file and its accepted state could not be verified.'
-            elif field.kind == 'radio':
-                offered = any(f.kind == 'radio' and f.label == field.label and f.group == field.group and f.row == field.row and same_choice(f.option, resolution.value) for f in fields)
-                matched = offered and field.value == same_choice(field.option, resolution.value) and not field.invalid
-            elif field.kind in CHOICE_KINDS and not isinstance(resolution.value, bool):
-                # A listed option may differ from the answer only in punctuation ("Mr." for "Mr").
-                matched = same_choice(field.value, resolution.value) and not field.invalid
-            elif field.kind == 'spinbutton' and str(field.value).isdigit() and str(resolution.value).isdigit():
-                matched = int(field.value) == int(resolution.value) and not field.invalid  # A typed month reads back "06" for 6.
-            elif resolution.ref in ('profile:phone', 'profile:phone_number') or field.kind == 'tel':
-                # Employers reformat phone numbers ("55512345" becomes "5551 2345").
-                matched = re.sub(r'\D', '', str(field.value)) == re.sub(r'\D', '', str(resolution.value)) and not field.invalid
-            elif re.search(r'location|city', field.label, re.I) and normalized(str(field.value)).startswith(normalized(str(resolution.value)) + ','):
-                # Location typeaheads add the region to the place you picked ("Singapore" becomes "Singapore, SGP" on Lever).
-                matched = not field.invalid
             else:
-                matched = (field.value == resolution.value if isinstance(resolution.value, bool) else normalized(str(field.value)) == normalized(str(resolution.value))) and not field.invalid
+                matched = self.holds(field, resolution.value, resolution.ref, fields) and not field.invalid
             if not matched:
                 ok = False
                 reason = reason or ('The form rejected this value. Answer it in the format the form asks for.' if field.invalid and field.value not in ('', False) and resolution.value is not None and self.shows(field, resolution.value)
@@ -849,6 +905,15 @@ class ApplicationEngine:
                     (f.option for f in fields if f.kind == 'radio' and f.value is True and (f.label, f.group, f.row) == (field.label, field.group, field.row)), '')
                 start = held if held not in ('', False) else '' if resolution.value is None else resolution.value
                 self.intervene(run, reason, 'conflict' if 'conflict' in reason else 'answer', field, start)
+        if config.get('adapter') == 'workday':
+            # Workday adds one row per profile entry; a stalled adapter (or a direct fill, which never clicks Add) can leave some out,
+            # and every field of the rows that do exist would still verify.
+            for group, noun in (('education', 'education'), ('experience', 'work experience'), ('language_proficiency', 'language')):
+                wanted = len(profile_rows(profile, group))
+                shown = {f.row for f in fields if f.group == group and f.row < wanted}
+                if shown and len(shown) < wanted:
+                    ok = False
+                    self.intervene(run, f'The form shows {len(shown)} of your {wanted} {noun} entries. Add the missing ones in Chromium, then resume.', 'validation')
         return ok
 
     def verify_review(self, run, profile, summary):

@@ -58,7 +58,7 @@ LABELS = {
 COLUMNS = {"job_title": "Job title", "start_date": "Start", "end_date": "End", "gpa": "GPA"}
 # Declarations are accepted per application and wording; stable facts are worth reusing everywhere. Anything else defaults to this application.
 DECLARATION = re.compile(r"\b(agree|consent|acknowledg|certif|declar|attest|confirm|understand|privacy|terms)", re.I)
-STABLE_FACT = re.compile(r"authori[sz]ed to work|sponsor|visa|citizen|nationality|degree|graduat|\bgpa\b|universit|school|major|field of study|gender|race|ethnic|veteran|disabilit|hispanic|pronoun|linkedin|github|portfolio|website|language|phone|address|country|city|postal|zip|legal name|18 years", re.I)
+STABLE_FACT = re.compile(r"authori[sz]ed to work|sponsor|visa|citizen|nationality|degree|graduat|\bgpa\b|universit|school|major|field of study|gender|race|ethnic|veteran|disabilit|hispanic|pronoun|linkedin|github|portfolio|website|language|phone|address|country|city|postal|zip|legal name|18 years|hear about|year of study|notice period", re.I)
 RESULTS = {"verified": ("Verified", "success"), "needs_input": ("Needs input", "warning"),
            "blocked": ("Blocked", "danger"), "intentionally_omitted": ("Left blank", "neutral")}
 

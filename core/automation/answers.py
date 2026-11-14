@@ -3,7 +3,7 @@ from datetime import datetime
 import re
 from types import SimpleNamespace
 
-from core.automation.models import ApplicantProfile, ApplicationRun, Language, employer_key, normalized
+from core.automation.models import CHOICE_KINDS, ApplicantProfile, ApplicationRun, Language, employer_key, normalized, same_choice
 
 
 @dataclass
@@ -50,11 +50,28 @@ ALIASES = {
     "languages": "languages", "cover letter": "cover_letter_path",
     "linkedin profile": "linkedin_url", "github url": "github_url",
     "portfolio": "portfolio_url", "personal website": "portfolio_url",
-    "mobile phone": "phone", "phone number (with country code)": "phone",
+    "mobile phone": "phone", "mobile number": "phone", "phone number (with country code)": "phone", "preferred pronouns": "pronouns",
     "resume / cv": "resume_path",
     "gender": "gender", "race/ethnicity": "race_ethnicity",
     "veteran status": "veteran_status", "disability status": "disability_status",
 }
+# Form numbering ("3. Mobile Number", "17.Where…"), a lead-in ("Please provide your …", "What are your …"), "(optional)" and British
+# spelling don't change what a question asks.
+LEAD = re.compile(r"^(?:q?\d{1,2}\s*[.)](?!\d)\s*|(?:please\s+)?(?:provide|enter|specify)\s+your\s+|what\s+(?:is|are)\s+your\s+)")
+
+
+def canonical(label):
+    text = normalized(str(label))
+    while (shorter := LEAD.sub("", text, count=1)) != text:
+        text = shorter
+    return re.sub(r"\s*\((?:optional|required)\)$", "", text).replace("authoris", "authoriz").rstrip("?. ")
+
+
+CANONICAL_ALIASES = {canonical(question): attr for question, attr in ALIASES.items()}
+# Self-identification questions an AI never answers come in many wordings. A keyword names your profile fact, used only for a dropdown
+# or radio whose option is that exact answer; a bare Yes/No answer could belong to another question ("…accommodation for a disability?").
+SELF_ID = [(re.compile(r"\bgender\b"), "gender"), (re.compile(r"\bpronouns?\b"), "pronouns"), (re.compile(r"\brace\b|\bethnicity\b"), "race_ethnicity"),
+           (re.compile(r"\bveteran\b"), "veteran_status"), (re.compile(r"\bdisability\b"), "disability_status")]
 ROW_ALIASES = {
     # Workday asks a level per skill on its own scale ("2 - Fair"); the row's one level answers each, and the AI repair rewords it
     # into that scale once per employer.
@@ -141,7 +158,7 @@ UNANSWERED = "Approve an answer or update the profile; no value will be guessed.
 
 def asks(answer, label):
     """Whether this label is the answer's question or one of its recorded wordings."""
-    return normalized(label) in {normalized(q) for q in (answer.question, *answer.variants)}
+    return canonical(label) in {canonical(q) for q in (answer.question, *answer.variants)}
 
 
 def applicable(answers, profile: ApplicantProfile, run: ApplicationRun):
@@ -260,11 +277,17 @@ def profile_fact(field, profile: ApplicantProfile) -> Resolution:
             if profile.country:
                 return Resolution(f"{profile.country} ({code})", ref)
             return Resolution(reason="Select the country calling code explicitly.")
-        if normalized(field.label) == "i have a preferred name":
+        label = canonical(field.label)
+        if label == "i have a preferred name":
             return Resolution(profile.has_preferred_name, "profile:preferred_name")
-        if normalized(field.label) in {"full name", "name"} and profile.first_name and profile.last_name:
+        if label in {"full name", "name"} and profile.first_name and profile.last_name:
             return Resolution(" ".join(part for part in (profile.first_name, profile.middle_name, profile.last_name, profile.name_suffix) if part), "profile:full_name")
-        attr = ALIASES.get(normalized(field.label))
+        attr = CANONICAL_ALIASES.get(label)
+        if not attr and field.kind in CHOICE_KINDS:
+            attr = next((a for pattern, a in SELF_ID if pattern.search(label)), None)
+            held = str(getattr(profile, attr, "") or "") if attr else ""
+            if not held or normalized(held) in {"yes", "no"} or field.options and not any(same_choice(o, held) for o in field.options):
+                attr = None
         if attr == "phone" and profile.phone_number:
             return Resolution(profile.phone_number, "profile:phone_number")
         if attr == "cover_letter_path" and field.kind != "file":

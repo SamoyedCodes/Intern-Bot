@@ -1,12 +1,17 @@
 /* Adapter writes are proposals; only exact desktop-resolved facts may reach the DOM. */
 (() => {
   const normalize = value => String(value ?? '').trim().replace(/[\s*:✱✳]+$/g, '').replace(/\s+/g, ' ').toLowerCase();
-  // A listed option may differ from the approved answer only in punctuation ("Mr" picks "Mr."); an exact wording always wins.
+  // A listed option may differ from the approved answer only in punctuation ("Mr" picks "Mr.") or by a qualifier after a comma, bracket,
+  // dash or colon ("Singapore" picks "Singapore, SGP"); an exact wording always wins. Mirrors same_choice in core/automation/models.py.
   const loose = value => normalize(value).replace(/[^\p{L}\p{N}]+/gu, '');
-  const same = (a, b) => normalize(a) === normalize(b) || !!loose(b) && loose(a) === loose(b);
+  const qualified = (a, b) => { const x = normalize(a), y = normalize(b); return !!y && x.startsWith(y) && /^\s*[,(\-–—:]/.test(x.slice(y.length)); };
+  const same = (a, b) => normalize(a) === normalize(b) || !!loose(b) && loose(a) === loose(b) || qualified(a, b);
   const optionsFor = (items, value, text = o => o.innerText || o.textContent) => {
-    const exact = items.filter(o => normalize(text(o)) === normalize(value));
-    return exact.length ? exact : items.filter(o => !!loose(value) && loose(text(o)) === loose(value));
+    for (const test of [o => normalize(text(o)) === normalize(value), o => !!loose(value) && loose(text(o)) === loose(value), o => qualified(text(o), value)]) {
+      const found = items.filter(test);
+      if (found.length) return found;
+    }
+    return [];
   };
   const native = {MutationObserver};
   for (const name of ['setTimeout','clearTimeout','setInterval','clearInterval','requestAnimationFrame','cancelAnimationFrame']) native[name]=window[name].bind(window);
@@ -27,6 +32,8 @@
     const timers = new Set(), intervals = new Set(), frames = new Set(), observers = new Set();
     const abort = new AbortController(), policies = new WeakMap(), proposals = new Map(), denied = new WeakSet();
     const handles = new Map(), rowActions = new Set(), uploading = new WeakSet();
+    // Dropdowns choose() could not set, and the parts of a list answer a prompt search found no single option for.
+    const tried = new WeakSet(), missed = new WeakMap();
     const events = [], problems = new Map(), actions = new Map();
     const url = location.href;
     // expired: the adapter ran out of time on this page; the desktop then fills what it has approved without it (config.direct).
@@ -67,10 +74,13 @@
     };
     // A Workday dropdown button shows its choice; its value is the option's internal ID once saved.
     const shownChoice = e => { const text = normalize(e.innerText || e.textContent); return text === 'select one' ? '' : text; };
-    const readable = e => e instanceof HTMLSelectElement ? (e.value ? e.selectedOptions[0]?.textContent || '' : '') : ['checkbox','radio'].includes(e.type) ? e.checked : e.matches?.('button[aria-haspopup=listbox]') ? shownChoice(e) : e.value ?? e.textContent;
+    // Ashby's date picker shows and parses MM/DD/YYYY (an ISO date it reads as UTC, a day early west of Greenwich); the desktop speaks ISO, as scan.js reads it back.
+    const usDate = e => !!e.matches?.('.ashby-application-form-input-date');
+    const readable = e => usDate(e) ? e.value.replace(/^(\d{2})\/(\d{2})\/(\d{4})$/, '$3-$1-$2') : e instanceof HTMLSelectElement ?(e.value ? e.selectedOptions[0]?.textContent || '' : '') : ['checkbox','radio'].includes(e.type) ? e.checked : e.matches?.('button[aria-haspopup=listbox]') ? shownChoice(e) : e.value ?? e.textContent;
     // Employers reformat phone numbers ("55512345" becomes "5551 2345").
     const phone = p => /^profile:phone(_number)?$/.test(p.ref || ''), digits = v => String(v ?? '').replace(/\D/g, '');
-    const matches = (e, p) => e.type === 'radio' ? e.checked === (normalize(e.labels?.[0]?.textContent || e.getAttribute('aria-label') || e.value) === normalize(p.value)) : e.type === 'checkbox' ? e.checked === p.value : phone(p) || e.type === 'tel' ? digits(readable(e)) === digits(p.value) : e instanceof HTMLSelectElement || e.matches?.('button[aria-haspopup=listbox]') ? same(readable(e), p.value) : normalize(readable(e)) === normalize(p.value);
+    const radioText = e => e.labels?.[0]?.textContent || e.getAttribute('aria-label') || e.value;
+    const matches = (e, p) => e.type === 'radio' ? e.checked === same(radioText(e), p.value) : e.type === 'checkbox' ? e.checked === p.value : phone(p) || e.type === 'tel' ? digits(readable(e)) === digits(p.value) : e instanceof HTMLSelectElement || e.matches?.('button[aria-haspopup=listbox]') ? same(readable(e), p.value) : normalize(readable(e)) === normalize(p.value);
     function assign(e, key, value) {
       if (!dom(e)) { e[key] = value; return value; }
       if (!live()) return value;
@@ -85,6 +95,8 @@
       if (e.type === 'password') { report('verification', 'Complete employer sign-in in the browser.'); return value; }
       if (e.type === 'file' || key === 'files') { void upload(value, e); return value; }
       const existing = readable(e);
+      // The desktop already verified what this control shows ("06" for 6, a picked "Singapore, SGP"): keep it rather than rewrite it.
+      if (p.held != null && normalize(existing) === normalize(p.held)) { denied.delete(e); return value; }
       // A Workday prompt's box holds search text, not the answer (its chosen items are), so typing a search never conflicts.
       if (existing !== '' && existing !== false && !matches(e,p) && !p.replace && !siteFilled(e) && !prompt(e)) {
         report('conflict', 'Existing browser value conflicts with the profile. Resolve it before resuming.', p.key); denied.add(e); return value;
@@ -94,8 +106,9 @@
         const options = optionsFor([...e.options], desired, o=>o.textContent);
         if (options.length !== 1) {report('answer', 'The exact approved option is not offered by this form.',p.key);return value;}
         desired = options[0].value;key='value';
-      } else if (e.type === 'radio') {desired = normalize(e.labels?.[0]?.textContent || e.getAttribute('aria-label') || e.value) === normalize(p.value);key='checked';}
+      } else if (e.type === 'radio') {desired = same(radioText(e), p.value);key='checked';}
       else if (e.type === 'checkbox') {if(typeof desired!=='boolean'){report('answer','Approve a Boolean answer for this checkbox.',p.key);return value;}key='checked';}
+      else if (usDate(e)) desired = String(desired).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1');
       const proto = e instanceof HTMLInputElement ? HTMLInputElement.prototype : e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : null;
       const setter = proto && Object.getOwnPropertyDescriptor(proto,key)?.set;
       // React (Workday) only notices checkbox and radio changes made by a click; a radio cannot be clicked off.
@@ -365,16 +378,30 @@
     }
     // Restore the search text and close the results without choosing.
     const dismiss = (e,text) => {typeText(e,text);close(e);};
-    async function pick(e,value){
+    async function pickOne(e,value){
       const chosen=()=>selections(e).some(s=>same(s,value));
-      // A prompt that already shows a selection is left to verification.
-      if(selections(e).length)return false;
       const text=e.value, exact=optionsFor(await search(e,value),value,optionText);
       if(chosen())return true; // Workday may select a lone result itself.
       if(exact.length!==1){dismiss(e,text);return false;}
       choice(exact[0]).click();lastChange=performance.now();
       for(let i=0;i<10&&!chosen();i++)await pause(100);
       return chosen();
+    }
+    // A prompt that already shows a selection is left to verification. A list answer ("Python, SQL") that is not itself an option
+    // is picked a part at a time until the deadline; choose() calls again for the rest.
+    async function pick(e,value,deadline=Infinity){
+      if(selections(e).some(s=>same(s,value)))return false;
+      const misses=missed.get(e)||new Set();missed.set(e,misses);
+      if(!selections(e).length&&!misses.has(value)){if(await pickOne(e,value))return true;misses.add(value);}
+      const parts=value.split(/\s*[,;\n]\s*/).filter(Boolean);
+      if(parts.length<2)return false;
+      let picked=false;
+      for(const part of parts){
+        if(!live()||performance.now()>deadline)break;
+        if(selections(e).some(s=>same(s,part))||misses.has(part))continue;
+        if(await pickOne(e,part))picked=true;else misses.add(part);
+      }
+      return picked;
     }
     function alignRows(fields){
       if(config.adapter!=='workday')return fields;
@@ -489,7 +516,7 @@
         for(const [selector,p]of Object.entries(policiesBySelector)){
           const e=handles.get(selector);
           // A pressed-state choice button (Ashby yes/no): press the one whose text is the approved answer.
-          if(e?.matches('button[aria-pressed]')){if(p.value!=null&&!p.omit&&normalize(e.innerText)===normalize(String(p.value))&&e.getAttribute('aria-pressed')!=='true')e.click();continue;}
+          if(e?.matches('button[aria-pressed]')){if(p.value!=null&&!p.omit&&same(e.innerText,String(p.value))&&e.getAttribute('aria-pressed')!=='true')e.click();continue;}
           // A native adapter's own widgets are set by its choose(); a direct-fill adapter leaves every plain control to approved values.
           // Workday dropdown buttons are chosen by choose(): writing their value changes nothing visible, and the blur closes an open listbox.
           if(e && !site?.custom?.(e) && !e.matches('button[aria-haspopup=listbox]') && (p.ref?.startsWith('answer:') || p.ref==='profile:cover_letter' || p.ref==='profile:cover_letter_path' ||
@@ -556,29 +583,31 @@
         return items.map(o=>o.textContent.trim());
       },
       // The adapter fills Workday dropdowns only from profile guesses and cannot search prompts; select the approved options it left unset.
-      // ponytail: stops starting new controls after 5 s to stay inside the bridge's 8 s command limit (a Workday prompt can take ~4 s);
-      // the engine calls choose again while it still selects something. Batch per control if one control ever needs more.
+      // Stops starting new controls after 3.5 s to stay inside the bridge's 8 s command limit (a Workday prompt can take ~4 s) and says
+      // there is more; a control that found no option is not tried again, so one unlisted answer never starves the dropdowns after it.
       async choose(){
-        let chosen=0;const deadline=performance.now()+5000;
+        let chosen=0,more=false;const deadline=performance.now()+3500;
         for(const e of handles.values()){
-          if(!live()||performance.now()>deadline)break;
+          if(!live())break;
+          if(performance.now()>deadline){more=true;break;}
           const p=policies.get(e), shown=()=>normalize(e.innerText||e.textContent);
-          if(!p||p.omit||p.value==null||p.value===''||!e.isConnected)continue;
+          if(!p||p.omit||p.value==null||p.value===''||!e.isConnected||tried.has(e))continue;
           if(site?.custom?.(e)){
             if(site.hold?.(e,policyOf))continue;
             if(await site.choose(e,siteFilled(e)?{...p,replace:true}:p)){chosen++;e.removeAttribute('data-intern-site-filled');}
+            else tried.add(e);
             continue;
           }
-          if(prompt(e)){if(await pick(e,String(p.value)))chosen++;continue;}
-          if(reactSelect(e)){if(await reactChoose(e,p))chosen++;continue;}
+          if(prompt(e)){if(await pick(e,String(p.value),deadline))chosen++;else tried.add(e);continue;}
+          if(reactSelect(e)){if(await reactChoose(e,p))chosen++;else tried.add(e);continue;}
           if(!e.matches('button[aria-haspopup=listbox]')||same(shown(),p.value))continue;
           if(shown()&&shown()!=='select one'&&!p.replace)continue;
           const exact=optionsFor(await listbox(e),p.value);
-          if(exact.length!==1){close(e);continue;}
+          if(exact.length!==1){close(e);tried.add(e);continue;}
           exact[0].click();chosen++;lastChange=performance.now();
           for(let i=0;i<10&&!same(shown(),p.value);i++)await pause(100);
         }
-        return chosen;
+        return {chosen,more};
       },
       openLink(id){
         if(config.adapter==='account'&&['signInLink','createAccountLink'].includes(id)&&live())return internAccount.open(id==='createAccountLink'?'create':'sign_in');
@@ -710,7 +739,7 @@
       else if(message.command==='open_application')result.opened=await active.openApplication();
       else if(message.command==='auth_page')result=active.authPage();
       else if(message.command==='options')result.options=await active.options(message.payload.selector,message.payload.query);
-      else if(message.command==='choose')result.chosen=await active.choose();
+      else if(message.command==='choose')Object.assign(result,await active.choose());
       else if(message.command==='mark')result.marked=active.mark(message.payload.selector);
       else if(message.command==='authenticate')await active.authenticate(message.payload.credential);
       else if(message.command==='validate_authentication')await active.authenticate(message.payload.credential,false);

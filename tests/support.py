@@ -46,6 +46,10 @@ class MemoryLogins:
         generated = 'Aa1!' + 'x' * (int(password_recipe.split(',')[0]) - 4)
         self.items[account.key] = {'username': username, 'password': password or generated, 'state': state}
 
+    def regenerate_password(self, site, password_recipe):
+        account = site if isinstance(site, AccountContext) else account_context(site)
+        self.items[account.key]['password'] = 'Bb2!' + 'y' * (int(password_recipe.split(',')[0]) - 4)
+
     def set_account_state(self, site, state):
         account = site if isinstance(site, AccountContext) else account_context(site)
         if account.key not in self.items:

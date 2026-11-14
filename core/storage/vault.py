@@ -33,6 +33,9 @@ class CredentialVault:
     def credential(self, site: str) -> dict:
         return self.logins.credential(site)
 
+    def regenerate_password(self, site: str, password_recipe: str):
+        self.logins.regenerate_password(site, password_recipe)
+
     def set_account_state(self, site: str, state: str):
         self.logins.set_account_state(site, state)
 

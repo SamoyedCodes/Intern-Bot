@@ -198,6 +198,15 @@ async def test_sap_residence_visibility_notification_and_terms_dialog(context, s
     assert run.registration_attempted and await page.evaluate('window.form') == ['SG', '2', False, '7']
 
 
+async def test_unused_login_with_a_password_the_form_rejects_is_regenerated(context, store, vault):
+    # Seen on Halliburton: an earlier attempt saved a 24-character password, the form allows 20, and nothing was ever submitted.
+    store.put('auto_create_accounts', True)
+    vault.save_credential(SAP, 'ada@example.test', 'Aa1!' + 'x' * 20, 'new')
+    run, page, _ = await run_account(context, store)
+    assert run.registration_attempted and len(vault.credential(SAP)['password']) == 20
+    assert await page.evaluate('window.sent[2]') == vault.credential(SAP)['password']
+
+
 async def test_captcha_pauses_before_signup_and_can_continue_after_manual_completion(context, store):
     store.put('auto_create_accounts', True)
     extra = '<iframe src="https://captcha.example.test/recaptcha/api2/anchor" srcdoc="Challenge"></iframe><textarea name=g-recaptcha-response hidden></textarea>'

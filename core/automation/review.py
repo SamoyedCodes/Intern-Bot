@@ -4,7 +4,7 @@ from pathlib import Path
 
 from core.automation.answers import resolve
 from core.automation.fields import FormField
-from core.automation.models import normalized, same_choice
+from core.automation.models import normalized, same_choices
 
 
 def workday_review_error(previous, summary, profile, run, answers):
@@ -80,7 +80,7 @@ def workday_review_error(previous, summary, profile, run, answers):
         if value == '' and key not in actual:
             continue  # The review may leave out a field that was left blank.
         accepted = ({'yes', 'true', 'checked'} if value else {'no', 'false', 'unchecked'}) if isinstance(value, bool) else {normalized(str(value))}
-        if key not in expected or key not in actual or actual[key] not in accepted and (isinstance(value, bool) or not same_choice(actual[key], value)):
+        if key not in expected or key not in actual or actual[key] not in accepted and (isinstance(value, bool) or not same_choices(actual[key], value)):
             return f'Cannot reconcile {key[0]} on the saved review.'
     return ''
 

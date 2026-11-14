@@ -25,7 +25,7 @@
     const {root,emails,passwords,buttons,ambiguous}=controls();
     const body=document.body?.innerText||'';
     const alerts=[...document.querySelectorAll('[role=alert],.field-error-msg,.form-error,[data-automation-id=inputError],[data-automation-id=inputAlert]')].filter(visible);
-    const error=alerts.some(e=>e.textContent.trim()&&!/password must|password requirements/i.test(e.textContent))||/account already exists|email (?:address )?(?:is )?already (?:registered|in use)|incorrect (?:email|password)|invalid (?:login|credentials)/i.test(body);
+    const error=alerts.some(e=>e.textContent.trim()&&!/password must|password requirements|^\s*loading\b/i.test(e.textContent))||/account already exists|email (?:address )?(?:is )?already (?:registered|in use)|incorrect (?:email|password)|invalid (?:login|credentials)/i.test(body);
     const signed_in=[...document.querySelectorAll('a,button,[role=button]')].some(e=>visible(e)&&/^(sign out|log out|logout)$/i.test(caption(e)));
     const captchaSolved=[...document.querySelectorAll('[name=g-recaptcha-response],[name=h-captcha-response],[name=cf-turnstile-response]')].some(e=>!!e.value.trim());
     const captcha=!captchaSolved&&[...document.querySelectorAll('iframe[src*="recaptcha"],iframe[src*="hcaptcha"],iframe[src*="challenges.cloudflare.com"]')].some(e=>visible(e)&&!/[?&]size=invisible/.test(e.src));
@@ -33,7 +33,10 @@
     if(challenge)return {page:'challenge',signed_in:false,form_error:error};
     if(!passwords.length){
       if([...document.querySelectorAll('button,a')].filter(e=>visible(e)&&/^sign in with email$/i.test(caption(e))).length===1)return {page:'email_choice',signed_in:false,form_error:error};
-      if(/(?:check|sent|send|verify|confirm|activate)[\s\S]{0,100}(?:verification|activation|verify your|confirm your|email address)|(?:verification|activation) (?:email|code)|verify your (?:email|account)/i.test(body))
+      // An application form can say "Background checks may include verification" (seen on Ashby); a check-your-email page has next to nothing to fill.
+      // ponytail: "at most a search box and a language picker" stands in for "not a form"; a verification page with a form on it would need its own signal.
+      const fillable=[...document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]),select,textarea,[role=combobox],[role=radio],[role=checkbox],button[aria-pressed]')].filter(visible).length;
+      if(fillable<3&&/(?:check|sent|send|verify|confirm|activate)[\s\S]{0,100}(?:verification|activation|verify your|confirm your|email address)|(?:verification|activation) (?:email|code)|verify your (?:email|account)/i.test(body))
         return {page:'verification',signed_in:false,form_error:error};
       if(/account (?:has been |was |is )?(?:successfully )?created|registration (?:is )?(?:successful|complete)/i.test(body))
         return {page:'created',signed_in,form_error:error};

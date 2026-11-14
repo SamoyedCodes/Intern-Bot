@@ -24,9 +24,19 @@ CHOICE_KINDS = {"combobox", "select-one", "select-multiple", "radio"}
 
 
 def same_choice(a, b) -> bool:
-    """Two wordings of one listed option: equal, or equal once punctuation is ignored ("Mr" is "Mr.")."""
-    loose = lambda text: re.sub(r"[\W_]+", "", normalized(str(text)))
-    return normalized(str(a)) == normalized(str(b)) or bool(loose(b)) and loose(a) == loose(b)
+    """Whether option a is answer b: equal, equal once punctuation is ignored ("Mr" is "Mr."), or b qualified after a comma, bracket,
+    dash or colon ("Singapore, SGP", "Yes - I am authorised", "Python (Programming Language)"). Mirrored by same() in extension/runtime.js."""
+    a, b = normalized(str(a)), normalized(str(b))
+    loose = lambda text: re.sub(r"[\W_]+", "", text)
+    return a == b or bool(loose(b)) and loose(a) == loose(b) or bool(b) and a.startswith(b) and bool(re.match(r"\s*[,(\-–—:]", a[len(b):]))
+
+
+def same_choices(held, value) -> bool:
+    """A list the form holds ("Python (Programming Language), SQL") includes every part of a list answer ("Python, SQL")."""
+    if same_choice(held, value):
+        return True
+    parts, shown = (re.split(r"\s*[,;\n]\s*", str(v).strip()) for v in (value, held))
+    return len(parts) > 1 and all(any(same_choice(s, p) for s in shown) for p in parts if p)
 
 
 def site_key(url: str) -> str:

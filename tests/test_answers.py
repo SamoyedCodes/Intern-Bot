@@ -180,3 +180,39 @@ def test_every_offered_fact_links_to_its_profile_value():
     for key in catalog:
         assert linked(field, profile, key).value not in (None, ''), key
     assert fact_name('education.0.end_date.year') == 'education #1 end or expected graduation date (year)'
+
+
+def test_a_qualified_option_is_the_answer_but_a_longer_one_is_not():
+    from core.automation.models import same_choice, same_choices
+    assert same_choice('Singapore, SGP', 'Singapore') and same_choice('Yes - I am authorised', 'Yes') and same_choice('Python (Programming Language)', 'Python')
+    assert not same_choice('Singapore Permanent Resident', 'Singapore') and not same_choice('Yesterday', 'Yes')
+    assert same_choices('Python (Programming Language), SQL', 'Python, SQL') and not same_choices('Python (Programming Language)', 'Python, SQL')
+
+
+@pytest.mark.parametrize('label, value', [('3. Mobile Number', '+65 9123 4567'), ('17.Email Address', 'ada@example.com'),
+                                          ('Are you authorised to work in Singapore?', 'Yes'), ('What are your preferred pronouns?', 'she/her'),
+                                          ('Please provide your LinkedIn URL (optional)', 'https://linkedin.com/in/ada')])
+def test_numbered_reworded_and_british_questions_find_the_profile_fact(run, label, value):
+    profile = PROFILE.model_copy(update=dict(phone='+65 9123 4567', email='ada@example.com', pronouns='she/her', linkedin_url='https://linkedin.com/in/ada'))
+    assert resolve(FormField('q', label, '', 'text'), profile, run, []).value == value
+
+
+def test_a_saved_answer_covers_the_same_question_numbered_or_without_its_question_mark(run):
+    saved = ApprovedAnswer(question='How did you hear about us?', value='LinkedIn', scope='global')
+    assert resolve(FormField('q', '4. How did you hear about us', '', 'text'), PROFILE, run, [saved]).value == 'LinkedIn'
+
+
+@pytest.mark.parametrize('kind, options, gender, expected', [
+    ('radio', ['Male', 'Female', 'Prefer not to say'], 'Female', 'Female'),
+    ('combobox', [], 'Female', 'Female'),  # Options listed only while open: the page picks only that exact option.
+    ('text', [], 'Female', None),  # A free-text box could ask anything that mentions gender.
+    ('radio', ['Man', 'Woman'], 'Female', None),  # Not one of the form's options: asked.
+])
+def test_self_identification_reworded_fills_only_a_listed_option(run, kind, options, gender, expected):
+    field = FormField('q', 'Which gender do you identify with?', '', kind, options=options)
+    assert resolve(field, PROFILE.model_copy(update=dict(gender=gender)), run, []).value == expected
+
+
+def test_a_bare_yes_or_no_self_identification_is_never_borrowed(run):
+    field = FormField('q', 'Do you need an accommodation for a disability?', '', 'radio', options=['Yes', 'No'])
+    assert resolve(field, PROFILE.model_copy(update=dict(disability_status='No')), run, []).value is None

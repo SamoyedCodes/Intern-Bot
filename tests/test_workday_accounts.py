@@ -69,6 +69,16 @@ setTimeout(() => show('posting'), 500);  // Workday renders the posting after th
 </script>'''.replace('SIGN_IN', json.dumps(SIGN_IN_PAGE))
 
 
+async def test_a_sign_in_form_rendered_while_the_adapter_waits_gets_only_the_saved_login(context, store):
+    # Seen live on Acronis: applyManually was still empty when the adapter started; the form that rendered while it waited was filled
+    # from the profile, and the profile email left in the box was refused against the catch-all login.
+    html = '<div id=root></div><script>setTimeout(() => document.getElementById("root").innerHTML = SIGN_IN, 8000)</script>'.replace('SIGN_IN', json.dumps(SIGN_IN_PAGE))
+    page = await open_fixture(context, 'workday', html)
+    run = ApplicationRun(job_url=page.url)
+    await ApplicationEngine(store).start(run, ApplicantProfile(email='ada@example.test'), ExtensionBridge(page, run.id), {'username': LOGIN, 'password': PASSWORD})
+    assert await page.evaluate('window.logins || 0') == 1, run.interventions
+
+
 async def test_a_job_posting_opens_the_manual_application_once(context, store):
     page = await open_fixture(context, 'workday', POSTING)
     run = ApplicationRun(job_url=page.url)

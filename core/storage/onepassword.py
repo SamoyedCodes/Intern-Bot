@@ -99,6 +99,13 @@ class OnePasswordLogins:
         generate = [] if password is not None else ["--generate-password=" + password_recipe]
         self.op("item", "create", "-", "--vault", VAULT, *generate, "--format", "json", stdin=json.dumps(template))
 
+    def regenerate_password(self, site: str, password_recipe: str):
+        """Replace the password of a login that was never submitted (state new) and that the form's rules reject."""
+        item_id = self._find(site)
+        if not item_id:
+            raise ValueError("No saved login for this employer.")
+        self.op("item", "edit", item_id, "--vault", VAULT, "--generate-password=" + password_recipe)
+
     def set_account_state(self, site: str, state: str):
         item_id = self._find(site)
         if not item_id:

@@ -4,10 +4,12 @@ globalThis.scanInternFields = (rootSelector) => {
   const visible = e => !!(e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
   const text = e => (e?.innerText || e?.textContent || '').trim();
   const labelText = e => { const copy = e.cloneNode(true); copy.querySelectorAll('input,select,textarea,button,[role=listbox],[role=status],.filename,.file-upload-success,.application-field').forEach(c=>c.remove()); return text(copy).replace(/\s+/g, ' '); };
+  // A required mark drawn by CSS (Ashby's question title label::after) is not in the label's text.
+  const starred = l => !!l && ['::after', '::before'].some(p => /[*✱✳]/.test(getComputedStyle(l, p).content));
   const controls = [...root.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]),select,textarea,[role=combobox],[role=checkbox],[role=radio],[role=spinbutton],[contenteditable=true],button[aria-haspopup=listbox],[data-intern-kind],[data-automation-id="resumeUpload"]:not(:has(input[type=file])) [data-automation-id="file-upload-item"],[data-field-path] button[aria-pressed]')]
-    // Workday's utility bar includes a language listbox, and Ashby's "Autofill from resume" pane an upload, neither an applicant question.
+    // Workday's utility bar and SuccessFactors' user menu include a site-language picker, and Ashby's "Autofill from resume" pane an upload, none an applicant question.
     // react-select (Greenhouse) keeps a hidden required text input beside its combobox; it is not a question.
-    .filter(e => (visible(e) || e.type === 'file') && e.getAttribute('data-automation-id') !== 'beecatcher' && !(e.type === 'text' && e.matches('[aria-hidden=true][tabindex="-1"]')) && !e.closest('[role=listbox],[data-automation-id="utilityButtonBar"],[class*=_autofillPane]'));
+    .filter(e => (visible(e) || e.type === 'file') && e.getAttribute('data-automation-id') !== 'beecatcher' && !(e.type === 'text' && e.matches('[aria-hidden=true][tabindex="-1"]')) && !e.closest('[role=listbox],[data-automation-id="utilityButtonBar"],.rcmUserLangDropDown,[class*=_autofillPane]'));
   const counts = new Map();
   // Native validity misleads where the site keeps the answer elsewhere: an adapter-read dropdown's emptied search input,
   // or one box of a required checkbox group that another ticked box already satisfies. The site's own aria-invalid still counts.
@@ -55,7 +57,9 @@ globalThis.scanInternFields = (rootSelector) => {
     const row = Math.max(0, rows.findIndex(r => r.contains(e)));
     // Ashby asks yes/no questions with a pair of pressed-state buttons.
     const pressed = e.matches('button[aria-pressed]');
-    const type = e.getAttribute('data-intern-kind') || (pressed ? 'radio' : uploaded ? 'file' : prompt || e.getAttribute('aria-haspopup') === 'listbox' ? 'combobox' : e.getAttribute('role') || e.type || e.tagName.toLowerCase());
+    // Ashby's date picker shows MM/DD/YYYY; it is read back as ISO, as a native date input reports it.
+    const usDate = e.matches('.ashby-application-form-input-date');
+    const type = e.getAttribute('data-intern-kind') || (usDate ? 'date' : pressed ? 'radio' : uploaded ? 'file' : prompt || e.getAttribute('aria-haspopup') === 'listbox' ? 'combobox' : e.getAttribute('role') || e.type || e.tagName.toLowerCase());
     const radio = type === 'radio';
     if (radio) label = (fieldset && (text(fieldset.querySelector('legend,[data-question]')) || fieldset.getAttribute('aria-label') || text(document.getElementById(fieldset.getAttribute('aria-labelledby'))) || labelText(fieldset.querySelector(':scope > label:not(:has(input))') || document.createElement('i')))) || groupQuestion || label;
     if (type === 'checkbox' && !e.closest('[data-automation-id$="-CheckboxGroup"]') && groupQuestion && choiceGroup.querySelectorAll('input[type=checkbox]').length > 1 && label !== groupQuestion)
@@ -86,13 +90,14 @@ globalThis.scanInternFields = (rootSelector) => {
     if (type === 'checkbox' || radio) value = pressed ? e.getAttribute('aria-pressed') === 'true' : e.checked ?? e.getAttribute('aria-checked') === 'true';
     if (type === 'file') value = [...(e.files || [])].map(f => f.name).join(', ');
     if (uploaded) value = text(receipt.querySelector('[data-automation-id="file-upload-item-name"]'));
+    if (usDate) value = value.replace(/^(\d{2})\/(\d{2})\/(\d{4})$/, '$3-$1-$2');
     if (e.hasAttribute('data-intern-value')) value = e.getAttribute('data-intern-value');
     if (e.type === 'password') value = ''; // Never return a password to the scanner.
     const option = radio ? choiceText(e) : '';
     return {key, label: label.replace(/\s*\*\s*$/, '').trim(), selector: `[data-intern-control="${index}"]`,
       kind: type, value, options, option, group, row, uploaded,
       split_phone: e.id === 'phoneNumber--phoneNumber' && !!root.querySelector('[id="phoneNumber--countryPhoneCode"]'),
-      required: dateRequired || !!e.required || e.getAttribute('aria-required') === 'true' || /[*✱✳]/.test(label),
+      required: dateRequired || !!e.required || e.getAttribute('aria-required') === 'true' || /[*✱✳]/.test(label) || starred(question) || [...(e.labels || [])].some(starred),
       disabled: !!e.disabled || e.getAttribute('aria-disabled') === 'true',
       invalid: [...(e.closest('fieldset,[data-automation-id="formField"]')?.querySelectorAll('[data-automation-id="inputAlert"]') || [])].some(a=>visible(a)&&text(a)) || e.getAttribute('aria-invalid') === 'true' || nativeInvalid(e) || (uploaded && (!receipt.querySelector('[data-automation-id="file-upload-successful"]') || uploadContainer.querySelectorAll('[data-automation-id="file-upload-item"]').length !== 1)),
       readonly: !!e.readOnly};

@@ -733,7 +733,7 @@ async def test_a_local_model_links_facts_for_every_application_and_answers_this_
     assert any(e['kind'] == 'ai_request' and 'on this Mac' in e['note'] and 'career facts included' in e['note'] for e in store.events(run.id))
 
 
-async def test_standing_answers_let_the_ai_answer_declarations_for_this_application(store, monkeypatch):
+async def test_standing_answers_let_the_ai_answer_declarations_for_this_employer(store, monkeypatch):
     store.put('ai_provider', 'compatible')
     store.put('compatible_model', 'qwen3:8b')
     run = ApplicationRun(job_url='https://jobs.lever.co/example/1')
@@ -1092,6 +1092,35 @@ async def test_an_ashby_location_lists_its_suggestions_and_selects_the_approved_
     assert not any(i.question for i in run.interventions), run.interventions
 
 
+# Seen on Simular's Ashby form: required questions carry a CSS star (label::after), the date picker shows MM/DD/YYYY,
+# and a question's note says "Background checks may include verification", which once read as an email-verification page.
+ASHBY_REQUIRED = '''<style>.req::after{content:"*"}</style><div aria-labelledby="job-application-form"><div class="ashby-application-form-section-container">
+<div data-field-path=start><label class=req for=start>Internship start date</label>
+<div class="react-datepicker-wrapper"><input id=start class="ashby-application-form-input-date" placeholder="Pick date..."></div></div>
+<div data-field-path=bg><label class=req for=bg>Are you willing to undergo a background check?</label>
+<p>Note: Background checks may include verification of employment and education.</p>
+<div><button type=button aria-pressed=false>Yes</button><button type=button aria-pressed=false>No</button></div></div></div></div>
+<script>
+document.getElementById('start').addEventListener('input',e=>{window.typed=e.target.value;});
+document.querySelectorAll('[aria-pressed]').forEach(b=>b.onclick=()=>document.querySelectorAll('[aria-pressed]').forEach(o=>o.setAttribute('aria-pressed',String(o===b))));
+</script>'''
+
+
+async def test_an_ashby_form_asks_its_starred_questions_and_types_dates_as_shown(context, store):
+    page = await open_fixture(context, '', ASHBY_REQUIRED, 'https://jobs.ashbyhq.com/example/1/application')
+    run = ApplicationRun(job_url=page.url, auto_advance=False)
+    store.save_answer(ApprovedAnswer(question='Internship start date', value='2027-01-05', scope_key=run.id, profile_name=run.profile_name))
+    run = await apply(store, page, run, ApplicantProfile())
+    # The starred yes/no question is asked, not left blank as optional; the page is still the application, not an account step.
+    assert [i.question for i in run.interventions if i.question] == ['Are you willing to undergo a background check?'] * 2, run.interventions
+    # An ISO date would be read by the picker as UTC midnight (a day early west of Greenwich), so it is typed as the picker shows it.
+    assert await page.evaluate('window.typed') == '01/05/2027'
+    store.save_answer(ApprovedAnswer(question='Are you willing to undergo a background check?', value='Yes', scope_key=run.id, profile_name=run.profile_name))
+    run = await apply(store, page, run, ApplicantProfile())
+    assert not any(i.question for i in run.interventions), run.interventions
+    assert {f.label: f.disposition for f in run.fields.values()} == {'Internship start date': 'verified', 'Are you willing to undergo a background check?': 'verified'}
+
+
 async def test_the_ai_repair_matches_an_answer_to_a_listed_option_once_per_application(store, monkeypatch):
     store.put('ai_provider', 'compatible')
     store.put('compatible_model', 'qwen3:8b')  # A model on this Mac may see your answers.
@@ -1256,3 +1285,77 @@ async def test_a_language_skill_level_comes_from_the_profile_and_is_reworded_int
     assert resolve(speaking, profile, run, store.answers()).value == '3 - Fluent'
     # Another employer may use another scale, so it starts from your own level again.
     assert resolve(speaking, profile, ApplicationRun(job_url='https://uobgroup.wd3.myworkdayjobs.com/job'), store.answers()).value == 'Native'
+
+
+def test_the_page_keeps_a_value_verification_already_accepts(store):
+    sent = []
+    async def command(name, payload=None, binding=None):
+        sent.append(payload)
+        return {}
+    engine = ApplicationEngine(store)
+    engine.bridge = SimpleNamespace(command=command)
+    run = ApplicationRun(job_url='https://jobs.lever.co/example/1')
+    profile = ApplicantProfile(city='Singapore', experience=[Experience(start_date='2025-06')])
+    month = FormField('m', 'From Month', 's1', 'spinbutton', value='06', group='experience')
+    city = FormField('c', 'Location (City)', 's2', 'combobox', value='Singapore, SGP')
+    store.save_answer(ApprovedAnswer(question='Location (City)', value='Singapore', scope='global'))
+    asyncio.run(engine.authorize(run, profile, [month, city]))
+    assert {s: p.get('held') for s, p in sent[-1]['policies'].items()} == {'s1': '06', 's2': 'Singapore, SGP'}
+
+
+def test_a_failed_ai_request_is_tried_again(store, monkeypatch):
+    store.put('ai_provider', 'compatible')
+    store.put('compatible_model', 'qwen3:8b')
+    calls = []
+    def flaky(cfg, questions, saved, profile, current=None):
+        calls.append([q.label for q in questions])
+        if len(calls) == 1:
+            raise ValueError('offline')
+        return {}
+    monkeypatch.setattr(engine_module, 'autofill', flaky)
+    run = ApplicationRun(job_url='https://jobs.lever.co/example/1')
+    field = FormField('s', 'Earliest start date', '', 'text')
+    for _ in range(3):
+        asyncio.run(ApplicationEngine(store).ai_autofill(run, ApplicantProfile(), [field]))
+    assert calls == [['Earliest start date'], ['Earliest start date']]  # Retried after the failure, never after the reply.
+
+
+def test_a_workday_section_missing_a_profile_row_is_not_verified(store):
+    run = ApplicationRun(job_url='https://example.wd1.myworkdayjobs.com/job')
+    profile = ApplicantProfile(education=[Education(school='First University'), Education(school='Second University')])
+    school = FormField('s', 'School or University', '', 'text', value='First University', group='education', row=0)
+    assert ApplicationEngine(store).verify(run, profile, [school], {'files': {}, 'adapter': 'greenhouse'})
+    assert not ApplicationEngine(store).verify(run, profile, [school], {'files': {}, 'adapter': 'workday'})
+    assert run.interventions[-1].message.startswith('The form shows 1 of your 2 education entries')
+
+
+WORKDAY_PROMPTS = '''<div data-automation-id="myExperiencePage"><h2>Application Questions</h2>
+<div data-automation-id="formField-a"><label>Field of Study<div data-automation-id="multiselectInputContainer"><input data-uxi-widget-type="selectinput" data-uxi-multiselect-id="m1"></div></label></div>
+<div data-automation-id="formField-b"><label>Minor<div data-automation-id="multiselectInputContainer"><input data-uxi-widget-type="selectinput" data-uxi-multiselect-id="m2"></div></label></div>
+''' + WORKDAY_YEAR.split('<h2>Application Questions</h2>', 1)[1]
+
+
+async def test_prompts_without_a_matching_option_do_not_starve_the_dropdowns_after_them(context, store, monkeypatch):
+    # Seen on Keppel: each search that finds nothing costs ~3 s, and the dropdowns below were never tried.
+    monkeypatch.setattr(ApplicationEngine, 'SECTION_POLLS', 100)
+    for question, value in (('Field of Study', 'Basket Weaving'), ('Minor', 'Pottery'), ('Year of Study', 'Year 2')):
+        store.save_answer(ApprovedAnswer(question=question, value=value, scope='global'))
+    page = await open_fixture(context, 'workday', WORKDAY_PROMPTS)
+    await apply(store, page, ApplicationRun(job_url=page.url, auto_advance=False), ApplicantProfile())
+    assert await page.get_by_role('button', name='Year of Study').inner_text() == 'Year 2'
+
+
+async def test_a_problem_about_a_control_no_longer_on_the_page_is_not_asked(context, store):
+    # Seen live on Keppel: a conflict reported against a control left over between Workday steps stopped a fully verified section.
+    page = await open_fixture(context, 'greenhouse', greenhouse())
+    run = ApplicationRun(job_url=page.url)
+    bridge = ExtensionBridge(page, run.id)
+    command = bridge.command
+    async def stale(name, payload=None, binding=None):
+        result = await command(name, payload, binding)
+        if name == 'snapshot':
+            result['problems'] = [*result['problems'], {'kind': 'conflict', 'message': 'Existing browser value conflicts with the profile.', 'field': 'gone:0:old step:0'}]
+        return result
+    bridge.command = stale
+    await ApplicationEngine(store).start(run, profile_for('greenhouse'), bridge)
+    assert run.status == 'ready_for_review', run.interventions
