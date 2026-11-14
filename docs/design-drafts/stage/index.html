@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stage drafts · Intern-Bot</title>
+<script>document.documentElement.dataset.d={line:1,orbit:1,maquette:1}[new URLSearchParams(location.search).get('d')]?new URLSearchParams(location.search).get('d'):'line'</script>
+<style>
+/* Fonts are ones macOS ships (DIN, Futura, Avenir Next), so the native Qt app can use the same faces. */
+*{box-sizing:border-box;margin:0}
+:root{color-scheme:light;
+  --bg:#dfe4ea;--bg-hi:#eef1f4;--vig:rgba(20,27,38,.2);
+  --ink:#141b26;--ink2:#3d4857;--ink3:#566172;
+  --panel:rgba(255,255,255,.88);--edge:rgba(255,255,255,.95);--hair:rgba(20,27,38,.13);--inset:rgba(20,27,38,.055);
+  --rail:#141b26;--rail-ink:#f3f5f8;--rail-dim:#b4bdca;--rail-on:rgba(255,255,255,.14);
+  --pick:#141b26;--on-pick:#f3f5f8;--action:#141b26;--on-action:#fff;--brand:#f0522a;--focus:#1f5fe0;
+  --shadow:0 1px 2px rgba(20,27,38,.07),0 20px 44px -14px rgba(20,27,38,.32);
+  --display:"DIN Condensed","Avenir Next Condensed","Helvetica Neue",sans-serif;--dw:700;--dt:.01em;--dup:uppercase;
+  --num:"DIN Alternate","Helvetica Neue",sans-serif;
+  --fl:106;--fr:368;--ft:128;--fb:318}
+:root[data-d=orbit]{color-scheme:dark;
+  --bg:#090d20;--bg-hi:#1a2250;--vig:rgba(2,3,12,.55);
+  --ink:#eef0fa;--ink2:#c3cae6;--ink3:#a4acd0;
+  --panel:rgba(21,28,64,.86);--edge:rgba(170,184,245,.2);--hair:rgba(220,226,255,.15);--inset:rgba(255,255,255,.07);
+  --rail:rgba(21,28,64,.86);--rail-ink:#eef0fa;--rail-dim:#aab2d6;--rail-on:rgba(255,255,255,.13);
+  --pick:rgba(255,255,255,.14);--on-pick:#fff;--action:#ffb347;--on-action:#1d1405;--brand:#ffb347;--focus:#ffd596;
+  --shadow:inset 0 1px 0 rgba(255,255,255,.06),0 24px 50px -18px rgba(0,0,0,.75);
+  --display:Futura,"Avenir Next","Helvetica Neue",sans-serif;--dw:500;--dt:-.01em;--dup:none;
+  --num:Futura,"Avenir Next",sans-serif;
+  --fl:14;--fr:388;--ft:84;--fb:124}
+:root[data-d=maquette]{
+  --bg:#d9e0d9;--bg-hi:#edf1ec;--vig:rgba(18,51,44,.2);
+  --ink:#12332c;--ink2:#35514a;--ink3:#4b6259;
+  --panel:rgba(255,255,251,.9);--hair:rgba(18,51,44,.15);--inset:rgba(18,51,44,.06);
+  --rail:#12332c;--rail-ink:#f4f4e7;--rail-dim:#b9cbbd;
+  --pick:#12332c;--on-pick:#f4f4e7;--action:#b3401d;--on-action:#fff;--brand:#ee6a2f;--focus:#b3401d;
+  --shadow:0 1px 2px rgba(18,51,44,.07),0 20px 44px -14px rgba(18,51,44,.34);
+  --display:"Avenir Next","Helvetica Neue",sans-serif;--dw:600;--dt:-.025em;--dup:none;
+  --num:"Avenir Next","Helvetica Neue",sans-serif;
+  --fl:446;--fr:316;--ft:116;--fb:70}
+html,body{height:100%}
+body{overflow:hidden;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;color:var(--ink);background:radial-gradient(90% 80% at 45% 40%,var(--bg-hi),var(--bg) 70%);-webkit-font-smoothing:antialiased}
+button,input{font:inherit;color:inherit}
+button{border:0;background:none;cursor:pointer}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+::selection{background:var(--brand);color:#fff}
+[hidden]{display:none!important}
+#stage,#labels,#shade{position:fixed;inset:0}
+#stage canvas{display:block;width:100%;height:100%;cursor:grab;touch-action:none}
+#stage canvas:active{cursor:grabbing}
+#stage canvas:focus-visible{outline-offset:-4px}
+#labels,#shade{pointer-events:none;overflow:hidden}
+#shade{background:radial-gradient(105% 90% at 48% 42%,transparent 55%,var(--vig) 100%)}
+.nogl{position:absolute;inset:45% 0 auto;text-align:center;color:var(--ink2)}
+
+/* Labels pinned to points in the model */
+.wl{position:absolute;left:0;top:0;white-space:nowrap;will-change:transform}
+.station{display:flex;align-items:center;gap:6px;font:600 12px/1 var(--num);color:var(--ink2);letter-spacing:.02em}
+.station b{color:var(--ink);font-weight:inherit}
+.station i{font-style:normal;min-width:18px;padding:3px 5px;border-radius:9px;text-align:center;background:var(--inset);font-variant-numeric:tabular-nums}
+.tag{display:grid;gap:3px;padding:7px 11px 8px;margin-top:-22px;border-radius:11px;background:var(--panel);border:1px solid var(--edge);box-shadow:var(--shadow);font-size:12px;color:var(--ink2)}
+.tag::after{content:"";position:absolute;left:50%;top:100%;width:1px;height:22px;background:var(--ink)}
+.tag b{font-size:13px;color:var(--ink)}
+.tag span{display:flex;align-items:center;gap:6px}
+
+/* Status marks: shape and label carry the state, colour only reinforces it */
+.dot{flex:none;display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--c);box-shadow:0 0 0 1px color-mix(in srgb,var(--c) 55%,var(--ink))}
+.dot[data-s=needs]{--c:var(--s-needs);border-radius:2px;transform:rotate(45deg)}
+.dot[data-s=ready]{--c:var(--s-ready)}
+.dot[data-s=ok]{--c:var(--s-ok)}
+.dot[data-s=run]{--c:var(--s-run);background:none;box-shadow:inset 0 0 0 2.5px var(--c)}
+.dot[data-s=queued]{background:none;box-shadow:inset 0 0 0 1.5px var(--ink3)}
+.dot[data-s=sent]{background:linear-gradient(90deg,var(--ink3) 50%,transparent 50%);box-shadow:inset 0 0 0 1.5px var(--ink3)}
+
+.glass{position:fixed;z-index:2;background:var(--panel);border:1px solid var(--edge);border-radius:16px;box-shadow:var(--shadow);-webkit-backdrop-filter:blur(18px) saturate(1.4);backdrop-filter:blur(18px) saturate(1.4)}
+
+/* Shell */
+.brand{position:fixed;z-index:3;left:110px;top:17px;display:flex;align-items:center;gap:8px;font:700 17px/1 -apple-system,"Helvetica Neue",sans-serif;letter-spacing:-.03em}
+.brand svg{width:24px;height:23px}
+.engine{position:fixed;z-index:3;left:238px;top:13px;display:flex;align-items:center;gap:8px;padding:6px 11px 6px 9px;border-radius:99px;background:var(--panel);border:1px solid var(--edge);font-size:12px;color:var(--ink2)}
+.engine b{color:var(--ink);font-weight:600}
+.engine .dot{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+@media(prefers-reduced-motion:reduce){.engine .dot{animation:none}}
+.rail{position:fixed;z-index:2;left:14px;top:14px;bottom:14px;width:78px;display:flex;flex-direction:column;gap:4px;padding:10px 7px;border-radius:20px;background:var(--rail);color:var(--rail-dim);box-shadow:var(--shadow)}
+.rail button{position:relative;display:grid;justify-items:center;gap:5px;padding:10px 2px 8px;border-radius:13px;font-size:11px;font-weight:500}
+.rail button:hover{color:var(--rail-ink)}
+.rail button[aria-current]{background:var(--rail-on);color:var(--rail-ink)}
+.rail svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+#badge{position:absolute;right:13px;top:5px;min-width:16px;padding:0 4px;border-radius:8px;background:var(--brand);color:#fff;font:700 11px/16px var(--num);text-align:center}
+:root[data-d=orbit] #badge{color:#1d1405}
+.rail .last{margin-top:auto}
+
+.ask{left:106px;right:14px;top:54px;display:flex;align-items:center;gap:8px;padding:8px 8px 8px 16px}
+.ask input{flex:1;min-width:0;height:36px;border:0;background:none;font-size:14px;outline:none}
+.ask input::placeholder{color:var(--ink3)}
+.ask:focus-within{outline:2px solid var(--focus);outline-offset:2px}
+#asknote{font-size:12px;color:var(--ink2)}
+.btn,.primary,.quiet{height:36px;padding:0 14px;border-radius:10px;font-weight:600;white-space:nowrap}
+.primary{background:var(--action);color:var(--on-action)}
+.primary:hover{filter:brightness(1.12)}
+.btn,.quiet{box-shadow:inset 0 0 0 1px var(--hair)}
+.btn:hover,.quiet:hover{background:var(--inset)}
+.btn{display:flex;align-items:center;gap:6px;font-weight:500;color:var(--ink2)}
+.btn svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+
+h1,h2,h3{font-family:var(--display);font-weight:var(--dw);letter-spacing:var(--dt);line-height:1.02;text-wrap:balance}
+.queue{left:106px;right:368px;bottom:14px;height:min(276px,40%);display:flex;flex-direction:column;padding:16px 16px 6px}
+.qhead{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding:0 2px 12px}
+h1{font-size:27px;text-transform:var(--dup)}
+#sub{margin-top:5px;color:var(--ink2);max-width:60ch}
+#filters{display:flex;flex:none;gap:5px}
+#filters button{height:28px;padding:0 9px;border-radius:14px;font-size:12px;font-weight:500;color:var(--ink2);box-shadow:inset 0 0 0 1px var(--hair);white-space:nowrap}
+#filters button span{font-family:var(--num);font-variant-numeric:tabular-nums;margin-left:3px}
+#filters button:hover{background:var(--inset)}
+#filters button[aria-pressed=true]{background:var(--pick);color:var(--on-pick);box-shadow:none}
+.thead,.row{display:grid;grid-template-columns:12px minmax(0,1.1fr) minmax(0,1fr) minmax(0,1.25fr) minmax(0,1.5fr);column-gap:12px;align-items:center;padding:0 10px}
+.thead{height:28px;font-size:11px;font-weight:600;color:var(--ink3);border-bottom:1px solid var(--hair)}
+#rows{flex:1;min-height:0;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--hair) transparent;padding:4px 0}
+.row{width:100%;min-height:36px;border-radius:9px;text-align:left}
+.row>*{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .dot{overflow:visible}
+.row b{font-weight:600}
+.row .role,.row .next{color:var(--ink2)}
+.row:hover{background:var(--inset)}
+.row[aria-pressed=true]{background:var(--pick);color:var(--on-pick);--ink2:var(--on-pick);--ink3:var(--on-pick)}
+
+.inspector{right:14px;top:120px;width:340px;max-height:calc(100% - 134px);overflow:auto;scrollbar-width:thin;padding:20px 20px 16px}
+h2{font-size:31px;text-transform:var(--dup)}
+.inspector .role{margin-top:4px;color:var(--ink2)}
+.status{display:flex;align-items:center;gap:8px;margin-top:12px;font-weight:600}
+.say{margin-top:12px;padding:12px 14px;border-radius:12px;background:var(--inset);color:var(--ink2);line-height:1.4}
+.say[data-q]{font-size:15px;font-weight:600;color:var(--ink)}
+.acts{display:flex;gap:8px;margin-top:12px}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:20px;padding:0;list-style:none;font-size:11px;color:var(--ink3)}
+.steps li{padding-top:7px;border-top:3px solid var(--hair)}
+.steps [data-k=done]{border-color:var(--ink);color:var(--ink2)}
+.steps [data-k=now]{border-color:var(--brand);color:var(--ink);font-weight:700}
+.fields{margin-top:16px;color:var(--ink2)}
+.fields b{font:600 20px/1 var(--num);color:var(--ink);font-variant-numeric:tabular-nums;margin-right:2px}
+.meter{height:4px;margin-top:8px;border-radius:2px;background:var(--hair);overflow:hidden}
+.meter i{display:block;height:100%;background:var(--ink);border-radius:2px}
+.ev{margin-top:10px;font-size:12px;color:var(--ink3)}
+.ev+.ev{margin-top:2px}
+
+#place{position:fixed;z-index:1;left:112px;bottom:calc(min(276px,40%) + 24px);pointer-events:none}
+h3{font-size:44px;text-transform:var(--dup)}
+#place p{margin-top:2px;font-size:12px;color:var(--ink2)}
+#views{right:368px;top:122px;display:flex;padding:3px;border-radius:12px}
+#views button{height:26px;padding:0 11px;border-radius:9px;font-size:12px;font-weight:600;color:var(--ink2)}
+#views button[aria-pressed=true]{background:var(--pick);color:var(--on-pick)}
+.drafts{position:fixed;z-index:4;right:368px;bottom:calc(min(276px,40%) + 26px);display:flex;align-items:center;gap:2px;padding:3px;border-radius:99px;background:#10141c;color:#aeb6c4;font-size:12px;box-shadow:0 8px 24px -8px rgba(0,0,0,.5)}
+.drafts span{padding:0 10px 0 12px}
+.drafts a{padding:5px 11px;border-radius:99px;color:#e8ecf2;text-decoration:none;font-weight:600}
+.drafts a:hover{background:#262d3a}
+.drafts a[aria-current]{background:#f3f5f8;color:#10141c}
+
+/* 2. Orbit: top bar, one right column where the selected row opens into its decision */
+[data-d=orbit] .rail{right:14px;bottom:auto;width:auto;height:54px;flex-direction:row;align-items:center;padding:0 250px 0 164px;border:1px solid var(--edge);border-radius:16px;-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px)}
+[data-d=orbit] .rail button{display:flex;align-items:center;gap:8px;padding:9px 12px;font-size:13px}
+[data-d=orbit] .rail .last{margin:0}
+[data-d=orbit] #badge{position:static;order:2}
+[data-d=orbit] .brand{left:32px;top:30px}
+[data-d=orbit] .engine{left:auto;right:26px;top:26px;background:none;border-color:var(--hair)}
+[data-d=orbit] .ask{left:max(24px,calc((100% - 374px)/2 - 270px));right:auto;top:auto;bottom:60px;width:min(540px,calc(100% - 430px))}
+[data-d=orbit] .queue{left:auto;right:14px;top:84px;bottom:14px;width:360px;height:auto}
+[data-d=orbit] .qhead{display:block}
+[data-d=orbit] #filters{margin-top:14px}
+[data-d=orbit] .thead,[data-d=orbit] .row .next{display:none}
+[data-d=orbit] .row{grid-template-columns:12px 1fr auto;grid-template-areas:"d co st" ". role role";row-gap:1px;padding:7px 10px;min-height:46px}
+[data-d=orbit] .row .dot{grid-area:d}[data-d=orbit] .row b{grid-area:co}[data-d=orbit] .row .st{grid-area:st;font-size:12px}[data-d=orbit] .row .role{grid-area:role;font-size:12px}
+[data-d=orbit] .inspector{position:static;width:auto;max-height:none;margin:4px 0 8px;padding:2px 12px 14px 34px;background:none;border:0;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none}
+[data-d=orbit] .inspector h2,[data-d=orbit] .inspector .role,[data-d=orbit] .inspector .status{display:none}
+[data-d=orbit] .say{margin-top:6px}
+[data-d=orbit] .steps [data-k=done],[data-d=orbit] .meter i{border-color:var(--ink2);background-color:var(--ink2)}
+[data-d=orbit] .steps [data-k=done]{background:none}
+[data-d=orbit] #place{left:24px;bottom:126px}
+[data-d=orbit] #views{right:388px;top:84px}
+[data-d=orbit] .drafts{right:auto;left:calc((100% - 374px)/2);bottom:16px;transform:translateX(-50%)}
+[data-d=orbit] h1{font-size:25px}
+
+/* 3. Maquette: decision on the right, queue on the left, model between them */
+[data-d=maquette] .queue{right:auto;top:120px;bottom:auto;width:300px;height:auto;max-height:calc(100% - 214px)}
+[data-d=maquette] .qhead{display:block}
+[data-d=maquette] #filters{margin-top:14px}
+[data-d=maquette] .thead,[data-d=maquette] .row .next{display:none}
+[data-d=maquette] .row{grid-template-columns:12px 1fr;grid-template-areas:"d co" ". st";row-gap:1px;padding:7px 10px;min-height:46px}
+[data-d=maquette] .row .dot{grid-area:d}[data-d=maquette] .row b{grid-area:co}[data-d=maquette] .row .st{grid-area:st;font-size:12px;color:var(--ink2)}[data-d=maquette] .row .role{display:none}
+[data-d=maquette] .inspector{width:320px}
+[data-d=maquette] #place{bottom:16px}
+[data-d=maquette] #views{right:14px;top:auto;bottom:16px}
+[data-d=maquette] .drafts{right:auto;left:calc(50% + 55px);bottom:18px;transform:translateX(-50%)}
+[data-d=maquette] h1{font-size:24px}
+[data-d=maquette] h2{font-size:27px}
+[data-d=maquette] h3{font-size:38px}
+
+@media(max-width:1180px){
+  .thead,.row{grid-template-columns:12px minmax(0,1.1fr) minmax(0,1fr) minmax(0,1.25fr)}
+  .thead span:last-child,.row .next{display:none}
+  .engine span span{display:none}
+  [data-d=orbit] .rail button{padding:9px 8px}
+  :root[data-d=line] #sub,:root[data-d=line] #place p{display:none}
+  :root[data-d=maquette]{--fl:384;--fr:290}
+  [data-d=maquette] .queue{width:262px}
+  [data-d=maquette] .inspector{width:290px}
+  [data-d=maquette] #filters{flex-wrap:wrap}
+}
+</style>
+</head>
+<body>
+<div id="stage"></div><div id="shade"></div><div id="labels" aria-hidden="true"></div>
+
+<div class="brand"><svg aria-hidden="true" viewBox="0 0 36 34"><rect x="2" y="6" width="31" height="24" rx="7" fill="currentColor"/><path d="M17 6V2h7" fill="none" stroke="currentColor" stroke-width="3"/><path d="M9 14h5v5H9zm11 0h5v5h-5z" fill="var(--bg)"/></svg>Intern-Bot</div>
+<p class="engine" role="status"><i class="dot" data-s="run"></i><span><b>Filling Northwind Labs</b><span> · 12 of 31 fields</span></span></p>
+
+<nav class="rail" aria-label="Destinations">
+  <button type="button" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5 12 4l8 3.5-8 3.5-8-3.5Z"/><path d="m4 12 8 3.5 8-3.5"/><path d="m4 16.5 8 3.5 8-3.5"/></svg>Applications<span id="badge" aria-label="need you"></span></button>
+  <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 20c.8-3.6 3.5-5.5 7-5.5s6.2 1.9 7 5.5"/></svg>Profile</button>
+  <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v10H10l-5 4V5Z"/><path d="m9 10 2 2 4-4"/></svg>Answers</button>
+  <button type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="m15 9-1.8 4.2L9 15l1.8-4.2L15 9Z"/></svg>Scout</button>
+  <button type="button" class="last"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>Settings</button>
+</nav>
+
+<form class="ask glass" id="ask">
+  <input type="url" aria-label="Job link" placeholder="Paste a job link and press Enter">
+  <span id="asknote" role="status"></span>
+  <button type="button" class="btn">Profile: Default<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+  <button class="primary">Prepare application</button>
+</form>
+
+<section class="queue glass" aria-label="Applications">
+  <div class="qhead"><div><h1 id="headline"></h1><p id="sub"></p></div><div id="filters" role="group" aria-label="Filter applications"></div></div>
+  <div class="thead" aria-hidden="true"><span></span><span>Company</span><span>Role</span><span>Status</span><span>Next step</span></div>
+  <div id="rows"></div>
+</section>
+
+<aside class="inspector glass" id="inspector" aria-label="Selected application" aria-live="polite"></aside>
+
+<div id="place"><h3></h3><p></p></div>
+<div class="glass" id="views" role="group" aria-label="Camera"><button type="button" aria-pressed="true">3D</button><button type="button" aria-pressed="false">Top</button><button type="button" aria-pressed="false">Side</button></div>
+<nav class="drafts" aria-label="Drafts"><span>Drafts · fictional data</span><a href="?d=line">1 Line</a><a href="?d=orbit">2 Orbit</a><a href="?d=maquette">3 Maquette</a></nav>
+
+<script src="../crew/three.min.js"></script><script src="scenes.js"></script><script src="stage.js"></script>
+</body>
+</html>

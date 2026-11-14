@@ -3,25 +3,25 @@ from functools import lru_cache
 from pathlib import Path
 from string import Template
 
-from PySide6.QtCore import QRect, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QPixmap, QShortcut
+from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QPen, QPixmap, QShortcut
 from PySide6.QtWidgets import QFormLayout, QFrame, QHBoxLayout, QLabel, QPushButton, QStyledItemDelegate, QToolButton, QTreeWidget, QVBoxLayout, QWidget
 
 LIGHT = {
-    "bg": "#f7f6f1", "surface": "#fffef8", "surface2": "#e9ede4", "border": "#b9c5ba",
-    "text": "#192d28", "text2": "#40564e", "text3": "#52635b",
-    "accent": "#a73e22", "accent_hover": "#873016", "on_accent": "#ffffff", "selection": "#d6e5d7",
-    "info": "#275e78", "warning": "#895019", "danger": "#a93038", "success": "#306342", "neutral": "#52635b",
-    "panel": "#193530", "panel_text": "#f4f4e7", "panel_muted": "#cad9ca", "panel_button": "#ffae78",
-    "panel_line": "#547169", "panel_inset": "#27453d",
+    "bg": "#eef0f6", "surface": "#fbfcff", "surface2": "#e2e6f1", "border": "#b3bad2",
+    "text": "#11173a", "text2": "#394267", "text3": "#4f587d",
+    "accent": "#ffb347", "accent_hover": "#f5a433", "on_accent": "#1d1405", "focus": "#2b46c4", "selection": "#d9dff5", "ready": "#11173a",
+    "info": "#2453c4", "warning": "#965100", "danger": "#b1243a", "success": "#1d7449", "neutral": "#535c82",
+    "panel": "#141b40", "panel_text": "#eef0fa", "panel_muted": "#b9c0e0", "panel_button": "#ffb347",
+    "panel_line": "#39437c", "panel_inset": "#222a5a", "sky": "#0f1532",
 }
 DARK = {
-    "bg": "#15241f", "surface": "#20332b", "surface2": "#2b4036", "border": "#4f6357",
-    "text": "#f0f2e7", "text2": "#cfdbca", "text3": "#adbfae",
-    "accent": "#ffad75", "accent_hover": "#ffc298", "on_accent": "#251c12", "selection": "#405a48",
-    "info": "#93cde5", "warning": "#f3ba70", "danger": "#ffa3a5", "success": "#abd6a8", "neutral": "#adbfae",
-    "panel": "#112b25", "panel_text": "#f4f4e7", "panel_muted": "#cad9ca", "panel_button": "#ffae78",
-    "panel_line": "#56736a", "panel_inset": "#28473d",
+    "bg": "#0a0e22", "surface": "#121838", "surface2": "#1b2250", "border": "#3a4479",
+    "text": "#eef0fa", "text2": "#c3cae6", "text3": "#a4acd0",
+    "accent": "#ffb347", "accent_hover": "#ffc670", "on_accent": "#1d1405", "focus": "#ffd596", "selection": "#2b3570", "ready": "#ffffff",
+    "info": "#6fb6ff", "warning": "#ffb347", "danger": "#ff9a9a", "success": "#7ee0a8", "neutral": "#8f98c2",
+    "panel": "#161d45", "panel_text": "#eef0fa", "panel_muted": "#b9c0e0", "panel_button": "#ffb347",
+    "panel_line": "#3d4884", "panel_inset": "#232c60", "sky": "#0f1532",
 }
 TOKENS = dict(LIGHT)  # live palette; apply_theme updates it in place
 _QSS = Path(__file__).with_name("styles.qss")
@@ -38,7 +38,7 @@ def apply_theme(app):
                           (QPalette.AlternateBase, "surface2"), (QPalette.Text, "text"), (QPalette.Button, "surface"),
                           (QPalette.ButtonText, "text"), (QPalette.Highlight, "selection"), (QPalette.HighlightedText, "text"),
                           (QPalette.PlaceholderText, "text3"), (QPalette.ToolTipBase, "surface2"), (QPalette.ToolTipText, "text"),
-                          (QPalette.Link, "accent"), (QPalette.Mid, "border")]:
+                          (QPalette.Link, "focus"), (QPalette.Mid, "border")]:
             palette.setColor(role, t[key])
         app.setPalette(palette)
         app.setStyleSheet(Template(_QSS.read_text(encoding="utf-8")).substitute(TOKENS, chevron=_QSS.with_name("chevron.svg").as_posix()))
@@ -49,20 +49,28 @@ def apply_theme(app):
 
 
 @lru_cache(maxsize=64)
-def _dot(color: str) -> QIcon:
+def _dot(color: str, ringed: bool = False) -> QIcon:
     pixmap = QPixmap(20, 20)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setBrush(QColor(color))
     painter.setPen(Qt.NoPen)
-    painter.drawEllipse(4, 4, 12, 12)
+    if ringed:  # the ringed planet of an application waiting for approval
+        painter.drawEllipse(6, 6, 8, 8)
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(color), 1.6))
+        painter.drawEllipse(QRectF(2.5, 2.5, 15, 15))
+    else:
+        painter.drawEllipse(4, 4, 12, 12)
     painter.end()
     return QIcon(pixmap)
 
 
-def dot_icon(tone: str) -> QIcon:
-    return _dot(TOKENS.get(tone, TOKENS["neutral"]))
+def dot_icon(tone: str, palette=None) -> QIcon:
+    """A status dot in the live palette, or in DARK for marks on the always-navy panels."""
+    palette = palette or TOKENS
+    return _dot(palette.get(tone, palette["neutral"]), tone == "ready")
 
 
 def restyle(widget, **properties):
@@ -119,18 +127,48 @@ def form_layout(spacing=10):
     return layout
 
 
+@lru_cache(maxsize=16)
+def orbit_glyph(station: str, width: int, height: int) -> QPixmap:
+    """A small night-sky chart with this destination's orbit lit, drawn like the live Applications scene."""
+    scale = 2
+    pixmap = QPixmap(width * scale, height * scale)
+    pixmap.setDevicePixelRatio(scale)
+    pixmap.fill(Qt.transparent)
+    p = QPainter(pixmap)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(DARK["sky"]))
+    p.drawRoundedRect(QRectF(0, 0, width, height), 10, 10)
+    centre = QPointF(width * .5, height * .54)
+    lit = ("intake", "fill", "verify", "dispatch").index(station)
+    for index, share in enumerate((.42, .33, .24, .15)):
+        rx, ry = width * share, height * share * 1.05
+        on = index == lit
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(DARK["accent"] if on else "#5b6596"), 1.6 if on else 1))
+        p.drawEllipse(centre, rx, ry * .62)
+        if on:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(DARK["accent"]))
+            p.drawEllipse(centre + QPointF(-rx * .72, ry * .62 * .69), 3.2, 3.2)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor("#ffd596"))
+    p.drawEllipse(centre, width * .055, width * .055)
+    p.end()
+    return pixmap
+
+
 def station_heading(title, station, description="", compact=False):
-    """A workbench nameplate made from the same model as the live scene."""
+    """A destination heading with its orbit from the Applications chart."""
     frame = QWidget()
     row = QHBoxLayout(frame)
     row.setContentsMargins(0, 0, 0, 0)
     row.setSpacing(12)
     art = QLabel()
     size = QSize(62, 48) if compact else QSize(91, 70)
-    asset = Path(__file__).with_name("crew") / f"{station}.png"
-    art.setPixmap(QPixmap(str(asset)).scaled(size * 2, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+    art.setPixmap(orbit_glyph(station, size.width(), size.height()))
     art.setFixedSize(size)
-    art.setScaledContents(True)
+    art.setAccessibleName(f"{station.title()} orbit")
     row.addWidget(art)
     text = QVBoxLayout()
     text.setSpacing(2)

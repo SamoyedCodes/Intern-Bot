@@ -1,13 +1,14 @@
-"""Local, read-only views of the current application checkpoints."""
+"""Local, read-only views of the current application checkpoints: the orbit chart and the Bar field."""
 import json
+import math
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRectF, Qt, QUrl, Signal, Slot, QTimer
-from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPixmap
+from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QUrl, Signal, Slot, QTimer
+from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget
 
 from core.automation.models import site_key
-from gui.theme import label
+from gui.theme import DARK, label
 
 ASSETS = Path(__file__).with_name("crew")
 STATIONS = ("Intake", "Fill", "Verify", "Dispatch")
@@ -18,6 +19,16 @@ STATION_HELP = (
     "Dispatch handles review, sending and employer confirmation.",
 )
 MAX_BARS = 18
+ORBITS = (*STATIONS, "Applied", "Closed")
+# Orbit radii in scene units, outer Intake to inner Applied, then the rim; the 3D scene uses the same values.
+RADII = (7.8, 6.2, 4.6, 3.0, 1.9, 8.9)
+LANE_CENTRE = (-1.6, 2.4, -0.5, 0.35, 2.6, -2.5)
+SKY, CHALK = "#0f1532", "#eef0fa"
+
+
+def orbit_of(row):
+    """Applied and Closed records leave the station orbits; a send attempt alone stays at Dispatch."""
+    return 5 if row["group"] == "Closed" else 4 if row["group"] == "Applied" else row["station"]
 
 
 def crew_row(run, active_id):
@@ -68,56 +79,76 @@ class SceneBridge(QObject):
 
 
 class StillScene(QWidget):
-    """The same stations and assessment bands when a 3D context is unavailable."""
+    """The orbit chart or the assessment bands, painted flat when a 3D context is unavailable."""
     def __init__(self):
         super().__init__()
-        self.images = [QPixmap(str(ASSETS / f"{name.lower()}.png")) for name in STATIONS]
         self.state = {}
 
     def paintEvent(self, event):
         p = QPainter(self)
-        p.setRenderHint(QPainter.SmoothPixmapTransform)
         p.setRenderHint(QPainter.Antialiasing)
         clip = QPainterPath()  # match the rounded top of the live scene and the caption bar below it
-        clip.addRoundedRect(QRectF(self.rect()).adjusted(0, 0, 0, 12), 10, 10)
+        clip.addRoundedRect(QRectF(self.rect()).adjusted(0, 0, 0, 14), 14, 14)
         p.setClipPath(clip)
-        field = self.state.get("field")
-        rows = self.state.get("rows", [])
-        selected = self.state.get("selected")
-        viewing = next((r for r in rows if r["id"] == selected), None)
-        p.fillRect(self.rect(), QColor("#28342f" if field or self.state.get("dark") else "#ccdbcf"))
-        if field:
-            if not rows:
-                p.setPen(QColor("#e1eadc"))
-                p.drawText(self.rect(), Qt.AlignCenter, "No applications in this view")
-            for i, row in enumerate(rows):
-                line = self.height() / len(rows)
-                y = i * line
-                p.setPen(QColor("#d9f197" if row["id"] == selected else "#ebf0e6"))
-                name_rect = QRectF(14, y, self.width()*.32-18, line)
-                name = p.fontMetrics().elidedText(row["name"], Qt.ElideRight, max(0, int(name_rect.width())))
-                p.drawText(name_rect, Qt.AlignVCenter | Qt.AlignLeft, name)
-                bars = row["bars"]
-                if not bars:
-                    p.drawText(QRectF(self.width()*.33,y,self.width()*.6,line), Qt.AlignVCenter, "No fields assessed")
-                gap = min(30, (self.width()*.62) / max(1, len(bars)))
-                for n,(share, blocked, omitted) in enumerate(bars):
-                    height = line*(.07 + .46*share)
-                    color = "#eeb75b" if blocked else "#94a7b7" if omitted else "#d4ddbe"
-                    x, top = self.width()*.33+n*gap, y+line*.76-height
-                    p.fillRect(QRectF(x, top, gap*.75, height), QColor(color))
-                    if blocked:
-                        p.fillRect(QRectF(x+2, top-14, 2, 14), QColor("#f4ead1"))
-                        p.fillRect(QRectF(x+4, top-14, 8, 5), QColor("#eeb75b"))
+        p.fillRect(self.rect(), QColor(SKY))
+        rows, selected = self.state.get("rows", []), self.state.get("selected")
+        if not rows:
+            p.setPen(QColor(CHALK))
+            p.drawText(self.rect(), Qt.AlignCenter, "No applications in this view")
+        elif self.state.get("field"):
+            self._bars(p, rows, selected)
         else:
-            cell = self.width() / 4
-            for i, img in enumerate(self.images):
-                size = img.size().scaled(int(cell+4), max(1,self.height()-12), Qt.KeepAspectRatio)
-                rect = QRectF(i*cell+(cell-size.width())/2,(self.height()-size.height())/2,size.width(),size.height())
-                p.drawPixmap(rect,img,QRectF(img.rect()))
-                if viewing and i == viewing["station"]:
-                    p.fillRect(QRectF(i*cell+cell*.18,self.height()-5,cell*.64,3), QColor("#bf542b" if not self.state["dark"] else "#ffb179"))
+            self._orbits(p, rows, selected)
         p.end()
+
+    def _orbits(self, p, rows, selected):
+        centre = QPointF(self.width() / 2, self.height() / 2)
+        unit = min(self.width(), self.height()) / 2 / (RADII[5] + .6)
+        lanes = [[] for _ in RADII]
+        for row in rows:
+            lanes[orbit_of(row)].append(row)
+        for lane, (radius, members) in enumerate(zip(RADII, lanes)):
+            chosen = any(row["id"] == selected for row in members)
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(255, 255, 255, 230 if chosen else 90), 1.2))
+            p.drawEllipse(centre, radius * unit, radius * unit)
+            step = min(2 * math.pi / max(1, len(members)), .3 if lane == 5 else .9)
+            for k, row in enumerate(members):
+                angle = LANE_CENTRE[lane] + (k - (len(members) - 1) / 2) * step
+                spot = centre + QPointF(math.sin(angle), math.cos(angle)) * radius * unit
+                size = (4 if lane == 5 else 7) * (1.3 if row["id"] == selected else 1)
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(row["color"]))
+                p.drawEllipse(spot, size, size)
+                if row["id"] == selected:
+                    p.setBrush(Qt.NoBrush)
+                    p.setPen(QPen(QColor(CHALK), 1.5))
+                    p.drawEllipse(spot, size + 5, size + 5)
+            if lane < 4:
+                p.setPen(QColor("#c3cae6"))
+                p.drawText(centre + QPointF(radius * unit * .72 + 4, radius * unit * .7), f"{STATIONS[lane]} {len(members)}")
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor("#ffd596"))
+        p.drawEllipse(centre, .8 * unit, .8 * unit)
+
+    def _bars(self, p, rows, selected):
+        line = self.height() / len(rows)
+        for i, row in enumerate(rows):
+            y = i * line
+            p.setPen(QColor("#ffb347" if row["id"] == selected else CHALK))
+            name_rect = QRectF(14, y, self.width() * .32 - 18, line)
+            p.drawText(name_rect, Qt.AlignVCenter | Qt.AlignLeft, p.fontMetrics().elidedText(row["name"], Qt.ElideRight, max(0, int(name_rect.width()))))
+            bars = row["bars"]
+            if not bars:
+                p.drawText(QRectF(self.width() * .33, y, self.width() * .6, line), Qt.AlignVCenter, "No fields assessed")
+            gap = min(30, (self.width() * .62) / max(1, len(bars)))
+            for n, (share, blocked, omitted) in enumerate(bars):
+                height = line * (.07 + .46 * share)
+                x, top = self.width() * .33 + n * gap, y + line * .76 - height
+                p.fillRect(QRectF(x, top, gap * .75, height), QColor("#ffb347" if blocked else "#7f89b3" if omitted else "#c3cae6"))
+                if blocked:
+                    p.fillRect(QRectF(x + 2, top - 14, 2, 14), QColor(CHALK))
+                    p.fillRect(QRectF(x + 4, top - 14, 8, 5), QColor("#ffb347"))
 
 
 class Workshop(QWidget):
@@ -127,7 +158,7 @@ class Workshop(QWidget):
         self.store = store
         self.setObjectName("workshopPanel")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.setMinimumHeight(135)
+        self.setMinimumHeight(220)
         self.field = False
         self.payload = {}
         self.web = None
@@ -151,11 +182,11 @@ class Workshop(QWidget):
         self.caption = label(role="sceneCaption")
         self.caption.setTextFormat(Qt.PlainText)
         caption_row.addWidget(self.caption, 1)
-        self.rotate_hint = label("Drag or use ← → to rotate", "sceneCaption", wrap=False)
+        self.rotate_hint = label("Drag or use ← → to turn", "sceneCaption", wrap=False)
         self.rotate_hint.hide()
         caption_row.addWidget(self.rotate_hint)
         box.addWidget(caption_bar)
-        self.setAccessibleName("Application workshop")
+        self.setAccessibleName("Application orbit chart")
 
     def _pick(self, run_id):
         if any(row["id"] == run_id for row in self.payload.get("rows", [])):
@@ -178,7 +209,7 @@ class Workshop(QWidget):
         self.web = QWebEngineView(self)
         self.web.setContextMenuPolicy(Qt.NoContextMenu)
         self.web.setAcceptDrops(False)
-        self.web.setAccessibleName("Rotatable 3D workshop. Left and right arrows turn the scene.")
+        self.web.setAccessibleName("Rotatable 3D orbit chart. Left and right arrows turn it.")
         app = QApplication.instance()
         if not hasattr(app, "_crew_profile"):
             app._crew_profile = QWebEngineProfile(app)  # unnamed profiles keep session data in memory
@@ -202,22 +233,28 @@ class Workshop(QWidget):
         if ok and self.payload:
             self.bridge.snapshot.emit(json.dumps(self.payload))
 
-    def display(self, runs, selected, active_id, status_label):
+    def display(self, runs, selected, active_id, meta):
+        """Draw the visible table rows: every row as a planet, or a page of three Bar field tracks."""
         index = next((i for i, run in enumerate(runs) if run.id == selected), 0)
-        offset = index // 3 * 3
-        rows = [crew_row(run, active_id) for run in runs[offset:offset+3]]
+        offset = index // 3 * 3 if self.field else 0
+        shown = runs[offset:offset + 3] if self.field else runs
+        rows = []
+        for run in shown:
+            text, tone, group = meta(run)
+            row = crew_row(run, active_id)
+            row.update(status=text, group=group, color=DARK.get(tone, DARK["neutral"]), ready=tone == "ready")
+            rows.append(row)
         viewed = next((row for row in rows if row["id"] == selected), None)
         if self.field:
             caption = (f"Tracks {offset+1}–{offset+len(rows)} of {len(runs)} · Height shows verified share · Flag needs attention"
                        if rows else "Bar field · No matching applications")
         elif viewed:
-            caption = f"{STATIONS[viewed['station']]}  ·  {viewed['name']}  ·  {status_label}"
+            caption = f"{ORBITS[orbit_of(viewed)]}  ·  {viewed['name']}  ·  {viewed['status']}"
         else:
-            caption = "Crew standing by  ·  Intake  /  Fill  /  Verify  /  Dispatch"
+            caption = "No applications in this view" if not rows else "Intake  /  Fill  /  Verify  /  Dispatch  /  Applied"
         self.caption.setText(caption)
         self.still.setAccessibleName(caption)
-        state = dict(field=self.field, rows=rows, selected=selected, motion=self.store.get("crew_motion", True),
-                     dark=QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark)
+        state = dict(field=self.field, rows=rows, selected=selected, motion=self.store.get("crew_motion", True))
         if state != self.payload:
             self.payload = self.still.state = state
             self.still.update()

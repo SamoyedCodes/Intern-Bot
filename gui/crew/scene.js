@@ -1,263 +1,265 @@
+/* Orbit chart and Bar field. Display only: the scene draws what gui/workshop.py sends and can ask Qt to
+   select a visible row or explain a station; it never changes an application. */
 function makeCrewScene(host, selectJob, inspectStation) {
   const T = window.THREE;
   const renderer = new T.WebGLRenderer({ antialias: true, alpha: true });
-  // Always render at 2x: on a standard-density display this supersamples the small models and their edges.
+  // Always render at 2x: on a standard-density display this supersamples the thin orbit lines.
   renderer.setPixelRatio(2);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = T.PCFShadowMap;
   const canvas = renderer.domElement;
   canvas.tabIndex = 0;
-  canvas.setAttribute('aria-label', '3D crew. Drag or use the left and right arrow keys to change the angle.');
+  canvas.setAttribute('aria-label', '3D orbit chart. Drag, or use the left and right arrow keys, to turn it.');
   host.prepend(canvas);
+  const overlay = document.getElementById('overlay');
   const scene = new T.Scene(),
-    camera = new T.OrthographicCamera(-10, 10, 5, -5, 0.1, 90);
-  const sun = new T.DirectionalLight(0xfff3dd, 2.8);
-  sun.position.set(-8, 13, 8);
+    camera = new T.OrthographicCamera(-1, 1, 1, -1, 1, 400);
+  const sun = new T.DirectionalLight(0xffe9c9, 2.3);
+  sun.position.set(-6, 12, 8);
   sun.castShadow = true;
-  // A tight frustum and a large map keep the cast shadows smooth instead of stair-stepped.
-  Object.assign(sun.shadow.camera, { left: -9.5, right: 9.5, top: 8, bottom: -8, near: 4, far: 34 });
+  Object.assign(sun.shadow.camera, { left: -10, right: 10, top: 9, bottom: -9, near: 2, far: 40 });
   sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.radius = 3;
-  sun.shadow.bias = -0.0003;
-  sun.shadow.normalBias = 0.02;
-  scene.add(sun, new T.AmbientLight(0xffffff, 1.65));
-  const shapes = new Map(),
-    materials = new Map();
-  function cached(map, key, make) {
-    if (!map.has(key)) map.set(key, make());
-    return map.get(key);
-  }
-  function mat(color) {
-    return cached(materials, color, () => new T.MeshStandardMaterial({ color, roughness: 0.72 }));
-  }
-  function mesh(p, g, m, x, y, z) {
-    const o = new T.Mesh(g, m);
+  sun.shadow.radius = 4;
+  sun.shadow.bias = -0.0004;
+  scene.add(sun, new T.AmbientLight(0xc4ccff, 1.15));
+
+  const mats = new Map(),
+    geos = new Map();
+  const memo = (m, key, make) => m.get(key) || (m.set(key, make()), m.get(key));
+  const mat = (c, glow = 0) =>
+    memo(mats, c + '|' + glow, () => new T.MeshStandardMaterial({ color: c, roughness: 0.78, emissive: glow ? c : '#000000', emissiveIntensity: glow }));
+  const clear = (c, o, glow = 0) =>
+    memo(mats, ['c', c, o, glow].join(), () => new T.MeshStandardMaterial({ color: c, roughness: 1, transparent: o < 1, opacity: o, side: 2, depthWrite: o >= 1, emissive: glow ? c : '#000000', emissiveIntensity: glow }));
+  function put(p, g, m, x, y, z) {
+    const o = new T.Mesh(g, typeof m === 'string' ? mat(m) : m);
     o.position.set(x, y, z);
-    o.castShadow = true;
-    o.receiveShadow = true;
+    o.castShadow = o.receiveShadow = true;
     p.add(o);
     return o;
   }
-  function box(p, x, y, z, w, h, d, color, r = 0) {
-    const geometry = cached(shapes, ['b', w, h, d, r].join('/'), () =>
-      r ? new T.RoundedBoxGeometry(w, h, d, 2, Math.min(r, w / 2, h / 2, d / 2)) : new T.BoxGeometry(w, h, d),
-    );
-    return mesh(p, geometry, mat(color), x, y, z);
-  }
-  function cyl(p, x, y, z, top, bottom, h, color, n = 24) {
-    const g = cached(shapes, ['c', top, bottom, h, n].join('/'), () => new T.CylinderGeometry(top, bottom, h, n));
-    return mesh(p, g, mat(color), x, y, z);
-  }
-  function ball(p, x, y, z, r, color) {
-    const g = cached(shapes, 's' + r, () => new T.SphereGeometry(r, 18, 12));
-    return mesh(p, g, mat(color), x, y, z);
-  }
-  function group(p, x = 0, y = 0, z = 0) {
+  const group = (p, x = 0, y = 0, z = 0) => {
     const g = new T.Group();
     g.position.set(x, y, z);
     p.add(g);
     return g;
-  }
-  function rod(p, a, b, r, color) {
-    const av = new T.Vector3(...a),
-      bv = new T.Vector3(...b),
-      dir = bv.clone().sub(av);
-    const o = cyl(p, 0, 0, 0, r, r, dir.length(), color, 12);
-    o.position.copy(av.add(bv).multiplyScalar(0.5));
-    o.quaternion.setFromUnitVectors(new T.Vector3(0, 1, 0), dir.normalize());
+  };
+  const box = (p, x, y, z, w, h, d, c, r = 0) =>
+    put(p, memo(geos, ['b', w, h, d, r].join(), () => (r ? new T.RoundedBoxGeometry(w, h, d, 3, Math.min(r, w / 2, h / 2, d / 2)) : new T.BoxGeometry(w, h, d))), c, x, y, z);
+  const ball = (p, x, y, z, r, c) => put(p, memo(geos, 's' + r, () => new T.SphereGeometry(r, 28, 18)), c, x, y, z);
+  const disc = (p, y, r, c) => put(p, new T.CylinderGeometry(r, r, 0.02, 128), c, 0, y, 0);
+  // A flat ring or arc lying in the orbit plane. Angle 0 faces the default camera, positive angles go right.
+  function ring(p, r, w, y, m, a0 = 0, len = Math.PI * 2) {
+    const key = 'r' + [r, w, a0, len].map((n) => +n.toFixed(3)).join();
+    const o = put(p, memo(geos, key, () => new T.CylinderGeometry(r - w / 2, r + w / 2, 0.001, Math.max(12, Math.round(len * 30)), 1, true, a0, len)), m, 0, y, 0);
+    o.castShadow = false; // a line on the chart, not an object above it
     return o;
   }
-  function plate(p, x, y, z, w, h, text, bg, fg, fontsize = 110) {
+  const at = (a, r, y = 0) => new T.Vector3(Math.sin(a) * r, y, Math.cos(a) * r);
+
+  function label(cls, onClick) {
+    const el = document.createElement(onClick ? 'button' : 'div');
+    el.className = 'wl ' + cls;
+    el.hidden = true;
+    if (onClick) {
+      el.type = 'button';
+      el.addEventListener('click', onClick);
+    }
+    overlay.append(el);
+    return { el, pos: new T.Vector3(), on: true };
+  }
+
+  /* Orbit chart */
+  const chalk = '#eef0fa',
+    sky = group(scene);
+  const STATIONS = ['Intake', 'Fill', 'Verify', 'Dispatch'],
+    R = [7.8, 6.2, 4.6, 3.0],
+    CORE = 1.9,
+    RIM = 8.9;
+  disc(sky, -0.04, RIM, clear('#1c2556', 0.6)).renderOrder = -1; // draw the chart's ground before the lines on it
+  const orbitLines = R.map((r) => ring(sky, r, 0.035, 0, clear(chalk, 0.38, 1).clone()));
+  const coreLine = ring(sky, CORE, 0.025, 0, clear(chalk, 0.3, 1).clone());
+  const rimLine = ring(sky, RIM, 0.025, 0, clear(chalk, 0.22, 1).clone());
+  const spoke = clear(chalk, 0.1, 1);
+  for (let a = 0; a < 24; a++) {
+    const g = group(sky);
+    g.rotation.y = (a * Math.PI) / 12;
+    box(g, 0, 0, 5.25, 0.014, 0.002, 7.3, spoke).castShadow = false;
+  }
+  const rnd = (i, s) => (((Math.sin(i * 127.1 + s * 311.7) * 43758.5453) % 1) + 1) % 1;
+  for (let i = 0; i < 260; i++) {
+    const sx = rnd(i, 1) * 80 - 40,
+      sz = rnd(i, 2) * 80 - 40;
+    if (Math.hypot(sx, sz) > 9.8) ball(sky, sx, -1.2, sz, rnd(i, 3) > 0.85 ? 0.07 : 0.035, mat(chalk, 1)).castShadow = false;
+  }
+  ball(sky, 0, 0.25, 0, 0.95, mat('#ffd596', 1));
+  ball(sky, 0, 0.25, 0, 1.35, clear('#ffd596', 0.13, 1)).castShadow = false;
+  // One spinning group per orbit; idle rotation moves bodies along their orbit, never between orbits.
+  const lanes = [...R, CORE, RIM].map(() => group(sky));
+  const CENTRE = [-1.6, 2.4, -0.5, 0.35, 2.6, -2.5],
+    SPIN = [0.012, 0.03, 0.016, 0.022, 0.04, 0.004];
+  const reticle = ring(sky, 0.74, 0.04, 0, clear(chalk, 1, 1));
+  const hit = clear('#000000', 0);
+  const stationTags = STATIONS.map((name, i) => {
+    const l = label('station', () => inspectStation(i));
+    l.pos.copy(at(1.62, R[i], 0.12)); // a ruler of labels on the right, clear of the busy centre
+    l.el.title = `What ${name} does`;
+    return l;
+  });
+  const coreTag = label('station core'),
+    rimTag = label('station rim'),
+    moreTags = [...R, CORE, RIM].map(() => label('more')),
+    focusTag = label('tag'),
+    emptyTag = label('empty');
+  coreTag.pos.set(0, 1.75, 0);
+  rimTag.pos.copy(at(-2.05, RIM, 0.1));
+  emptyTag.el.textContent = 'No applications in this view';
+  let bodies = new Map(),
+    spinning = [],
+    comet = null;
+
+  function lane(row) {
+    return row.group === 'Closed' ? 5 : row.group === 'Applied' ? 4 : row.station;
+  }
+  function buildOrbit(rows, selected) {
+    for (const g of lanes) g.clear();
+    bodies = new Map();
+    spinning = [];
+    comet = null;
+    const buckets = lanes.map(() => []);
+    for (const row of rows) buckets[lane(row)].push(row);
+    buckets.forEach((list, i) => {
+      const r = [...R, CORE, RIM][i],
+        cap = Math.floor((2 * Math.PI * r) / (i === 5 ? 0.45 : 0.95));
+      // Keep the selected body on the chart even when its orbit is full.
+      let shown = list.slice(0, cap);
+      const pick = list.find((row) => row.id === selected);
+      if (pick && !shown.includes(pick)) shown = [...shown.slice(0, cap - 1), pick];
+      const step = Math.min((2 * Math.PI) / Math.max(1, shown.length), i === 5 ? 0.3 : 0.9);
+      shown.forEach((row, k) => {
+        const a = CENTRE[i] + (k - (shown.length - 1) / 2) * step;
+        bodies.set(row.id, planet(lanes[i], row, at(a, r, 0.25), a, r));
+      });
+      const more = moreTags[i];
+      more.on = list.length > shown.length;
+      more.el.textContent = `+${list.length - shown.length} more`;
+      more.pos.copy(at(CENTRE[i] + (shown.length / 2 + 0.6) * step, r, 0.1));
+    });
+    stationTags.forEach((l, i) => (l.el.innerHTML = `<b>${STATIONS[i]}</b><i>${buckets[i].length}</i>`));
+    coreTag.el.innerHTML = `<b>Applied</b><i>${buckets[4].length}</i>`;
+    rimTag.el.innerHTML = `<b>Closed</b><i>${buckets[5].length}</i>`;
+    rimTag.on = buckets[5].length > 0;
+    emptyTag.on = rows.length === 0;
+  }
+  function planet(parent, row, p, a, r) {
+    const g = group(parent, p.x, p.y, p.z),
+      closed = row.group === 'Closed';
+    g.userData.job = row.id;
+    const hollow = row.sent && !row.receipt && row.group !== 'Applied';
+    const size = closed ? 0.13 : row.moving ? 0.34 : row.group === 'Needs you' ? 0.36 : row.group === 'Applied' ? 0.24 : hollow ? 0.27 : 0.23;
+    const color = row.color;
+    const core = ball(g, 0, 0, 0, size, hollow ? clear(color, 0.22, 0.5) : mat(color, closed ? 0.15 : row.group === 'In progress' && !row.moving ? 0.3 : 0.7));
+    ball(g, 0, 0, 0, Math.max(0.6, size * 1.7), hit).castShadow = false;
+    if (hollow) ring(g, size * 1.15, 0.06, 0, clear(color, 1, 1));
+    if (row.ask) {
+      const o = ring(g, size * 1.8, 0.08, 0, clear(color, 1, 1));
+      o.rotation.x = 1.05;
+      spinning.push(o);
+    } else if (row.ready) ring(g, size * 1.85, 0.045, 0, clear(color, 1, 1));
+    // A moon is the employer's receipt: only a recognised confirmation draws it.
+    if (row.receipt) ball(g, size + 0.16, 0.08, 0, 0.07, mat(chalk, 0.8));
+    if (row.moving) comet = ring(parent, r, 0.1, 0.25, clear(color, 0.75, 1), a - 0.62, 0.56);
+    return { g, core, row, size };
+  }
+
+  /* Bar field: three tracks form a window into the sorted, filtered native table. */
+  const field = group(scene);
+  field.visible = false;
+  const tracks = [],
+    maxBars = 18;
+  function plate(p, w, h) {
     const c = document.createElement('canvas');
-    c.width = 768;
-    c.height = 160;
-    const ctx = c.getContext('2d');
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, c.width, c.height);
-    ctx.fillStyle = fg;
-    ctx.font = 'bold ' + fontsize + 'px Helvetica Neue, Arial, sans-serif';
-    ctx.textBaseline = 'middle';
-    ctx.textAlign = 'center';
-    ctx.fillText(text, 384, 84, 740);
+    c.width = 1024;
+    c.height = 128;
     const tex = new T.CanvasTexture(c);
     tex.colorSpace = T.SRGBColorSpace;
     tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    const o = mesh(p, new T.PlaneGeometry(w, h), new T.MeshStandardMaterial({ map: tex, roughness: 1 }), x, y, z);
+    const o = put(p, new T.PlaneGeometry(w, h), new T.MeshStandardMaterial({ map: tex, roughness: 1, transparent: true }), 0, 0, 0);
     o.castShadow = false;
+    o.rotation.x = -Math.PI / 2;
     return o;
   }
-  const dark = '#233932',
-    cream = '#f4ead1',
-    blue = '#39678a',
-    mint = '#698d70',
-    orange = '#e56c36',
-    yellow = '#f2b338';
-  function worker(p, x, y, z, paint, id, field = false) {
-    const root = group(p, x, y, z),
-      torso = group(root, 0, 0.53, 0);
-    root.userData[field ? 'job' : 'station'] = id;
-    const boots = field ? '#5d6359' : dark,
-      skin = field ? '#d8dace' : cream;
-    for (const s of [-1, 1]) {
-      cyl(root, s * 0.15, 0.35, 0, 0.085, 0.086, 0.36, boots);
-      box(root, s * 0.15, 0.15, 0.064, 0.235, 0.15, 0.3, boots, 0.055);
-    }
-    box(torso, 0, 0.12, 0, 0.49, 0.53, 0.36, paint, 0.105);
-    box(torso, 0, 0.025, 0.192, 0.26, 0.17, 0.035, skin, 0.025);
-    cyl(torso, 0, 0.46, 0, 0.12, 0.14, 0.17, boots);
-    const head = group(torso, 0, 0.63, 0);
-    box(head, 0, 0, 0, 0.66, 0.48, 0.47, skin, 0.13);
-    box(head, 0, 0.008, 0.225, 0.49, 0.23, 0.075, boots, 0.065);
-    const eyes = [-1, 1].map((side) => {
-      ball(head, side * 0.335, -0.025, 0.005, 0.067, paint);
-      return box(head, side * 0.113, 0.02, 0.268, 0.067, 0.08, 0.018, field ? '#f3f2df' : '#ffcd84', 0.012);
-    });
-    const antenna = group(head, -0.14, 0.22, -0.04);
-    cyl(antenna, 0, 0.06, 0, 0.017, 0.017, 0.12, boots, 10);
-    ball(antenna, 0, 0.14, 0, 0.044, paint);
-    const arms = [-1, 1].map((s) => {
-      const arm = group(torso, s * 0.276, 0.26, 0.01);
-      ball(arm, 0, 0, 0, 0.076, boots);
-      rod(arm, [0, 0, 0], [s * 0.084, -0.15, 0.1], 0.055, paint);
-      ball(arm, s * 0.084, -0.15, 0.1, 0.06, boots);
-      rod(arm, [s * 0.084, -0.15, 0.1], [s * 0.083, -0.16, 0.25], 0.047, boots);
-      ball(arm, s * 0.083, -0.16, 0.25, 0.073, skin);
-      return arm;
-    });
-    return { root, head, arms, torso, eyes, antenna };
-  }
-  const floor = box(scene, 0, -0.62, 0, 160, 0.1, 160, '#b8cbbd');
-  floor.castShadow = false;
-  const shop = group(scene),
-    field = group(scene);
-  const spots = [
-    [-5.35, 0.35],
-    [-1.8, -0.53],
-    [1.8, -0.53],
-    [5.35, 0.35],
-  ];
-  const names = ['INTAKE', 'FILL', 'VERIFY', 'DISPATCH'],
-    paints = [yellow, blue, mint, orange];
-  const bots = [],
-    bulbs = [];
-  for (let i = 0; i < 4; i++) {
-    const [x, z] = spots[i],
-      station = group(shop, x, 0, z);
-    station.userData.station = i;
-    box(station, 0, -0.27, 0, 3.38, 0.44, 3.35, '#5e746a', 0.17);
-    box(station, 0, -0.018, 0, 3.36, 0.19, 3.33, '#ecdfba', 0.14);
-    box(station, 0, 0.09, 0, 3.23, 0.08, 3.19, '#ddd3b5', 0.09);
-    box(station, 0, -0.14, 1.676, 2.3, 0.31, 0.045, dark, 0.025);
-    plate(station, 0, -0.14, 1.703, 2.24, 0.245, '0' + (i + 1) + '  /  ' + names[i], dark, '#ffedc9', 100);
-    const machine = group(station, 0.14, 0, -0.37);
-    box(machine, 0, 0.2, 0, 2.06, 0.15, 1.28, dark, 0.065);
-    box(machine, 0, 0.55, 0, 1.86, 0.65, 1.18, paints[i], 0.095);
-    box(machine, 0, 0.91, 0, 2.12, 0.12, 1.38, cream, 0.055);
-    for (const s of [-1, 1]) {
-      box(machine, s * 0.74, 0.65, 0.602, 0.06, 0.21, 0.027, dark, 0.015);
-    }
-    // Each machine has a distinct silhouette, even without its nameplate.
-    if (i === 0) {
-      for (let j = 0; j < 3; j++) {
-        box(machine, -0.25, 1.02 + j * 0.21, -0.18, 1.22, 0.09, 0.81, blue, 0.038);
-        box(machine, -0.26, 1.1 + j * 0.21, -0.22, 1.04, 0.055, 0.61, cream, 0.018);
-        box(machine, -0.25, 1.13 + j * 0.21, -0.57, 1.22, 0.22, 0.072, blue, 0.021);
-      }
-      for (const s of [-1, 1]) box(machine, -0.25 + s * 0.57, 1.28, -0.27, 0.07, 0.51, 0.67, blue, 0.025);
-    }
-    if (i === 1) {
-      box(machine, -0.25, 1.14, -0.3, 0.15, 0.36, 0.17, dark, 0.03);
-      const screen = group(machine, -0.25, 1.48, -0.35);
-      screen.rotation.x = -0.12;
-      box(screen, 0, 0, 0, 1.24, 0.75, 0.155, cream, 0.08);
-      box(screen, 0, 0.02, 0.084, 1.02, 0.54, 0.02, dark, 0.035);
-      for (let j = 0; j < 3; j++) box(screen, -0.12, 0.17 - j * 0.13, 0.105, 0.64 - j * 0.065, 0.033, 0.014, '#9cbfa5');
-      box(machine, -0.09, 0.998, 0.3, 0.98, 0.055, 0.35, dark, 0.028);
-      for (let j = 0; j < 3; j++) box(machine, -0.12, 1.033, 0.18 + j * 0.088, 0.77, 0.02, 0.027, '#91a49b');
-    }
-    if (i === 2) {
-      for (const s of [-1, 1]) box(machine, s * 0.67, 1.3, -0.19, 0.18, 0.77, 0.35, mint, 0.05);
-      box(machine, 0, 1.75, -0.19, 1.52, 0.22, 0.38, mint, 0.065);
-      box(machine, 0, 1.62, -0.17, 1.04, 0.033, 0.2, '#c7ec81');
-      for (let j = 0; j < 5; j++) {
-        const roller = cyl(machine, 0, 1.02, -0.45 + j * 0.2, 0.09, 0.09, 1.18, '#5a7069');
-        roller.rotation.z = Math.PI / 2;
-      }
-    }
-    if (i === 3) {
-      box(machine, -0.1, 1.43, -0.18, 1.34, 1.03, 0.83, orange, 0.13);
-      box(machine, -0.1, 1.58, 0.246, 0.98, 0.17, 0.025, dark, 0.032);
-      box(machine, -0.1, 1.47, 0.3, 1.09, 0.07, 0.2, cream, 0.028);
-      box(machine, -0.1, 1.14, 0.25, 0.47, 0.085, 0.018, cream, 0.012);
-    }
-    cyl(machine, 0.8, 1.2, -0.45, 0.031, 0.036, 0.47, dark, 12);
-    const bulb = ball(machine, 0.8, 1.46, -0.45, 0.12, cream);
-    bulbs.push(bulb);
-    const b = worker(station, -0.68, 0.12, 0.89, paints[i], i);
-    b.root.scale.setScalar(1.14);
-    b.root.rotation.y = 0.68;
-    bots.push(b);
-    // Tool caddy on each workbench.
-    cyl(machine, 0.71, 1.066, 0.27, 0.115, 0.095, 0.21, dark);
-    for (let k = 0; k < 3; k++)
-      rod(machine, [0.67 + k * 0.038, 1.09, 0.28], [0.63 + k * 0.075, 1.31 + (k % 2) * 0.07, 0.25], 0.018, cream);
-  }
-  for (let i = 0; i < 3; i++) {
-    const [x, z] = spots[i],
-      [nx, nz] = spots[i + 1];
-    rod(shop, [x + 1.35, -0.21, z], [nx - 1.35, -0.21, nz], 0.14, dark);
-  }
-  const folder = group(shop);
-  box(folder, 0, 0, 0, 0.68, 0.085, 0.49, orange, 0.035);
-  box(folder, -0.17, 0.005, -0.255, 0.29, 0.065, 0.11, orange, 0.02);
-  box(folder, 0.025, 0.055, 0.015, 0.53, 0.028, 0.36, cream, 0.012);
-  for (let i = 0; i < 2; i++) box(folder, -0.025, 0.073, -0.05 + i * 0.1, 0.26, 0.01, 0.016, dark);
-
-  const questionSign = group(bots[2].root, 0.41, 1.91, 0.14);
-  box(questionSign, 0, 0, 0, 0.42, 0.47, 0.052, yellow, 0.055);
-  plate(questionSign, 0, 0, 0.032, 0.34, 0.35, '?', yellow, dark, 158);
-  questionSign.visible = false;
-  const receiptSlip = group(shop, spots[3][0] + 0.04, 1.29, spots[3][1] + 0.06);
-  box(receiptSlip, 0, 0, 0, 0.7, 0.05, 0.61, cream, 0.012);
-  for (let j = 0; j < 3; j++) box(receiptSlip, -0.04, 0.032, -0.13 + j * 0.095, 0.38, 0.012, 0.018, dark);
-  receiptSlip.visible = false;
-
-  // Three tracks form a window into the sorted, filtered native table.
-  const tracks = [],
-    maxBars = 18;
   for (let i = 0; i < 3; i++) {
     const row = group(field);
     row.userData.job = i;
-    box(row, 0, -0.17, 0, 12.8, 0.27, 1.86, '#444b41', 0.07);
-    box(row, 0, -0.017, 0, 12.72, 0.055, 1.78, '#292e29', 0.03);
-    const name = plate(row, 3.86, -0.14, 0.94, 4.5, 0.23, '', '#282e27', '#f2f4e9', 104);
-    const workerModel = worker(row, -5.3, 0, 0.12, '#b7d94a', i, true);
-    workerModel.root.rotation.y = 0.4;
-    const bars = Array.from({ length: maxBars }, () => box(row, 0, 0.04, 0, 1, 1, 1, '#d4d8c9', 0.035));
+    box(row, 0, -0.17, 0, 12.8, 0.27, 1.86, '#1a2150', 0.07);
+    box(row, 0, -0.017, 0, 12.72, 0.055, 1.78, '#11173a', 0.03);
+    // The name lies on the left of its own track so the bars in front never hide it.
+    const name = plate(row, 4, 0.5);
+    name.position.set(-4.25, 0.015, 0);
+    const bars = Array.from({ length: maxBars }, () => box(row, 0, 0.04, 0, 1, 1, 1, '#d9def5', 0.035));
     const flags = bars.map(() => {
       const flag = group(row);
-      cyl(flag, 0, 0.36, 0, 0.026, 0.026, 0.72, cream, 8);
-      box(flag, 0.16, 0.58, 0, 0.34, 0.24, 0.04, '#eeb75b', 0.015);
+      box(flag, 0, 0.36, 0, 0.05, 0.72, 0.05, chalk);
+      box(flag, 0.16, 0.6, 0, 0.32, 0.22, 0.04, mat('#ffb347', 0.4), 0.015);
       return flag;
     });
-    tracks.push({ row, name, bars, flags, worker: workerModel, title: null });
+    tracks.push({ row, name, bars, flags, title: null });
   }
-  let fieldMode = false,
-    state = null,
-    yaw = 0.32,
-    dragging = null,
-    pending = false,
-    touched = -1e9,
+  function buildField(rows, selected) {
+    tracks.forEach((track, i) => {
+      const job = rows[i];
+      track.row.visible = Boolean(job);
+      if (!job) return;
+      track.row.position.z = (i - (rows.length - 1) / 2) * 2.6;
+      const tex = track.name.material.map,
+        ctx = tex.image.getContext('2d');
+      ctx.clearRect(0, 0, 1024, 128);
+      ctx.fillStyle = job.id === selected ? '#ffb347' : chalk;
+      ctx.font = '500 64px Futura, "Avenir Next", sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(job.name, 8, 66, 1000);
+      tex.needsUpdate = true;
+      track.bars.forEach((bar, k) => {
+        const bin = job.bars[k],
+          flag = track.flags[k];
+        bar.visible = Boolean(bin);
+        flag.visible = Boolean(bin?.[1]);
+        if (!bin) return;
+        const [checked, blocked, omitted] = bin,
+          gap = 8.2 / Math.max(9, job.bars.length);
+        const height = 0.07 + checked * 1.1;
+        bar.scale.set(gap * 0.72, height, 1.08);
+        bar.position.set(-2.05 + gap / 2 + k * gap, height / 2 + 0.04, 0);
+        bar.material = blocked ? mat('#ffb347', 0.35) : mat(checked ? (job.id === selected ? '#ffffff' : '#c3cae6') : omitted ? '#7f89b3' : '#3a4580');
+        flag.position.set(bar.position.x, height + 0.04, 0);
+      });
+    });
+  }
+
+  /* Camera, picking and the frame loop */
+  const PRESETS = { '3D': { yaw: 0.3, pitch: 0.72 }, Top: { yaw: 0, pitch: 1.5 }, Side: { yaw: 0.3, pitch: 0.14 } };
+  const FIELD = { yaw: 0.35, pitch: 0.78 };
+  const presetButtons = [...document.querySelectorAll('#presets button')];
+  let state = null,
+    fieldMode = false,
+    goal = { ...PRESETS['3D'] },
+    yaw = goal.yaw,
+    pitch = goal.pitch,
+    half = 0,
     w = 0,
-    h = 0;
-  let elapsed = 0,
-    idle = 0,
-    drift = 0,
+    h = 0,
+    drag = null,
+    touched = -1e9,
+    spin = 0,
     previous = 0,
-    packetX = spots[0][0],
-    packetZ = spots[0][1],
-    lastId = null;
+    pending = false,
+    built = '';
   const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+  const v = new T.Vector3(),
+    ray = new T.Raycaster(),
+    pt = new T.Vector2();
+  const ambient = () => Boolean(state && state.motion && !reduce.matches);
   function redraw() {
     if (!pending && !document.hidden) {
       pending = true;
@@ -273,182 +275,146 @@ function makeCrewScene(host, selectJob, inspectStation) {
   new ResizeObserver(resize).observe(host);
   document.addEventListener('visibilitychange', redraw);
   reduce.addEventListener('change', redraw);
-  function update(next) {
-    state = next;
-    if (fieldMode !== state.field) {
-      fieldMode = state.field;
-      yaw = fieldMode ? 0.37 : 0.32;
-    }
-    field.visible = fieldMode;
-    shop.visible = !fieldMode;
-    const ground = fieldMode ? '#262c26' : state.dark ? '#405a50' : '#b7cabe';
-    floor.material = mat(ground);
-    scene.background = new T.Color(ground);
-    tracks.forEach((track, i) => {
-      const job = state.rows[i];
-      track.row.visible = Boolean(job);
-      if (!job) return;
-      track.row.position.z = (i - (state.rows.length - 1) / 2) * 2.35;
-      if (track.title !== job.name) {
-        const texture = track.name.material.map,
-          c = texture.image,
-          ctx = c.getContext('2d');
-        ctx.fillStyle = '#282e27';
-        ctx.fillRect(0, 0, c.width, c.height);
-        ctx.fillStyle = '#f2f4e9';
-        ctx.fillText(job.name, 384, 84, 740);
-        texture.needsUpdate = true;
-        track.title = job.name;
-      }
-      track.bars.forEach((bar, k) => {
-        const bin = job.bars[k],
-          flag = track.flags[k];
-        bar.visible = Boolean(bin);
-        flag.visible = Boolean(bin?.[1]);
-        if (!bin) return;
-        const [checked, blocked, omitted] = bin,
-          gap = 9.6 / Math.max(9, job.bars.length);
-        const height = 0.07 + checked * 0.83;
-        bar.scale.set(gap * 0.75, height, 1.08);
-        bar.position.set(-4.15 + k * gap, height / 2 + 0.04, 0);
-        bar.material = mat(
-          blocked ? '#eeb75b' : checked ? (job.id === state.selected ? '#e1e9b5' : '#b4c2b3') : omitted ? '#94a7b7' : '#697267',
-        );
-        flag.position.set(bar.position.x, height + 0.04, 0);
-      });
-      track.worker.arms[1].rotation.z = job.ask ? 2.3 : 0;
-    });
+  function choose(name) {
+    goal = { ...(fieldMode && name === '3D' ? FIELD : PRESETS[name]) };
+    for (const b of presetButtons) b.setAttribute('aria-pressed', b.textContent === name);
+    touched = performance.now();
     redraw();
   }
-  const pick = new T.Raycaster();
-  function selectAt(e) {
-    const rect = canvas.getBoundingClientRect();
-    const point = new T.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, 1 - ((e.clientY - rect.top) / rect.height) * 2);
-    pick.setFromCamera(point, camera);
-    for (const hit of pick.intersectObjects(
-      (fieldMode ? field : shop).children.filter((o) => o.visible),
-      true,
-    )) {
-      let o = hit.object;
-      while (o) {
-        if (o.userData.job != null) {
-          const job = state.rows[o.userData.job];
-          if (job) selectJob(job.id);
-          return;
-        }
-        if (o.userData.station != null) {
-          inspectStation(o.userData.station);
-          return;
-        }
-        o = o.parent;
-      }
+  for (const b of presetButtons) b.addEventListener('click', () => choose(b.textContent));
+
+  function update(next) {
+    const modeChanged = !state || state.field !== next.field;
+    state = next;
+    fieldMode = state.field;
+    sky.visible = !fieldMode;
+    field.visible = fieldMode;
+    if (modeChanged) choose('3D');
+    // Rebuild the chart only when the rows change; a new selection only moves the marker and the tag.
+    const key = JSON.stringify(state.rows);
+    if (fieldMode) buildField(state.rows, state.selected);
+    else if (modeChanged || key !== built || (state.rows.some((r) => r.id === state.selected) && !bodies.has(state.selected)))
+      buildOrbit(state.rows, state.selected);
+    built = key;
+    const row = state.rows.find((r) => r.id === state.selected);
+    document.getElementById('place').hidden = fieldMode || !row;
+    if (row && !fieldMode) {
+      const n = lane(row);
+      document.querySelector('#place h1').textContent = n === 5 ? 'Closed' : n === 4 ? 'Applied' : STATIONS[n];
+      document.querySelector('#place p').textContent = n < 4 ? `Orbit ${n + 1} of 4 · ${row.status}` : row.status;
     }
+    focusTag.el.innerHTML = row ? `<b></b><span><i></i></span>` : '';
+    if (row) {
+      focusTag.el.querySelector('b').textContent = row.name;
+      focusTag.el.querySelector('span').append(row.status);
+      focusTag.el.querySelector('i').style.background = row.color;
+    }
+    for (const b of bodies.values()) b.g.scale.setScalar(b.row.id === state.selected ? 1.3 : 1);
+    const sel = row && !fieldMode ? lane(row) : -1;
+    orbitLines.forEach((o, i) => (o.material.opacity = sel === i ? 1 : 0.38));
+    coreLine.material.opacity = sel === 4 ? 1 : 0.3;
+    rimLine.material.opacity = sel === 5 ? 0.9 : 0.22;
+    redraw();
+  }
+
+  function jobAt(e) {
+    const rect = canvas.getBoundingClientRect();
+    pt.set(((e.clientX - rect.left) / rect.width) * 2 - 1, 1 - ((e.clientY - rect.top) / rect.height) * 2);
+    ray.setFromCamera(pt, camera);
+    for (const hitResult of ray.intersectObjects((fieldMode ? field : sky).children.filter((o) => o.visible), true))
+      for (let o = hitResult.object; o; o = o.parent) {
+        const id = o.userData.job;
+        if (id == null) continue;
+        return fieldMode ? state.rows[id]?.id : id;
+      }
+    return null;
   }
   canvas.addEventListener('pointerdown', (e) => {
+    drag = { x: e.clientX, y: e.clientY, yaw: goal.yaw, pitch: goal.pitch };
     touched = performance.now();
-    dragging = { x: e.clientX, y: e.clientY, yaw };
     canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener('pointermove', (e) => {
-    if (dragging) {
-      touched = performance.now();
-      yaw = Math.max(-0.75, Math.min(0.85, dragging.yaw + (e.clientX - dragging.x) * 0.005));
-      redraw();
-    }
-  });
-  canvas.addEventListener('pointerup', (e) => {
-    if (dragging && Math.hypot(e.clientX - dragging.x, e.clientY - dragging.y) < 6) selectAt(e);
-    dragging = null;
-  });
-  canvas.addEventListener('pointercancel', () => {
-    dragging = null;
-  });
-  canvas.addEventListener('keydown', (e) => {
-    if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
-    e.preventDefault();
+    if (!drag) return void (canvas.style.cursor = state && jobAt(e) ? 'pointer' : 'grab');
+    goal.yaw = clamp(drag.yaw - (e.clientX - drag.x) * 0.005, -1.3, 1.3);
+    goal.pitch = clamp(drag.pitch + (e.clientY - drag.y) * 0.004, 0.1, 1.5);
     touched = performance.now();
-    yaw = Math.max(-0.75, Math.min(0.85, yaw + (e.key === 'ArrowLeft' ? -0.12 : 0.12)));
     redraw();
   });
-  function cameraPose() {
-    const aspect = w / h;
-    // Keep the entire row of machines in view on narrow screens.
-    const half = Math.max(fieldMode ? 3.85 : 3.12, (fieldMode ? 7.35 : 7.85) / aspect);
-    Object.assign(camera, { left: -half * aspect, right: half * aspect, top: half, bottom: -half });
-    // A slow, small sway around the chosen angle; it holds still while the user is turning the scene.
-    const turn = yaw + Math.sin(drift * 0.16) * 0.075,
-      lift = Math.sin(drift * 0.11) * 0.35;
-    camera.position.set(Math.sin(turn) * 16, (fieldMode ? 11.2 : 8.5) + lift, Math.cos(turn) * 16);
-    camera.lookAt(0, fieldMode ? 0.3 : 0.6, 0);
+  canvas.addEventListener('pointerup', (e) => {
+    const id = drag && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6 && jobAt(e);
+    drag = null;
+    if (id) selectJob(id);
+  });
+  canvas.addEventListener('pointercancel', () => (drag = null));
+  canvas.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    goal.yaw = clamp(goal.yaw + (e.key === 'ArrowLeft' ? 0.15 : -0.15), -1.3, 1.3);
+    touched = performance.now();
+    redraw();
+  });
+
+  function pose(sway) {
+    const sp = Math.sin(pitch),
+      cp = Math.cos(pitch),
+      aspect = w / h;
+    // Frame the chart in the canvas below the title and presets.
+    const top = 64,
+      side = 16,
+      bottom = 14;
+    const fw = Math.max(200, w - 2 * side),
+      fh = Math.max(150, h - top - bottom);
+    const span = fieldMode ? 13.6 : 2 * RIM + 0.6,
+      depth = fieldMode ? 8 : 2 * RIM + 0.6,
+      height = fieldMode ? 2.2 : 2.6;
+    const need = Math.max((span * h) / (2 * fw), ((depth * sp + height * cp) * h) / (2 * fh));
+    half = half ? half + (need - half) * 0.2 : need;
+    const sy = (1 - ((top + fh / 2) / h) * 2) * half;
+    Object.assign(camera, { left: -half * aspect, right: half * aspect, top: half - sy, bottom: -half - sy });
+    const turn = yaw + sway;
+    camera.position.set(Math.sin(turn) * cp * 90, (fieldMode ? 0.4 : 0) + sp * 90, Math.cos(turn) * cp * 90);
+    camera.lookAt(0, fieldMode ? 0.4 : 0, 0);
     camera.updateProjectionMatrix();
   }
   function frame(now) {
     pending = false;
     if (!state || !w || !h || document.hidden) return;
-    const job = state.rows.find((r) => r.id === state.selected);
-    const work = job ? job.station : 0;
-    const ambient = Boolean(state.motion && !reduce.matches);
-    const animate = Boolean(job && job.moving && ambient);
-    const dt = Math.min(0.07, (now - previous) / 1000);
+    const move = ambient(),
+      dt = Math.min(0.07, (now - previous) / 1000 || 0);
     previous = now;
-    if (animate) elapsed += dt;
-    if (ambient) {
-      idle += dt;
-      if (!dragging && now - touched > 4000) drift += dt;
-    }
-    cameraPose();
-    if (fieldMode) {
-      tracks.forEach((track, i) => {
-        const working = animate && state.rows[i]?.id === state.selected;
-        rest(track.worker, i, ambient, working ? Math.sin(elapsed * 3) * 0.16 : 0);
-      });
-    } else {
-      const [x, z] = spots[work],
-        smooth = !animate || lastId !== job?.id ? 1 : 1 - Math.exp(-7 * dt);
-      packetX += (x - packetX) * smooth;
-      packetZ += (z - packetZ) * smooth;
-      folder.position.set(packetX + 0.16, 1.18 + (animate ? Math.sin(elapsed * 4) * 0.025 : 0), packetZ + 0.24);
-      folder.rotation.y = -0.13;
-      lastId = job?.id;
-      folder.visible = Boolean(job && !job.sent && !job.receipt);
-      receiptSlip.visible = Boolean(job?.receipt);
-      questionSign.visible = Boolean(job?.ask && work === 2);
-      bots.forEach((b, i) => {
-        const active = Boolean(job) && work === i,
-          blocked = active && job.ask,
-          moving = active && animate;
-        b.root.position.x = moving ? -0.97 : -0.68;
-        b.root.position.z = moving ? 0.44 : 0.89;
-        b.root.rotation.y = moving ? 1.51 : 0.68;
-        rest(b, i, ambient && !moving, blocked ? -0.6 : moving ? Math.sin(elapsed * 4) * 0.22 : -0.18);
-        if (moving) {
-          b.torso.rotation.x = 0.13 + 0.045 * Math.sin(elapsed * 5);
-          b.arms[1].rotation.x = -0.9 + 0.45 * Math.sin(elapsed * 7);
-          b.arms[0].rotation.x = -0.75 - 0.34 * Math.sin(elapsed * 7);
-        }
-        // The raised arm waits for the user; with motion on it waves the placard gently.
-        b.arms[1].rotation.z = blocked ? 2.43 + (ambient ? Math.sin(idle * 2.2) * 0.07 : 0) : 0;
-        bulbs[i].material = mat(active ? (blocked ? orange : yellow) : cream);
-      });
+    if (move) spin += dt;
+    const ease = move ? 1 - Math.exp(-8 * dt) : 1;
+    yaw += (goal.yaw - yaw) * ease;
+    pitch += (goal.pitch - pitch) * ease;
+    // A slow sway around the chosen angle, held for four seconds after the user turns the chart.
+    const sway = move && !drag && now - touched > 4000 ? Math.sin(spin * 0.25) * 0.05 : 0;
+    pose(sway);
+    lanes.forEach((g, i) => (g.rotation.y = spin * SPIN[i]));
+    for (const o of spinning) o.rotation.y = spin * 1.2;
+    const chosen = state && bodies.get(state.selected);
+    reticle.visible = Boolean(chosen) && !fieldMode;
+    if (chosen) {
+      chosen.g.getWorldPosition(reticle.position);
+      reticle.scale.setScalar(chosen.size / 0.36);
+      focusTag.pos.copy(reticle.position).setY(reticle.position.y + chosen.size * 1.3 + 0.5);
     }
     renderer.render(scene, camera);
-    if (ambient) redraw();
-  }
-  // Idle pose: breathing, a slow look around, an antenna sway and a blink every few seconds.
-  // Each worker has its own phase so the crew never moves in unison. Nothing here moves the folder,
-  // a lamp or a station: idle motion carries no information about the application.
-  function rest(b, i, on, look) {
-    const t = idle + i * 1.73;
-    const blink = on && t % (4.6 + (i % 3) * 0.9) < 0.13;
-    b.torso.position.y = 0.53 + (on ? Math.sin(t * 1.7) * 0.012 : 0);
-    b.torso.rotation.x = on ? Math.sin(t * 1.7 + 0.6) * 0.022 : 0;
-    b.head.rotation.y = look + (on ? Math.sin(t * 0.43) * 0.2 + Math.sin(t * 0.17) * 0.12 : 0);
-    b.head.rotation.z = on ? Math.sin(t * 0.61) * 0.05 : 0;
-    b.antenna.rotation.z = on ? Math.sin(t * 2.3) * 0.12 : 0;
-    b.antenna.rotation.x = on ? Math.sin(t * 1.9 + 1) * 0.08 : 0;
-    b.arms[0].rotation.x = on ? Math.sin(t * 1.7) * 0.06 : 0;
-    b.arms[1].rotation.x = on ? Math.sin(t * 1.7 + 0.4) * 0.06 : 0;
-    for (const eye of b.eyes) eye.scale.y = blink ? 0.15 : 1;
+    const labels = [...stationTags, coreTag, rimTag, ...moreTags, emptyTag, focusTag];
+    for (const l of labels) {
+      const show = !fieldMode && l.on && (l !== focusTag || Boolean(chosen));
+      l.el.hidden = !show;
+      if (!show) continue;
+      if (l === emptyTag) {
+        l.el.style.transform = `translate(${w / 2}px,${h / 2}px) translate(-50%,-50%)`;
+        continue;
+      }
+      v.copy(l.pos);
+      if (l.el.classList.contains('more')) lanes[moreTags.indexOf(l)].localToWorld(v);
+      v.project(camera);
+      l.el.style.transform = `translate(${(((v.x + 1) / 2) * w).toFixed(1)}px,${(((1 - v.y) / 2) * h).toFixed(1)}px) translate(-50%,-100%)`;
+    }
+    if (move || Math.abs(goal.yaw - yaw) + Math.abs(goal.pitch - pitch) > 0.001) redraw();
   }
   resize();
   return { update };

@@ -15,10 +15,10 @@ QLabel {
     background: transparent;
 }
 
-QLabel[role="pageTitle"] { font-size: 32px; font-weight: 700; }
+QLabel[role="pageTitle"] { font-family: "Futura"; font-size: 30px; font-weight: 500; }
 QLabel[role="section"] { font-size: 18px; font-weight: 650; }
 QLabel[role="question"] { font-size: 15px; font-weight: 600; }
-QLabel[role="inspectorTitle"] { font-size: 25px; font-weight: 700; }
+QLabel[role="inspectorTitle"] { font-family: "Futura"; font-size: 25px; font-weight: 500; }
 QLabel[role="muted"] { color: $text2; }
 QLabel[role="caption"] { color: $text3; font-size: 11px; }
 QLabel[role="overline"] { color: $text3; font-size: 11px; font-weight: 600; }
@@ -31,26 +31,27 @@ QLabel[tone="info"] { color: $info; }
 
 /* Shell */
 
-QFrame#navigation { background: $surface; border-bottom: 1px solid $border; }
-QLabel#brand { color: $text; font-size: 22px; font-weight: 750; }
+QFrame#navigation { background: $panel; border: none; }
+QFrame#navigation QLabel { color: $panel_text; }
+QLabel#brand { color: $panel_text; font-family: "Futura"; font-size: 21px; font-weight: 700; }
 
 QPushButton#navButton {
     background: transparent;
     border: 2px solid transparent;
-    border-radius: 6px;
-    color: $text2;
+    border-radius: 8px;
+    color: $panel_muted;
     font-weight: 500;
-    padding: 5px 9px;
+    padding: 5px 10px;
 }
 
-QPushButton#navButton:hover { background: $surface2; color: $text; }
-QPushButton#navButton:checked { background: $panel; color: $panel_text; font-weight: 600; }
-QPushButton#navButton:focus { border-color: $accent; }
+QPushButton#navButton:hover { background: $panel_inset; color: $panel_text; }
+QPushButton#navButton:checked { background: $panel_line; color: $panel_text; font-weight: 600; }
+QPushButton#navButton:focus { border-color: $panel_button; }
 
 QLabel#navBadge {
-    background: $warning;
+    background: $panel_button;
     border-radius: 10px;
-    color: $surface;
+    color: $on_accent;
     font-size: 11px;
     font-weight: 700;
     min-height: 20px;
@@ -98,7 +99,7 @@ QPlainTextEdit {
 QLineEdit:focus,
 QComboBox:focus,
 QPlainTextEdit:focus {
-    border-color: $accent;
+    border-color: $focus;
 }
 
 QLineEdit:disabled,
@@ -142,7 +143,7 @@ QWidget#bulkBar QPushButton { padding: 5px 6px; }
 
 QPushButton:hover { background: $surface2; }
 QPushButton:pressed { background: $border; }
-QPushButton:focus { border-color: $accent; }
+QPushButton:focus { border-color: $focus; }
 QPushButton:disabled { background: $surface2; border-color: $surface2; color: $text3; }
 
 QPushButton[variant="primary"] {
@@ -168,7 +169,7 @@ QPushButton[variant="ghost"]:hover,
 QPushButton[variant="danger"]:hover { background: $surface2; }
 QPushButton[variant="ghost"]:hover { color: $text; }
 QPushButton[variant="ghost"]:focus,
-QPushButton[variant="danger"]:focus { border-color: $accent; }
+QPushButton[variant="danger"]:focus { border-color: $focus; }
 QPushButton[variant="ghost"]:disabled,
 QPushButton[variant="danger"]:disabled,
 QPushButton[variant="chip"]:disabled { background: transparent; color: $text3; }
@@ -177,12 +178,13 @@ QPushButton[variant="chip"] {
     background: transparent;
     border-radius: 10px;
     color: $text2;
-    padding: 3px 12px;
+    font-size: 12px;
+    padding: 3px 8px;
 }
 
 QPushButton[variant="chip"]:checked {
     background: $selection;
-    border-color: $accent;
+    border-color: $focus;
     color: $text;
     font-weight: 600;
 }
@@ -196,7 +198,7 @@ QToolButton {
 }
 
 QToolButton:hover { background: $surface2; }
-QToolButton:focus { border-color: $accent; }
+QToolButton:focus { border-color: $focus; }
 QToolButton::menu-indicator { image: none; width: 0; }
 
 QCheckBox { spacing: 8px; background: transparent; }
@@ -267,7 +269,7 @@ QTabBar::tab {
     padding: 6px 14px;
 }
 
-QTabBar::tab:selected { border-bottom-color: $accent; color: $text; }
+QTabBar::tab:selected { border-bottom-color: $focus; color: $text; }
 QTabBar::tab:hover { color: $text; }
 
 QScrollArea,
@@ -309,32 +311,32 @@ QToolTip {
 
 /* Application workshop */
 
-/* Workshop / Bar field / List: one joined control, the checked view inset in deep green. */
+/* Orbit / Bar field / List: one joined control, the checked view inset in navy. */
 QFrame#segments { background: $surface2; border: 1px solid $border; border-radius: 8px; }
 QPushButton[variant="segment"] { background: transparent; border: 2px solid transparent; border-radius: 6px; color: $text2; padding: 3px 10px; }
 QPushButton[variant="segment"]:hover { background: $selection; color: $text; }
 QPushButton[variant="segment"]:checked { background: $panel; color: $panel_text; font-weight: 600; }
-QPushButton[variant="segment"]:focus { border-color: $accent; }
+QPushButton[variant="segment"]:focus { border-color: $focus; }
 
 /* The caption closes the scene: same width, rounded bottom to match the scene's rounded top. */
-QFrame#sceneCaptionBar { background: $surface2; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }
-QLabel[role="sceneCaption"] { background: transparent; color: $text2; font-size: 12px; padding: 6px 12px; }
-QFrame#setupPanel, QFrame#inspector { background: $panel; border: none; border-radius: 10px; }
+QFrame#sceneCaptionBar { background: $sky; border-bottom-left-radius: 14px; border-bottom-right-radius: 14px; }
+QLabel[role="sceneCaption"] { background: transparent; color: $panel_muted; font-size: 12px; padding: 7px 14px; }
+QFrame#setupPanel, QFrame#inspector { background: $panel; border: none; border-radius: 14px; }
 QFrame#setupPanel QLabel, QFrame#inspector QLabel { color: $panel_text; }
 QFrame#setupPanel QLabel[role="muted"], QFrame#inspector QLabel[role="muted"], QFrame#inspector QLabel[role="caption"] { color: $panel_muted; }
 QFrame#inspector QLabel#callout { background: $panel_inset; border: 1px solid $panel_line; color: $panel_text; font-size: 15px; font-weight: 600; }
-QFrame#inspector QPushButton[variant="primary"] { background: $panel_button; border-color: $panel_button; color: #272016; }
+QFrame#inspector QPushButton[variant="primary"] { background: $panel_button; border-color: $panel_button; color: $on_accent; }
 QFrame#inspector QPushButton[variant="primary"]:focus { border: 2px solid $panel_text; }
 QFrame#inspector QPushButton[variant="ghost"], QFrame#setupPanel QPushButton, QFrame#inspector QToolButton { background: $panel_inset; border-color: $panel_line; color: $panel_text; }
-QFrame#inspector QPushButton[variant="danger"] { color: #ffb4ad; }
+QFrame#inspector QPushButton[variant="danger"] { color: #ffa8b0; }
 QFrame#inspector QPushButton[variant="danger"]:hover, QFrame#inspector QPushButton[variant="ghost"]:hover { background: $panel_line; }
 QFrame#inspector QToolButton:hover { background: $panel_line; }
 QFrame#inspector QToolButton#disclosure { background: transparent; border: 1px solid transparent; color: $panel_muted; font-size: 13px; font-weight: 600; padding: 3px 4px 3px 0; }
 QFrame#inspector QToolButton#disclosure:hover, QFrame#inspector QToolButton#disclosure:checked { color: $panel_text; }
 QFrame#inspector QToolButton#disclosure:focus { border-color: $panel_text; }
-QFrame#inspector QPushButton:disabled { background: $panel_inset; color: $panel_muted; }
+QFrame#inspector QPushButton:disabled { background: $panel_inset; border-color: $panel_line; color: $panel_muted; }
 QFrame#inspector QProgressBar { background: $panel_line; }
-QFrame#inspector QProgressBar::chunk { background: #bfdaae; }
+QFrame#inspector QProgressBar::chunk { background: $panel_text; }
 QListWidget#sectionNav { background: $surface2; border-radius: 8px; padding: 6px; }
 QListWidget#sectionNav::item:selected { background: $panel; color: $panel_text; }
 QTextBrowser { background: $surface; color: $text; border: 1px solid $border; border-radius: 8px; padding: 12px; }

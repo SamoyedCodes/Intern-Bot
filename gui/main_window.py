@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui.theme import form_layout, MessageBar, button, card, dot_icon, label, shortcut, station_heading
+from gui.theme import DARK, form_layout, MessageBar, button, card, dot_icon, label, shortcut, station_heading
 from gui.shortcuts import install_edit_shortcuts
 from gui.views.application_dialogs import AnswersView
 from gui.views.assistant_dialog import AssistWorker
@@ -47,7 +47,7 @@ class SettingsView(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 16, 24, 20)
         layout.setSpacing(12)
-        layout.addWidget(station_heading("Settings", "dispatch", "Choose how the crew prepares applications and which services it can use."))
+        layout.addWidget(station_heading("Settings", "dispatch", "Choose how Intern-Bot prepares applications and which services it can use."))
         self.notice = MessageBar()
         layout.addWidget(self.notice)
         tabs = self.categories = QTabWidget()
@@ -72,8 +72,8 @@ class SettingsView(QWidget):
         box.addWidget(label("Reused for the question and every wording matched to it, within the answer's scope, profile and country.", "caption"))
         for checkbox in (self.auto_advance, self.reuse_answers):
             checkbox.toggled.connect(self.save_options)
-        box.addWidget(label("Workshop display", "section"))
-        self.crew_motion = QCheckBox("Animate the workshop crew and camera")
+        box.addWidget(label("Orbit chart", "section"))
+        self.crew_motion = QCheckBox("Animate the orbit chart and camera")
         self.crew_motion.setChecked(bool(self.store.get("crew_motion", True)))
         self.crew_motion.toggled.connect(lambda value: self.store.put("crew_motion", value))
         box.addWidget(self.crew_motion)
@@ -341,7 +341,7 @@ class MainWindow(QMainWindow):
             tone, text = "warning", f"{needs} {'needs' if needs == 1 else 'need'} you"
         else:
             tone, text = "neutral", "Idle"
-        self.status_dot.setPixmap(dot_icon(tone).pixmap(16, 16))
+        self.status_dot.setPixmap(dot_icon(tone, DARK).pixmap(16, 16))  # the navigation strip is navy in both appearances
         self.status_text.setToolTip(text)
         self.status_text.setText(self.status_text.fontMetrics().elidedText(text, Qt.ElideRight, 245))
 

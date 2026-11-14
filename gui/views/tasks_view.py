@@ -19,7 +19,7 @@ from core.automation.review import review_values
 from core.automation.service import AutomationService
 from core.storage.local_store import LocalStore
 from core.tracker import PIPELINE, activity, export_csv, import_csv
-from gui.theme import TOKENS, form_layout, MessageBar, button, card, dot_icon, label, more_button, restyle, shortcut, station_heading
+from gui.theme import DARK, TOKENS, form_layout, MessageBar, button, card, dot_icon, label, more_button, restyle, shortcut, station_heading
 from gui.workshop import Workshop
 from gui.views.application_dialogs import ProfileDialog, RecipeReviewDialog, ReviewDialog, RunDetailsDialog
 
@@ -28,7 +28,7 @@ GROUPS = ("All", "Needs you", "In progress", "Applied", "Closed")
 STATUS = {
     "queued": ("Queued", "neutral", "In progress"),
     "running": ("Preparing…", "info", "In progress"),
-    "ready_for_review": ("Ready to approve", "accent", "Needs you"),
+    "ready_for_review": ("Ready to approve", "ready", "Needs you"),
     "failed": ("Failed", "danger", "Needs you"),
     "cancelled": ("Cancelled", "neutral", "Closed"),
 }
@@ -273,29 +273,42 @@ class TasksView(QWidget):
         layout.addLayout(self._build_paste())
         self.notice = MessageBar()
         layout.addWidget(self.notice)
+        # The orbit chart fills the left; the queue and the selected application's decision share the right column.
+        # List view moves the queue into the chart's place.
         splitter = self.splitter = QSplitter()
         splitter.setHandleWidth(12)
         splitter.setChildrenCollapsible(False)
-        workbench = QWidget()
-        bench = QVBoxLayout(workbench)
-        bench.setContentsMargins(0, 0, 0, 0)
-        bench.setSpacing(8)
+        stage = QWidget()
+        self.stage_box = QVBoxLayout(stage)
+        self.stage_box.setContentsMargins(0, 0, 0, 0)
         self.workshop = Workshop(self.store)
         self.workshop.picked.connect(self.select_track)
-        bench.addWidget(self.workshop, 5)
-        bench.addLayout(self._build_chips())
-        bench.addWidget(self._build_bulk_bar())
-        bench.addWidget(self._build_table(), 4)
-        splitter.addWidget(workbench)
+        self.stage_box.addWidget(self.workshop)
+        splitter.addWidget(stage)
+        self.queue_panel = QWidget()
+        queue = QVBoxLayout(self.queue_panel)
+        queue.setContentsMargins(0, 0, 0, 0)
+        queue.setSpacing(8)
+        queue.addLayout(self._build_chips())
+        queue.addWidget(self._build_bulk_bar())
+        queue.addWidget(self._build_table(), 1)
+        self.side = QSplitter(Qt.Vertical)
+        self.side.setHandleWidth(10)
+        self.side.setChildrenCollapsible(False)
+        self.side.setMinimumWidth(360)
+        self.side.setMaximumWidth(470)
+        self.side.addWidget(self.queue_panel)
         self.body = QStackedWidget()
-        self.body.setMinimumWidth(330)
-        self.body.setMaximumWidth(470)
         self.body.addWidget(self._build_empty())
         self.body.addWidget(self._build_detail())
-        splitter.addWidget(self.body)
+        self.side.addWidget(self.body)
+        self.side.setStretchFactor(0, 2)
+        self.side.setStretchFactor(1, 3)
+        self.side.setSizes([250, 380])
+        splitter.addWidget(self.side)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
-        splitter.setSizes([770, 375])
+        splitter.setSizes([760, 410])
         splitter.splitterMoved.connect(lambda *_: self.fit_columns())
         layout.addWidget(splitter, 1)
         for keys in (QKeySequence(Qt.Key_Return), QKeySequence(Qt.Key_Enter)):
@@ -312,7 +325,7 @@ class TasksView(QWidget):
         row = QHBoxLayout()
         titles = QVBoxLayout()
         titles.setSpacing(2)
-        self.page_title = label("Application workshop", "pageTitle")
+        self.page_title = label("Applications", "pageTitle")
         titles.addWidget(self.page_title)
         self.stats = label(role="muted")
         titles.addWidget(self.stats)
@@ -324,14 +337,14 @@ class TasksView(QWidget):
         segment_row = QHBoxLayout(segments)
         segment_row.setContentsMargins(3, 3, 3, 3)
         segment_row.setSpacing(2)
-        for index, text in enumerate(("Workshop", "Bar field", "List")):
+        for index, text in enumerate(("Orbit", "Bar field", "List")):
             mode = button(text, variant="segment")
             mode.setCheckable(True)
             self.scene_modes.addButton(mode, index)
             segment_row.addWidget(mode)
         row.addWidget(segments)
         row.addSpacing(6)
-        saved_mode = self.store.get("application_view", "Workshop")
+        saved_mode = self.store.get("application_view", "Orbit")
         self.scene_modes.button({"Bar field": 1, "List": 2}.get(saved_mode, 0)).setChecked(True)
         self.scene_modes.idClicked.connect(self.switch_scene)
         self.search = QLineEdit()
@@ -354,7 +367,12 @@ class TasksView(QWidget):
     def switch_scene(self, index, save=True):
         self.workshop.field = index == 1
         self.workshop.setVisible(index != 2)
-        self.page_title.setText(("Application workshop", "Field crew", "Applications")[index])
+        if index == 2:
+            self.stage_box.addWidget(self.queue_panel)
+        else:
+            self.side.insertWidget(0, self.queue_panel)
+            self.side.setSizes([250, 380])
+        self.queue_panel.show()
         if save:
             self.store.put("application_view", self.scene_modes.button(index).text())
         self.update_workshop()
@@ -371,8 +389,7 @@ class TasksView(QWidget):
         by_id = {run.id: run for run in self.tasks}
         runs = [by_id[item.data(Qt.UserRole)] for row in range(self.table.rowCount())
                 if (item := self.table.item(row, 0)) and item.data(Qt.UserRole) in by_id]
-        viewed = by_id.get(self._shown_id)
-        self.workshop.display(runs, self._shown_id, self._active_id, status_meta(viewed)[0] if viewed else "")
+        self.workshop.display(runs, self._shown_id, self._active_id, status_meta)
 
     def _build_paste(self):
         layout = QVBoxLayout()
@@ -414,8 +431,8 @@ class TasksView(QWidget):
     def _build_empty(self):
         frame, box = card(12)
         frame.setObjectName("setupPanel")
-        box.addWidget(label("Set up your workshop", "inspectorTitle"))
-        box.addWidget(label("Give the crew a profile, a resume and a job link. You can review what it filled before sending.", "muted"))
+        box.addWidget(label("Set up Intern-Bot", "inspectorTitle"))
+        box.addWidget(label("Add a profile, a resume and a job link. You review what was filled before anything is sent.", "muted"))
         self.checklist = []
         for text, go, action in [("Add your name and email", "Edit profile", lambda: self.open_profile.emit("Name")),
                                  ("Choose your resume", "Choose resume", lambda: self.open_profile.emit("Documents")),
@@ -458,7 +475,7 @@ class TasksView(QWidget):
         self.table.setShowGrid(False)
         self.table.setWordWrap(False)
         self.table.setAccessibleName("Applications")
-        self.table.setMinimumWidth(400)
+        self.table.setMinimumWidth(300)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(40)
         header = self.table.horizontalHeader()
@@ -634,7 +651,6 @@ class TasksView(QWidget):
         scroll.setWidget(frame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setMinimumWidth(340)
-        scroll.setMaximumWidth(460)
         return scroll
 
     # State
@@ -654,6 +670,7 @@ class TasksView(QWidget):
         compact = width < 660
         self.table.setColumnHidden(5, compact)
         self.table.setColumnHidden(4, compact)
+        self.table.setColumnHidden(2, width < 470)  # beside the chart: the inspector names the role
         header = self.table.horizontalHeader()
         for column, width in ((1, 148), (2, 164)):
             new_mode = QHeaderView.Stretch if compact else QHeaderView.Interactive
@@ -740,7 +757,7 @@ class TasksView(QWidget):
         self.refresh_bulk()
         counts = {name: sum(name in ("All", meta[2]) for meta in metas.values()) for name in GROUPS}
         for index, name in enumerate(GROUPS):
-            self.chips.button(index).setText(f"{name}  {counts[name]}" if counts[name] else name)
+            self.chips.button(index).setText(f"{name} {counts[name]}" if counts[name] else name)
         _, _, submitted, _ = activity(self.tasks)
         ready = sum(r.status == "ready_for_review" and metas[r.id][2] == "Needs you" and not receipt_unconfirmed(r) for r in self.tasks)
         attention = counts["Needs you"] - ready
@@ -811,7 +828,7 @@ class TasksView(QWidget):
             self.recent_events.setVisible(bool(recent))
             self.d_title.setText(run.company or site_key(run.job_url))
             self.d_role.setText(run.role)
-            self.d_dot.setPixmap(dot_icon(tone).pixmap(16, 16))
+            self.d_dot.setPixmap(dot_icon(tone, DARK).pixmap(16, 16))
             self.d_status.setText(text)
             recipe = recipe_for(self.store, run.job_url)
             self.d_platform.setText((ats_name(run.job_url) or (recipe and "Taught site") or "Unrecognized site") + (" · Request mode" if run.mode == "request" else ""))

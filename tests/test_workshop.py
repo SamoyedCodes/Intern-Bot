@@ -4,7 +4,7 @@ import json
 from PySide6.QtCore import Qt
 
 from core.automation.models import ApplicationRun, FieldAssessment, InterventionRequest
-from gui.workshop import crew_row, MAX_BARS
+from gui.workshop import crew_row, orbit_of, MAX_BARS
 
 
 def test_scene_preserves_blockers_and_keeps_form_content_native():
@@ -54,3 +54,18 @@ def test_bar_tracks_follow_table_order_filters_and_selection(window):
     assert view.selected().company == "Workshop 5"
     view.scene_modes.button(2).click()
     assert scene.isHidden() and window.store.get("application_view") == "List"
+
+
+def test_orbit_draws_every_visible_row_and_keeps_send_attempts_off_the_applied_orbit(window):
+    view = window.tasks_view
+    sent = ApplicationRun(job_url="https://jobs.lever.co/example/sent", company="Sent", status="ready_for_review", submission_attempted=True)
+    mine = ApplicationRun(job_url="https://jobs.lever.co/example/mine", company="Mine", status="ready_for_review", submitted_by_user=True)
+    closed = ApplicationRun(job_url="https://jobs.lever.co/example/closed", company="Closed", pipeline="archived")
+    for run in (sent, mine, closed, *(ApplicationRun(job_url=f"https://jobs.lever.co/example/{i}", company=f"Queued {i}") for i in range(4))):
+        view.add_task(run)
+    view.scene_modes.button(0).click()
+    rows = {row["name"]: row for row in view.workshop.payload["rows"]}
+    assert len(rows) == 7 and window.store.get("application_view") == "Orbit"
+    assert [orbit_of(rows[name]) for name in ("Sent", "Mine", "Closed", "Queued 0")] == [3, 4, 5, 0]
+    assert rows["Sent"]["sent"] and not rows["Sent"]["receipt"] and rows["Mine"]["group"] == "Applied"
+    assert "jobs.lever.co" not in json.dumps(view.workshop.payload)
