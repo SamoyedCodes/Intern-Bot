@@ -822,8 +822,9 @@ class ApplicationEngine:
         if field.kind == 'spinbutton' and str(field.value).isdigit() and str(value).isdigit():
             return int(field.value) == int(value)  # A typed month reads back "06" for 6.
         if ref in ('profile:phone', 'profile:phone_number') or field.kind == 'tel':
-            # Employers reformat phone numbers ("55512345" becomes "5551 2345").
-            return re.sub(r'\D', '', str(field.value)) == re.sub(r'\D', '', str(value))
+            # Employers reformat phone numbers ("55512345" becomes "5551 2345") and may prefix the country code ("(+65) 55512345").
+            held, wanted = re.sub(r'\D', '', str(field.value)), re.sub(r'\D', '', str(value))
+            return held == wanted or len(wanted) >= 6 and held.endswith(wanted) and len(held) - len(wanted) <= 3
         if isinstance(value, bool):
             return field.value == value
         # Location typeaheads add the region to the place you picked ("Singapore" becomes "Singapore, SGP" on Lever).

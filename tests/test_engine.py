@@ -635,10 +635,18 @@ async def test_an_approved_radio_is_clicked_so_the_site_registers_it(context, st
     assert await page.evaluate('window.picked') == 'No'
 
 
-def test_a_reformatted_phone_number_still_verifies(store):
+@pytest.mark.parametrize('shown, verified', [
+    ('5551 2345', True),
+    ('(+65) 55512345', True),
+    ('(+351) 55512345', True),
+    ('98765410', False),
+    ('1234 55512345', False),
+    ('5411', False),
+])
+def test_a_reformatted_phone_number_still_verifies(store, shown, verified):
     run = ApplicationRun(job_url='https://example.wd1.myworkdayjobs.com/job')
-    field = FormField('phone', 'Phone Number', '', 'text', value='5551 2345')
-    assert ApplicationEngine(store).verify(run, ApplicantProfile(phone_country_code='+65', phone_number='55512345'), [field], {'files': {}})
+    field = FormField('phone', 'Phone Number', '', 'text', value=shown)
+    assert ApplicationEngine(store).verify(run, ApplicantProfile(phone_country_code='+65', phone_number='55512345'), [field], {'files': {}}) == verified
 
 
 def test_a_location_typeahead_may_add_the_region_but_not_change_the_place(store):

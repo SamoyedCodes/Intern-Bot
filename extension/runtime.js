@@ -79,8 +79,10 @@
     const readable = e => usDate(e) ? e.value.replace(/^(\d{2})\/(\d{2})\/(\d{4})$/, '$3-$1-$2') : e instanceof HTMLSelectElement ?(e.value ? e.selectedOptions[0]?.textContent || '' : '') : ['checkbox','radio'].includes(e.type) ? e.checked : e.matches?.('button[aria-haspopup=listbox]') ? shownChoice(e) : e.value ?? e.textContent;
     // Employers reformat phone numbers ("55512345" becomes "5551 2345").
     const phone = p => /^profile:phone(_number)?$/.test(p.ref || ''), digits = v => String(v ?? '').replace(/\D/g, '');
+    // Employers reformat a saved number and may prefix its country code ("(+65) 55512345"). Mirrors holds() in engine.py.
+    const sameNumber = (a, b) => { const x = digits(a), y = digits(b); return x === y || y.length >= 6 && x.endsWith(y) && x.length - y.length <= 3; };
     const radioText = e => e.labels?.[0]?.textContent || e.getAttribute('aria-label') || e.value;
-    const matches = (e, p) => e.type === 'radio' ? e.checked === same(radioText(e), p.value) : e.type === 'checkbox' ? e.checked === p.value : phone(p) || e.type === 'tel' ? digits(readable(e)) === digits(p.value) : e instanceof HTMLSelectElement || e.matches?.('button[aria-haspopup=listbox]') ? same(readable(e), p.value) : normalize(readable(e)) === normalize(p.value);
+    const matches = (e, p) => e.type === 'radio' ? e.checked === same(radioText(e), p.value) : e.type === 'checkbox' ? e.checked === p.value : phone(p) || e.type === 'tel' || e.getAttribute?.('data-intern-kind') === 'tel' ? sameNumber(readable(e), p.value) : e instanceof HTMLSelectElement || e.matches?.('button[aria-haspopup=listbox]') ? same(readable(e), p.value) : normalize(readable(e)) === normalize(p.value);
     function assign(e, key, value) {
       if (!dom(e)) { e[key] = value; return value; }
       if (!live()) return value;
