@@ -1,35 +1,68 @@
-<p align="center">
-  <a href="docs/design/orbit.png">
-    <img src="docs/design/orbit.png" alt="Applications as planets on an orbit chart. The selected fictional application carries an amber ring because it needs an answer before it can proceed." width="100%">
-  </a>
-</p>
+![Intern-Bot — Your applications, in orbit. Animated dark navy orbital artwork with a gently glowing sun and a glint moving along the blue comet trail.](docs/design/readme-orbit-banner.gif)
+
+[View the still banner](docs/design/readme-orbit-banner.png)
 
 # Intern-Bot
 
-Intern-Bot is a local macOS desktop app (Python and PySide6) for internship applications. It keeps your profiles and approved answers, fills application forms in a visible Chromium window, and tracks every application from saved to offer.
+**Your applications, in orbit.**
 
-Autofill runs all **28 site-specific SpeedyApply 2.28.0 adapters** inside a local Chromium extension that Playwright controls directly. No SpeedyApply account, server or AI is needed for normal autofill. Optional AI (a local model, Claude, OpenAI, Gemini, DeepSeek or any OpenAI-compatible server) fills factual questions your profile doesn't cover by name, under the privacy rules below.
+A local macOS application desk for internship hunting. Find openings, fill forms in a visible browser, reuse answers you have approved, and keep track of every application—from the first saved link to an offer.
 
-> This is a private personal integration of proprietary user-supplied code, not an open-source release of SpeedyApply. See the [acceptance record](docs/speedyapply-acceptance.md) for fixture coverage, benchmarks and live-site limitations.
+The Orbit view makes each application a planet. Its orbit shows how far preparation has progressed; its ring tells you when it needs your attention. The queue and inspector keep the actual questions, field values, and next action beside the chart.
 
-The [UI and UX style guide](DESIGN.md) explains the four stations, application states, native controls and how to extend each screen. Its screenshots use fictional records.
+**macOS · Python + PySide6 · Bundled Chromium · Optional AI**
 
-## What it does
+[Get started](#get-started) · [Features](#what-you-can-do) · [Supported sites](#supported-sites) · [Privacy](#data-and-privacy) · [Development](#development)
 
-- **Profiles.** Named profiles with contact details, education, experience, languages, work eligibility, a résumé and an optional cover letter. Unknown yes/no answers stay unknown; nothing is guessed.
-- **Autofill.** Supported sites (Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Workable and 22 more, plus DOM-detected Phenom) are filled by their adapter, and every field is read back and verified.
-- **Workday Request mode.** Signs in with your saved employer login, answers application questions through Workday's API, then finishes the remaining pages in the browser with the same checks as Classic mode.
-- **Approved answers.** Each answer you approve is reused for the same question and any rewording you link to it, within its profile, scope and country.
-- **AI autofill (optional).** Unknown or reworded factual questions (graduation year, degree level, LinkedIn URL) are linked to your profile or answered from your career facts. AI answers fill the form, show as *AI · unconfirmed* under **Answers**, and block automatic submission until you confirm them.
-- **Tracking.** Pipeline stage, notes, job description and history for each application, with CSV import and export.
-- **Scout.** Finds internships and student-eligible jobs using public employer pages, official boards and your configured AI provider. Keeps posting evidence and a deduplicated history for each profile.
-- **You submit.** Automatic submission is off by default. It needs per-application authorization and stops on anything it can't verify.
+> This repository includes a private personal integration of proprietary SpeedyApply 2.28.0 code. It is not an open-source release or a relicense of that code. See [provenance and acceptance](docs/speedyapply-acceptance.md) before redistributing it.
 
-## Install and run
+## What you can do
 
-Double-click **Start Intern-Bot.command** in Finder. The first launch creates `.venv`, installs the requirements and downloads Chromium.
+| Feature | How it helps |
+| --- | --- |
+| **Orbit workspace** | Follow Intake → Fill → Verify → Dispatch → Applied. Switch to Bar field for field-verification progress or List for the queue. |
+| **Named profiles** | Keep contact details, eligibility, education, experience, languages, résumés, and cover letters together. Each application gets its own profile snapshot. |
+| **Verified autofill** | Fill supported forms using your profile and scoped answers, then read values back. Conflicts, unknown facts, and unsupported controls become questions or manual handoffs. |
+| **Reusable answers** | Remember answers for one application, one employer, or every application. Link alternate question wordings and review proposed library changes with **Organise with AI…**. |
+| **Scout** | Discover internships and student-eligible jobs from public sources. Inspect posting evidence, dates, and eligibility before preparing an application. |
+| **Employer accounts** | Use a dedicated 1Password vault for sign-in and optional account creation. Workday also offers a Request mode that answers questions through its API before finishing in the browser. |
+| **Teach a site** | Demonstrate an unsupported form yourself or let optional AI propose a filling recipe. Review the recipe before reuse. |
+| **Application tracking** | Keep pipeline stages, notes, job descriptions, and history. Import or export CSV; importing never starts an application. |
 
-Or from a terminal:
+Normal autofill needs no AI provider, SpeedyApply account, subscription, or cloud backend. Optional AI can match reworded questions, draft answers, compare profiles, organise saved answers, and help Scout find openings.
+
+### A chart with a job to do
+
+- A **blue comet** follows the application currently running.
+- An **amber question ring** marks an application waiting for your answer.
+- A **white ring** means it is ready for review.
+- A **green planet** means applied; a small chalk moon distinguishes a recognized employer receipt from your own confirmation.
+- A send attempt without a receipt stays at **Dispatch**, visibly unconfirmed.
+
+The app follows macOS light and dark appearance, supports keyboard navigation and reduced motion, and offers a flat chart fallback when WebGL is unavailable. Disable animation in **Settings → Automation → Orbit chart**.
+
+<details>
+<summary>See the native interface</summary>
+
+![Intern-Bot's native Orbit view with fictional applications, a queue, and an inspector showing a question that needs an answer.](docs/design/orbit.png)
+
+The [design guide](DESIGN.md) includes dark appearance, the other views, keyboard behavior, and the chart's state meanings. All pictured records are fictional.
+
+</details>
+
+## Get started
+
+### Platform and requirements
+
+| Component | Support |
+| --- | --- |
+| **Desktop** | macOS. The recorded acceptance run used Apple Silicon and Python 3.13.13. Intel Macs and other operating systems are unverified; browser ownership currently uses POSIX locking. |
+| **Python** | Use Python 3.13 to match the recorded acceptance environment. Dependencies are in [`requirements.txt`](requirements.txt). |
+| **Browser** | Playwright's bundled Chromium, installed below. The local extension loads automatically into an isolated session. |
+| **Credentials** | An available system keychain. 1Password CLI and a service account are optional for employer-account automation. |
+| **Node.js** | Needed only to rebuild or test the extension, not to run the app. |
+
+From the repository root:
 
 ```sh
 python3 -m venv .venv
@@ -39,140 +72,130 @@ python -m playwright install chromium
 python main.py
 ```
 
-The app loads the checked-in extension into bundled Chromium automatically, so you don't install anything in your regular browser. Playwright is pinned to 1.59.0 for MV3 worker-restart support.
+Or double-click **Start Intern-Bot.command** in Finder. On first launch it creates `.venv`, installs the requirements, and downloads Chromium. Python must already be installed. For an existing environment after an update, rerun the dependency and Chromium installation commands above.
 
-Upgrading from the Chrome/Firefox version keeps your records and browser directories. Resuming opens a separate Chromium session and may require employer sign-in again. Pending drafts lose their old field-verification checkpoints and are re-checked by the new engine; historical applications and submission-attempt flags are kept.
+Playwright is pinned to **1.59.0** for Manifest V3 worker-restart support. You do not need to install the extension in your regular browser.
 
-## Using it
+### Your first application
 
-### 1. Set up a profile
+1. **Save a profile.** Open **Profile**, fill in your details, and attach your documents. Check eligibility answers explicitly: Singapore work authorization starts at Yes; saved No and Unknown choices are preserved. Unknown facts are asked when needed.
+2. **Paste a job link.** In **Applications**, press **⌘N**, enter an HTTPS posting URL, and choose **Prepare application**. Use **Options…** to change the profile, choose Workday Request mode, or queue the job first.
+3. **Resolve what needs you.** Inspect the selected application's next action. **Answer questions** shows the open questions together; save your answers to continue. Unanswered optional fields can stay blank and appear in the review.
+4. **Review the actual form.** Choose **Review application** and check the returned values, attached documents, AI answers, declarations, and omissions. Use **Edit in browser** and **Recheck** if anything needs changing.
+5. **Submit and track.** Submit in the browser yourself, or choose **Approve & send** for this reviewed application. Record your own confirmed submission with **I submitted it**. Update the tracking stage and notes as you hear back.
 
-Open **Profile** and work through its sections (Name, Contact, Documents, Citizenship & eligibility, Education, Experience and so on). Documents keep their original bytes and file type. **Save profile** (⌘S) lights up when there are unsaved changes, and the header lists any essentials still missing.
+**Run queue** processes eligible applications one at a time and skips anything waiting on you. Profile edits affect new applications; use **Edit application profile…** to change an existing application's snapshot.
 
-Under **Citizenship & eligibility**, **Authorized to work in job's country** defaults to **Yes** for Singapore applications. Enter citizenship as a country (for example, Singapore) and nationality as it appears on your documents (for example, Singaporean). These fields are optional; blank or Unknown answers are asked during each application. Saved No and Unknown work-authorization choices are preserved.
+### Submission stays under your control
 
-Use the profile switcher and its ⋯ menu to create, import or export named profiles. Saving a profile affects new applications only. To change one application's copy, use **Edit application profile…** in its inspector.
+Automatic submission is off by default and requires authorization for the individual application, verified fields, and a verified review. AI answers remain **AI · unconfirmed** until you confirm them, and block automatic submission in the meantime.
 
-### 2. Employer accounts (optional)
+**Approve & send** rechecks the form before sending. The app records an attempt before the click and never automatically retries it. A click or a “saved application” event is not proof of submission: only a recognized employer receipt or your explicit confirmation counts.
 
-Employer logins live in a 1Password vault named **Job Sites**. The bot reads them through the 1Password CLI with a service account, so the 1Password app doesn't need to be open and you won't see a prompt. Setup:
+### Employer accounts (optional)
 
-1. `brew install 1password-cli`
-2. Create a vault named **Job Sites** in 1Password.
-3. On 1Password.com, open **Developer → Service Accounts** and create one with read and write access to **Job Sites** only. Set an expiry.
-4. Paste the token under **Profile → Employer accounts** and click **Save token**. The token is stored in the macOS keychain and checked against the vault right away.
+Employer logins live in a 1Password vault named **Job Sites**. Under **Profile → Employer accounts**, configure a service account with access to that vault only; its token stays in the macOS keychain.
 
-The bot matches a login by its employer account identity: Workday uses the employer hostname or recruiting tenant, SAP SuccessFactors uses the hostname and `company` identifier, and simple employer sites use their dedicated hostname. SAP items need a website URL containing the correct `company`; a bare shared SAP hostname is not enough. Multiple matching items ask you to choose the intended login before automation continues. Logins you add to **Job Sites** yourself are picked up too. **Check login** shows which account the bot will use and never shows the password. If you used the keychain-only version before, **Import keychain logins** copies the saved logins for your existing applications into 1Password and leaves the keychain copies as a backup.
+<details>
+<summary>Set up sign-in and account creation</summary>
 
-Anyone with the token can read and write **Job Sites** without a prompt. If it leaks, revoke it in 1Password.
+1. Install the 1Password CLI: `brew install 1password-cli`.
+2. Create a vault named **Job Sites** and a 1Password service account with read and write access to that vault only. Set an expiry.
+3. Save its token under **Profile → Employer accounts**. **Check login** shows the matched account without revealing its password.
+4. If wanted, enable **Create employer accounts automatically**. New accounts use your profile email or a configured catch-all pattern such as `{company}_intern@yourdomain.com`.
 
-With **Create employer accounts automatically** on, the bot follows the selected job's Apply journey across HTTPS pages, redirects and popups, then checks 1Password at the actual sign-in site. Workday, SAP SuccessFactors and clearly identified simple signup forms are supported. An unknown employer tenant or ambiguous form stays manual.
+Workday, SAP SuccessFactors, and clearly identified simple signup forms are supported. Logins are matched to the employer tenant; SAP website URLs must include the correct `company` identifier. Ambiguous matches ask you to choose.
 
-If no login exists, 1Password generates a password using the signup form's limits and stores it before registration is submitted. New accounts use your profile email or a configured catch-all address such as `{company}_intern@yourdomain.com`. Required account terms and privacy agreements are accepted automatically; optional marketing is left unchecked. Other required facts come from your profile or are asked explicitly.
+For a new account, the app saves the generated password in 1Password before submitting registration. It accepts required signup terms and privacy agreements, leaves optional marketing unchecked, and asks for missing facts. Email verification, CAPTCHA, and MFA stay manual; use **Continue after verification** when finished. Uncertain registration attempts are not automatically replayed. There is no mailbox access or automatic password reset.
 
-Email verification, CAPTCHA and MFA stay manual. Open the verification email yourself, then choose **Continue after verification**. If Chromium visibly shows a successful sign-in, the run queues itself to resume. Registration and sign-in attempts are checkpointed separately, and an uncertain registration is never replayed automatically. If the site already authenticated you after registration, the bot continues without another login. Otherwise it signs in with the saved credentials and returns to the selected job. No mailbox access or automatic password resets are used.
+The service token grants access without a 1Password app prompt. Revoke it if exposed. **Import keychain logins** can copy older saved employer logins into the vault while retaining the original copies.
 
-### 3. Add and run applications
+</details>
 
-In **Applications**, press ⌘N, paste an HTTPS job link and press Return to prepare it with the active profile. **Options…** lets you choose the profile, site mode and whether to queue it first. Unrecognized pages still open for detection but you finish them by hand; ambiguous application frames are handed off to you.
+## Supported sites
 
-For Workday, choose **Request** mode to answer questions through the API after the same browser sign-in and account-creation step.
+The checked-in registry contains **29 adapters**: 28 from SpeedyApply 2.28.0, including Phenom, plus the local Monee adapter.
 
-**Workshop** places the selected application at Intake, Fill, Verify or Dispatch. **Bar field** shows field assessments for up to three visible applications at a time. **List** gives the queue the full left pane. The view is remembered. Turn off worker animation under **Settings → Automation → Workshop display**.
+| Coverage | Platforms and sites |
+| --- | --- |
+| Hiring platforms | ADP, Ashby, BambooHR, Breezy, Comeet, Dayforce, Dover, Eightfold, Freshteam, Greenhouse, Gusto, iCIMS, JazzHR, Jobvite, Lever, Paylocity, Phenom, Pinpoint, Polymer, Rippling, SAP SuccessFactors, SmartRecruiters, UltiPro, Workable, Workday |
+| Dedicated sites and job boards | Monee, SEEK, Tesla, TikTok |
 
-Select an application and press its primary action (**Start**, **Resume** or **Retry**; ⌘R or Return), or use **Run queue**. Queues run one at a time and skip submitted applications and anything waiting on you. Pause and cancel stop further adapter writes and pending timers.
+Detection depends on the supported application route or page markers, not just the employer's name. Phenom uses DOM detection; Eightfold also checks for its application container. The [bundled registry](extension/generated/registry.json) and [local registry](extension/adapters/registry.json) define the exact matches.
 
-### Unsupported sites: teach them once
+**Coverage is not a guarantee for every employer form.** The [acceptance record](docs/speedyapply-acceptance.md) documents offline fixtures and their limits. Employer customizations, unfamiliar widgets, uncertain uploads, and unrecognized reviews or receipts can require manual intervention. Live employer acceptance remains outside that recorded test coverage.
 
-When a site has no adapter, the application stops with **Teach by filling it in** and **Let AI teach itself**. Either way Intern-Bot saves a *recipe* for that site, so later applications there (another internship at the same company, say) fill without AI.
+### Teach an unsupported site
 
-- **Teach by filling it in.** Fill the application in Chromium as usual, then click **Finish teaching**. Intern-Bot learns which buttons continue and submit, which controls are custom dropdowns, and the confirmation page, and offers to keep the answers you typed. No AI is used.
-- **Let AI teach itself.** The AI fills the application page by page and stops at the review page. It sees field labels, options, button text and your profile field names, never the values. Answers it picks show as *AI · unconfirmed*.
+Choose **Teach by filling it in** to demonstrate the form in Chromium, then **Finish teaching**. Or choose **Let AI teach itself** to have AI inspect field labels, options, button text, and profile field names while working toward review.
 
-You review each recipe before it's used. A recipe stores no personal values. Until it has seen the site's confirmation page, you submit on that site yourself and press **I submitted it** on the confirmation page.
+You review the saved recipe before use. Recipes contain no personal values and can fill later applications without AI. Until a recipe has seen the site's confirmation page, submit yourself and use **I submitted it** on the confirmation page.
 
-### 4. Answer questions
+## Scout and optional AI
 
-When an application needs a fact or hits a conflict, open **Answer questions**. The dialog moves to the next open question after each save and offers **Resume application** once required questions are answered. Each question starts from what the form already holds, or from the saved answer the form didn't take. Optional questions that neither your profile nor your answers cover are left blank without stopping the run, and the review lists them as *Left blank*. The **Needs you** filter shows everything waiting on you.
+**Scout** uses a selected profile, a search brief, and priority public sources to find **Internships**, **Jobs**, or **Both**. Before the first AI request, **Scan now** previews the applicant context that will be shared. Changing the provider or shared context requires a fresh preview.
 
-New answers apply to every application by default, or only to this application or employer. If a question rewords one you've already answered, pick the original under **Same as** and the new wording joins that answer. Existing conflicting values are kept until you resolve them. Broad vendor guesses and hard-coded personal answers are blocked.
+- **Scan daily** runs from 8 a.m. Singapore time while the app is open, with a catch-up scan after opening or waking. It is not a background service.
+- Each run allows up to six discovery requests and 40 candidate postings. Results include source evidence; unknown terms remain **Not stated**.
+- **Latest scan** shows verified open opportunities, with first sightings marked **New**. **All saved** keeps the history. **Prepare application** transfers the posting and its matched profile snapshot to Applications.
+- Private portals and sign-in-only pages are unavailable. Public pages that need JavaScript may open in a separate Chromium window.
 
-For recognized Workday résumé controls, approving a file answer authorizes replacing an existing upload. Having a file in your profile does not.
+Configure **Local or OpenAI-compatible**, **Claude**, **OpenAI**, **Gemini**, or **DeepSeek** under **Settings**. Each provider keeps its own model and key. For local servers, the app accepts loopback HTTP endpoints such as `http://localhost:1234/v1`; remote endpoints require HTTPS.
 
-### 5. Review and submit
-
-Check the form in the browser and submit it yourself, or authorize automatic submission for that one application. Automatic submission also requires verified fields and a verified review page. The attempt is recorded before the click and never retried. A click or a vendor "saved application" event is not treated as success; only a recognized employer receipt or your **I submitted it** confirms a submission.
-
-### 6. Track
-
-The detail panel holds pipeline stage, notes and the job description, and saves as you type. Import and export CSV from the ⋯ menu beside **Run queue**. Imports never start applications.
-
-### Scout
-
-Open **Scout** (⌘5), choose a saved profile, and edit its search brief and priority sources. Choose **Internships**, **Jobs**, or **Both**. **Scan now** previews the exact applicant context before the first AI request. **Scan daily** runs at 8:00 a.m. Singapore time while the app is open, with a catch-up scan when it next opens or wakes. Changes to the provider or shared context require a new preview; until then daily scans pause and Scout shows **!** in the top navigation. Priority sources take one `Name | URL` (or bare URL) per line, and lines starting with `#` are ignored.
-
-Scout reuses the provider, model and Keychain key in Settings. OpenAI and Claude use native web search when the selected model supports it. An optional Brave Search API key enables broad discovery with any provider. Direct public sources are checked in either case. Each run allows up to six discovery requests and 40 candidate postings, with source failures and limits shown under coverage. Public pages that require JavaScript may open in a separate Chromium window. Private university portals and sign-in-only pages appear as unavailable.
-
-Results need an independently opened posting and source excerpts proving it is open. Open postings are grouped by their verified posting date: the last 48 hours first, then those posted earlier, then undated leads. Deadlines within 14 days come first, and missing terms show **Not stated**. **Latest scan** shows every opportunity the most recent scan verified as open, with first sightings marked **New**; **All saved** shows the history. **Prepare application** uses the matched profile snapshot and starts or queues autofill in Applications, where you review submission as usual.
-
-Scout starts its own history in SQLite and generates `data/opportunities-log.md`. The log is rebuilt from saved records so an export failure can be repaired by the next scan. Scan limits bound request counts; actual API charges depend on the model and search provider.
-
-### Answers and Settings
-
-**Answers** lists every approved answer. Expand one to see each wording matched to it and remove a wrong wording on its own.
-
-**Settings** saves immediately and covers automatic continuation, answer reuse and AI. Choose a provider:
-
-- **Local or OpenAI-compatible** (the default): a server on this Mac such as LM Studio (`http://localhost:1234/v1`) or Ollama (`http://localhost:11434/v1`), or any https OpenAI-compatible API (OpenRouter, Groq and similar). Enter the model name; a key is only needed if the server asks for one. Larger models answer more questions: in testing, Gemma 4 26B linked questions that Qwen 3.5 9B left unanswered.
-- **Claude** (default `claude-opus-5-5`, through the official SDK at low effort, no retries), **OpenAI** (`gpt-6-luna`), **Gemini** or **DeepSeek** (`deepseek-flash`; processed in China). Each keeps its own model and keychain key.
-
-With **Fill unknown and reworded questions with AI** on (the default once a provider is set up), each unanswered factual question is sent once. The reply can only point to one of your saved questions or a named profile field, or, when career facts are allowed, give a short answer that must be one of the form's options. If your profile has **Standing answers** (statements such as “I am not related to any employee of any employer I apply to” or “I am a Singapore citizen”), declaration and citizenship questions are sent too and answered from those statements, again only with one of the form's options. Anything else is ignored and the question is asked as usual. Links to profile fields follow later profile edits and apply to every application. Answers worked out from career facts or standing answers apply to that application only. **Confirm AI answer** under **Answers** makes one yours.
-
-If a section still has open dropdown questions after filling, Intern-Bot opens each one to read its options (a Workday picker's categories one level deep) and makes one more request for that section. For an answer the form didn't take because no option uses its wording (“Company Website” where the form lists “UOB Careers Website”), the reply can only name one of the listed options. That match is kept for the same employer, so its next form needs no request. Workday's per-language Speaking, Writing and Reading levels come from each language's level in your profile (such as Native) and are matched to the employer's scale this way. No question is sent twice for the same application, even across resumes. Before any of this, options that differ only in punctuation (“Mr” and “Mr.”) are matched locally, and a value the form shows but rejected (seen with Workday dates) is typed again key by key, without AI.
-
-**Compare profiles with AI…** and **Draft with AI…** show the exact outgoing context (names, emails, phone numbers and links masked) and ask for consent first. Drafts need your approval before they become reusable answers.
-
-The app follows the macOS light or dark appearance. Closing it closes the browser sessions it owns; your records stay.
+Scout can use native web search with supported OpenAI and Claude models. An optional Brave Search key adds broad discovery for other providers; direct public sources are checked too. Request limits bound activity, but API charges depend on your providers.
 
 ## Data and privacy
 
-- `data/intern-bot.sqlite3` holds profiles, answers, application snapshots, assessments and history. It has owner-only permissions but is not encrypted.
-- Employer logins live only in your 1Password **Job Sites** vault. The service account token and Gemini/OpenAI keys live only in the macOS keychain. There is no plaintext fallback.
-- `data/browser/<run-hash>/` holds isolated, exclusively locked Chromium sessions. Older browser directories are preserved.
-- The extension keeps run, tab and document bindings in memory-only `storage.session`. It never persists profile facts, documents, credentials or approvals.
-- Normal autofill makes no SpeedyApply, Supabase, telemetry or local HTTP-server calls.
-- AI autofill sends only what the provider needs:
-  - **A model on this Mac:** question wording, form options, your saved question wordings, profile field names and your career facts (education, experience, skills, languages, summary). Nothing leaves the computer.
-  - **A cloud provider:** question wording, form options, saved question wordings and the *names* of profile fields that have a value, never their values, plus your standing answers if you wrote any (identity masked). Turning on **Also let … see your career facts** per provider adds career facts, and your answers to dropdown questions the form didn't take, with your names, email, phone, address and links masked.
-  - **Never through AI autofill:** contact or identity values, documents, credentials, page content, or essay, demographic, health, pay and consent questions (including lone checkboxes). Legal-status and declaration questions are sent only when the profile has standing answers.
-  - **Scout:** after its context preview is approved, the selected provider receives the redacted search brief, relevant career facts, citizenship/country criteria, and public posting text. Search services receive search criteria. Application browser sessions and documents are excluded.
-  - Cloud URLs must use https. Redirects are refused, and errors never echo request content. Each request is logged by kind (provider, local or cloud, number of questions, whether facts were sent), never by content.
+Your application desk is stored locally. Employer websites still receive the information you enter in their forms, and optional cloud features send the context described below.
 
-The original XPI, exact source and notices are kept under [`third_party/speedyapply/2.28.0/`](third_party/speedyapply/2.28.0/). The loaded extension contains only the adapted dependency graph and local controls; see [extension internals](extension/README.md).
+| Data | Where it lives |
+| --- | --- |
+| Profiles, answers, application snapshots, assessments, tracking, and Scout history | `data/intern-bot.sqlite3`, with owner-only permissions. The database is **not encrypted**. |
+| Browser sessions and cookies | Isolated, exclusively locked directories under `data/browser/`. Treat them as sensitive account data. |
+| Employer passwords | Your 1Password **Job Sites** vault. |
+| Service-account token and API keys | The system keychain, with no plaintext fallback. |
+| Scout's readable history | `data/opportunities-log.md`, rebuilt from saved records. |
+| Extension bindings | Memory-only `storage.session`; no persistent profile facts, documents, credentials, or approvals. |
+
+Normal autofill makes no SpeedyApply, Supabase, telemetry, or local HTTP-server calls. The browser and extension communicate directly through Playwright.
+
+### What optional AI receives
+
+- **Question matching:** question wording, form options, saved question wordings, and the names of available profile fields. Values are resolved on your Mac. Personal, demographic, health, pay, or legal questions may be matched to a saved answer or profile field; AI cannot invent answers to those questions. Legal questions can also use the **Standing answers** you explicitly wrote for that purpose.
+- **Career facts:** a local model receives career context. Cloud providers receive it only when you enable that provider's career-facts option. Identity and contact details in that context are masked. Standing answers are shared with the selected provider when present; factual option matching can also share a masked answer the form did not accept.
+- **Answer organisation:** question wordings and profile field names, with proposed merges and scope changes reviewed locally before you apply them. Answer values are not sent.
+- **Drafting and profile comparison:** an editable preview of the outgoing context and per-request consent before sending. Drafts need approval before reuse.
+- **Scout:** the approved, redacted search brief, relevant career facts, citizenship/country criteria, and public posting text. Search services receive search criteria; application browser sessions and documents are excluded.
+
+AI autofill excludes documents, passwords, whole-page content, essays, and consent controls. Remote endpoints require HTTPS; redirects are refused. Request logs record metadata rather than content. Redaction is best-effort, so inspect outgoing previews and the standing answers you choose to share.
 
 ## Development
 
-Node is only needed to rebuild the adapter package:
+| Path | Purpose |
+| --- | --- |
+| `gui/` | Native PySide6 views, theme, and the embedded Orbit scene. |
+| `core/automation/` | Application engine, verification, answers, accounts, recipes, and AI assistance. |
+| `core/browser/` · `core/storage/` | Browser ownership, SQLite records, keychain, and 1Password integration. |
+| `core/scout.py` · `core/scout_sources.py` | Discovery, posting evidence, and scan scheduling. |
+| `extension/` | Local Chromium extension, generated adapters, and local adapters. |
+| `tests/` · `tools/` | Regression fixtures, adapter benchmarks, and stop reports. |
+| `docs/` | Design captures, prototypes, provenance, and acceptance records. |
+
+Read [DESIGN.md](DESIGN.md) before changing an interface and [PRODUCT.md](PRODUCT.md) for submission and privacy behavior. The [Orbit draft](docs/design-drafts/stage/index.html?d=orbit) illustrates the visual direction; production views read their state from the application engine.
 
 ```sh
+# Python tests; the full suite includes Chromium fixtures
+.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q -m "not browser"
+
+# Rebuild and test the extension
 npm ci --prefix extension --ignore-scripts
 npm run build --prefix extension
 npm test --prefix extension
-```
 
-Tests:
-
-```sh
-.venv/bin/python -m pytest -q                   # everything
-.venv/bin/python -m pytest -q -m "not browser"  # unit tier without Chromium, about a second
+# Local reports
 PYTHONPATH=. .venv/bin/python tools/benchmark_adapters.py --output /tmp/intern-bot-benchmark.json
-PYTHONPATH=. .venv/bin/python tools/stops.py    # per site: how many runs reached review, and where the rest stopped
+PYTHONPATH=. .venv/bin/python tools/stops.py
 ```
 
-Tests run the real adapter functions against fictional forms with intercepted network requests.
-
-## Limitations
-
-- Unknown widgets, unrecognized upload receipts, extra or unmatched rows and unrecognized review summaries become manual handoffs. Only recognized native or accessible controls can be verified, and multi-step reviews need independently labeled saved values before automatic submission.
-- Passing fixtures shows the adapters are implemented, not that they work on every employer's current form. Live employer acceptance and live submissions have not been performed.
-- Browser ownership uses POSIX locking; operating systems other than macOS are unverified.
+Browser tests exercise real adapter functions against fictional forms with intercepted requests. Passing them does not establish live employer compatibility. See [extension internals](extension/README.md) for build and runtime details, and [`third_party/speedyapply/2.28.0/`](third_party/speedyapply/2.28.0/) for the preserved original package and notices.
