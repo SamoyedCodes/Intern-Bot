@@ -132,6 +132,8 @@ class AutomationService(QObject):
             self.store.record_event(run.id, "failed", run.stage, type(exc).__name__)
             self.store.save_run(run)
         finally:
+            if run.status == "cancelled":
+                await self._close_session(run.id)
             self.busy = False
             self.active_id = None
             self.finished.emit(run.model_copy(deep=True))
@@ -322,6 +324,23 @@ class AutomationService(QObject):
             if engine:
                 engine.cancel() if cancel else engine.pause()
         self.loop.call_soon_threadsafe(stop)
+
+    async def _close_session(self, run_id):
+        watcher = self.verification_watchers.pop(run_id, None)
+        if watcher:
+            watcher.cancel()
+        self.journeys.pop(run_id, None)
+        session = self.sessions.pop(run_id, None)
+        if session:
+            try:
+                await session[0].stop()
+            except Exception:
+                pass  # The window was already closed by hand.
+
+    def close_browser(self, run_id):
+        """Close a cancelled or deleted run's Chromium window. Pausing keeps it open for a manual handoff."""
+        self.teaching.pop(run_id, None)
+        asyncio.run_coroutine_threadsafe(self._close_session(run_id), self.loop)
 
     def show_browser(self, run_id):
         if run_id not in self.sessions or self.sessions[run_id][1].page.is_closed():

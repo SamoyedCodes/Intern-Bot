@@ -926,6 +926,46 @@ async def test_retry_and_restart_in_an_existing_tab(window, monkeypatch, status,
     prepare.assert_awaited_once()
 
 
+async def test_cancel_and_delete_close_the_runs_browser(window, monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock, Mock
+    from core.automation.engine import ApplicationEngine
+
+    service, view = window.tasks_view.service, window.tasks_view
+    def session(run):
+        page = Mock(url=URL, is_closed=Mock(return_value=False), bring_to_front=AsyncMock())
+        manager = Mock(stop=AsyncMock())
+        service.sessions[run.id] = (manager, Mock(page=page))
+        return manager
+    # Cancelled while running: the engine stops and the window closes with it.
+    running = ApplicationRun(job_url=URL, status='queued')
+    manager = session(running)
+    async def cancelled(self, run, *args):
+        run.status = 'cancelled'
+    monkeypatch.setattr(ApplicationEngine, 'start', cancelled)
+    monkeypatch.setattr(service, 'open_job', AsyncMock(return_value=('', [])))
+    await service._run(running, ApplicantProfile(), None)
+    manager.stop.assert_awaited_once()
+    assert running.id not in service.sessions
+    # Cancelled or deleted while waiting on you.
+    for action in ('cancel', 'delete'):
+        run = ApplicationRun(job_url=URL, status='needs_input')
+        window.store.save_run(run)
+        view.load_state()
+        manager = session(run)
+        if action == 'cancel':
+            view.cancel_run(run)
+        else:
+            monkeypatch.setattr(QMessageBox, 'exec', lambda self: QMessageBox.Yes)
+            view.delete_runs([run])
+        for _ in range(50):
+            if manager.stop.await_count:
+                break
+            await asyncio.sleep(.02)
+        manager.stop.assert_awaited_once()
+        assert run.id not in service.sessions
+
+
 def test_signing_in_again_shows_over_the_sites_step_list():
     # An expired Workday session signs in again with the step list from the earlier run still on the task.
     run = ApplicationRun(job_url=URL, steps=['My Information', 'Review'], step=0, stage='Signing in')

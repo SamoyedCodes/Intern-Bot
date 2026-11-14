@@ -1230,6 +1230,7 @@ class TasksView(QWidget):
             run.status = "cancelled"
             run.approved_review = {}
             self.store.save_run(run)
+            self.service.close_browser(run.id)
 
     def details(self):
         run = self.selected()
@@ -1431,6 +1432,8 @@ class TasksView(QWidget):
             ids.intersection_update(self._checked_ids)
         ids = {r.id for r in self.tasks if r.id in ids and self.eligible(r, "delete")}
         self.store.delete_runs(ids)
+        for run_id in ids:
+            self.service.close_browser(run_id)
         self._queue = [i for i in self._queue if i not in ids]
         self.tasks = [r for r in self.tasks if r.id not in ids]
         self.render()
