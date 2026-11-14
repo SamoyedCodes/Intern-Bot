@@ -9,7 +9,7 @@ globalThis.scanInternFields = (rootSelector) => {
   const controls = [...root.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]),select,textarea,[role=combobox],[role=checkbox],[role=radio],[role=spinbutton],[contenteditable=true],button[aria-haspopup=listbox],[data-intern-kind],[data-automation-id="resumeUpload"]:not(:has(input[type=file])) [data-automation-id="file-upload-item"],[data-field-path] button[aria-pressed]')]
     // Workday's utility bar and SuccessFactors' user menu include a site-language picker, and Ashby's "Autofill from resume" pane an upload, none an applicant question.
     // react-select (Greenhouse) keeps a hidden required text input beside its combobox; it is not a question.
-    .filter(e => (visible(e) || e.type === 'file') && e.getAttribute('data-automation-id') !== 'beecatcher' && !(e.type === 'text' && e.matches('[aria-hidden=true][tabindex="-1"]')) && !e.closest('[role=listbox],[data-automation-id="utilityButtonBar"],.rcmUserLangDropDown,[class*=_autofillPane]'));
+    .filter(e => (visible(e) || e.type === 'file') && e.getAttribute('data-automation-id') !== 'beecatcher' && !(e.type === 'text' && e.matches('[aria-hidden=true][tabindex="-1"]')) && !e.closest('[role=listbox],[data-automation-id="utilityButtonBar"],.rcmUserLangDropDown,.rcmCareerLangDropDown,[class*=_autofillPane]'));
   const counts = new Map();
   // Native validity misleads where the site keeps the answer elsewhere: an adapter-read dropdown's emptied search input,
   // or one box of a required checkbox group that another ticked box already satisfies. The site's own aria-invalid still counts.

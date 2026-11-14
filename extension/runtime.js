@@ -17,7 +17,8 @@
   for (const name of ['setTimeout','clearTimeout','setInterval','clearInterval','requestAnimationFrame','cancelAnimationFrame']) native[name]=window[name].bind(window);
   let active;
   // Workday clears the file input after upload; bind its digest to that exact receipt for this document.
-  const verifiedUploads = new WeakMap();
+  // A native adapter can name its upload slot (data-intern-upload="Resume"), so the proof survives a site that rebuilds its form.
+  const verifiedUploads = new Map(), uploadKey = c => c.getAttribute('data-intern-upload') || c;
   // Native adapters (extension/adapters/*.js) mark their own upload widgets and receipts the same way.
   const UPLOADS = '[data-automation-id=resumeUpload],[aria-labelledby="Resume/CV-section"],[data-intern-upload]';
   const RECEIPTS = '[data-automation-id=file-upload-item],[data-intern-receipt]';
@@ -32,6 +33,9 @@
     const timers = new Set(), intervals = new Set(), frames = new Set(), observers = new Set();
     const abort = new AbortController(), policies = new WeakMap(), proposals = new Map(), denied = new WeakSet();
     const handles = new Map(), rowActions = new Set(), uploading = new WeakSet();
+    // Field key per scanned control, and the control each key was authorized on: a new control under an authorized key whose
+    // control left the page means the site rebuilt its form (SuccessFactors after an upload), so the section is filled again.
+    const keys = new WeakMap(), authorized = new Map();
     // Dropdowns choose() could not set, and the parts of a list answer a prompt search found no single option for.
     const tried = new WeakSet(), missed = new WeakMap();
     const events = [], problems = new Map(), actions = new Map();
@@ -261,7 +265,9 @@
     const site = [...nativeAdapters(R), ...recipeAdapters(R, config.recipe && [config.recipe])].find(a => a.id === config.adapter);
     // hold/busy: the adapter defers fills while the site rewrites the form itself (Monee parses the uploaded resume).
     const policyOf = e => policies.get(e);
-    async function upload(file, e) {
+    // open: resolves the input that takes the file, for a scanned control that only opens it (SuccessFactors' attach popup).
+    // It is called only when a file is actually sent, and that input then replaces the receipt's document in place.
+    async function upload(file, e, open=null) {
       if(!e || !live() || uploading.has(e))return false;
       const p=policies.get(e);
       if(!p){proposals.set(e,{key:'files',value:file});return false;}
@@ -270,9 +276,13 @@
       if(!descriptor){report('profile','Choose a supported resume or cover letter file.',p.key);return false;}
       const chosen=R.file(descriptor.resumeBase64,descriptor.fileName);
       if(!chosen)return false;
-      const accepted=e.accept?.split(',').map(x=>x.trim().toLowerCase()).filter(Boolean)||[];
-      if(accepted.length&&!accepted.some(a=>a===descriptor.mime||a===('.'+descriptor.fileName.split('.').pop().toLowerCase())||a.endsWith('/*')&&descriptor.mime.startsWith(a.slice(0,-1)))){report('profile','The form does not accept this document type. Choose a matching file.',p.key);return false;}
-      if(e.files?.length){
+      const accepts=input=>{
+        const accepted=input.accept?.split(',').map(x=>x.trim().toLowerCase()).filter(Boolean)||[];
+        if(accepted.length&&!accepted.some(a=>a===descriptor.mime||a===('.'+descriptor.fileName.split('.').pop().toLowerCase())||a.endsWith('/*')&&descriptor.mime.startsWith(a.slice(0,-1)))){report('profile','The form does not accept this document type. Choose a matching file.',p.key);return false;}
+        return true;
+      };
+      if(!open&&!accepts(e))return false;
+      if(!open&&e.files?.length){
         const digest=await crypto.subtle.digest('SHA-256',await e.files[0].arrayBuffer());
         if(!live())return false;
         if(e.files.length!==1||hex(digest)!==descriptor.digest){report('conflict','An existing upload differs from the selected file.',p.key);return false;}
@@ -281,24 +291,32 @@
         if(!last||last.tries>1||performance.now()-last.at<5000||acceptedUpload(e,e.files[0]))return true;
       }
       const container=e.closest(UPLOADS);
-      const receipt=container?.querySelector(RECEIPTS), proof=container&&verifiedUploads.get(container);
+      const receipt=container?.querySelector(RECEIPTS), proof=container&&verifiedUploads.get(uploadKey(container));
       // The site may still be processing this exact file (Monee parses it; Workday shows it loading, with no delete button yet); sending it again would duplicate it.
       if(!proof?.receipt&&proof?.digest===descriptor.digest&&performance.now()-proof.at<30000)return false;
       if(receipt){
         if(proof?.receipt===receipt&&proof.digest===descriptor.digest)return true;
         const remove=receipt.querySelector('button[data-automation-id=delete-file]');
-        if(!p.replace||!remove){report('conflict','The existing uploaded document must be checked manually, or approve the selected file as its replacement.',p.key);return false;}
-        uploading.add(e);
-        try {
-          remove.click();
-          for(let i=0;i<20&&receipt.isConnected&&live();i++)await pause(100);
-          if(!live()||receipt.isConnected||!e.isConnected||container.querySelector('[data-automation-id=file-upload-item]'))return false;
-        } finally {uploading.delete(e);}
+        if(!p.replace||!remove&&!open){report('conflict','The existing uploaded document must be checked manually, or approve the selected file as its replacement.',p.key);return false;}
+        if(remove){
+          uploading.add(e);
+          try {
+            remove.click();
+            for(let i=0;i<20&&receipt.isConnected&&live();i++)await pause(100);
+            if(!live()||receipt.isConnected||!e.isConnected||container.querySelector('[data-automation-id=file-upload-item]'))return false;
+          } finally {uploading.delete(e);}
+        }
       }
-      if(container)verifiedUploads.set(container,{digest:descriptor.digest,name:descriptor.fileName,receipt:null,at:performance.now()});
+      let input=e;
+      if(open){
+        uploading.add(e);
+        try {input=await open();} finally {uploading.delete(e);}
+        if(!input||!live()||!accepts(input))return false;
+      }
+      if(container)verifiedUploads.set(uploadKey(container),{digest:descriptor.digest,name:descriptor.fileName,receipt:null,at:performance.now()});
       sent.set(e,{at:performance.now(),tries:(sent.get(e)?.tries||0)+1});
-      const transfer=new DataTransfer();transfer.items.add(chosen);e.files=transfer.files;
-      e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));lastChange=performance.now();return true;
+      const transfer=new DataTransfer();transfer.items.add(chosen);input.files=transfer.files;
+      input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));lastChange=performance.now();return true;
     }
     const hex = buffer => [...new Uint8Array(buffer)].map(b=>b.toString(16).padStart(2,'0')).join('');
     const pause = ms => new Promise(resolve=>native.setTimeout(resolve,ms));
@@ -441,21 +459,24 @@
       if(formRoots.length>1)report('browser','More than one form is present. Choose a single application form before autofilling.');
       const root=config.adapter==='account'?internAccount.controls().root:formRoots.length===1?formRoots[0]:document;
       if(formRoots.length>1&&config.adapter!=='account'){stop();return [];}
-      site?.annotate?.(root);
+      await site?.annotate?.(root);  // May open what the scan must see (SuccessFactors' collapsed sections).
       const roots=[root];
       for(let i=0;i<roots.length;i++)for(const element of roots[i].querySelectorAll('*'))if(element.shadowRoot)roots.push(element.shadowRoot);
       const fields=roots.flatMap((root,index)=>scanInternFields(root).map(f=>{
         const element=root.querySelector(f.selector), selector=`control:${handles.size}`;
         handles.set(selector,element);f.selector=selector;
         if(index)f.key=`shadow:${root.host.id||index}:`+f.key;
+        keys.set(element,f.key);
         f.file_digest='';
         return f;
       }));
       for(const field of fields.filter(f=>f.kind==='file')){
         const e=handles.get(field.selector), selected=e.files?.[0];
         const uploadContainer=e.closest(UPLOADS);
-        const proof=uploadContainer&&verifiedUploads.get(uploadContainer), receipts=uploadContainer?.querySelectorAll(RECEIPTS);
+        const proof=uploadContainer&&verifiedUploads.get(uploadKey(uploadContainer)), receipts=uploadContainer?.querySelectorAll(RECEIPTS);
         const receipt=receipts?.length===1?receipts[0]:null;
+        // In a named slot, a rebuilt receipt with the proven file name is the same document (SuccessFactors rebuilds its form after an upload).
+        if(proof?.receipt&&!proof.receipt.isConnected&&receipt&&uploadContainer.getAttribute('data-intern-upload')&&receiptName(receipt)===proof.name)proof.receipt=receipt;
         if(proof?.receipt&&proof.receipt!==receipt){field.invalid=true;continue;}
         if(proof&&receipt&&!field.invalid&&receiptName(receipt)===proof.name){
           if(!proof.receipt)proof.receipt=receipt;
@@ -513,7 +534,7 @@
       scan,
       authorize(policiesBySelector) {
         if(!live())return;
-        for(const [selector,p]of Object.entries(policiesBySelector)) {const e=handles.get(selector);if(e)policies.set(e,p);}
+        for(const [selector,p]of Object.entries(policiesBySelector)) {const e=handles.get(selector);if(e){policies.set(e,p);authorized.set(keys.get(e),e);}}
         for(const [e,proposal]of proposals){if(!e.isConnected){proposals.delete(e);continue;}if(!policies.has(e)||site?.hold?.(e,policyOf))continue;proposals.delete(e);if(proposal.key==='option'){picker=e;action(proposal.value);continue;}assign(e,proposal.key,proposal.value);if(!denied.has(e)&&e.type!=='file'){e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));e.blur();}}
         for(const [selector,p]of Object.entries(policiesBySelector)){
           const e=handles.get(selector);
@@ -540,7 +561,7 @@
         const ctx={addEventListener:(target,...args)=>R.call(target,'addEventListener',args),onInvalidated:fn=>abort.signal.addEventListener('abort',fn,{once:true})};
         Promise.resolve(adapter.script({getProfile:async()=>config.profile,setMessage:message=>{if(live())status=message||status;},autofillSettings:{autoClickNextPage:true,autoSubmit:true,saveApplications:false,saveResponses:false},accountSettings:{accountEmail:"",accountPassword:""},ctx})).catch(fail);
       },
-      snapshot(){return {summary:reviewSummary(),errors:(/\bVPS\|[0-9a-f-]{36}\b/i.test(document.body.innerText)||/something went wrong[\s\S]*please refresh the page and then try again/i.test(document.body.innerText)?1:0)+[...document.querySelectorAll('[role=alert],.field-error-msg,.form-error,[data-automation-id=inputError],[data-automation-id=inputAlert]')].filter(isError).length,status,live:live(),settled:performance.now()-lastChange>350&&timers.size<=1&&!site?.busy?.(policyOf),proposals:proposals.size,expired,events,problems:[...problems.values()],actions:[...actions].filter(([,a])=>a.element.isConnected&&visible(a.element)&&!a.element.disabled).map(([id,a])=>({id,kind:a.kind})),url};},
+      snapshot(){return {summary:reviewSummary(),errors:(/\bVPS\|[0-9a-f-]{36}\b/i.test(document.body.innerText)||/something went wrong[\s\S]*please refresh the page and then try again/i.test(document.body.innerText)?1:0)+[...document.querySelectorAll('[role=alert],.field-error-msg,.form-error,[data-automation-id=inputError],[data-automation-id=inputAlert]')].filter(isError).length,status,live:live(),settled:performance.now()-lastChange>350&&timers.size<=1&&!site?.busy?.(policyOf),rebuilt:[...handles.values()].some(e=>!policies.has(e)&&authorized.get(keys.get(e))?.isConnected===false),proposals:proposals.size,expired,events,problems:[...problems.values()],actions:[...actions].filter(([,a])=>a.element.isConnected&&visible(a.element)&&!a.element.disabled).map(([id,a])=>({id,kind:a.kind})),url};},
       // The desktop retypes this control with real keystrokes when the site never registered its filled value; the mark lets it find the control.
       mark(selector){
         const e=handles.get(selector);
@@ -714,7 +735,9 @@
         // Registry construction only; no adapter starts and no profile is requested.
         const inert={environment:native,call:(o,k,a,opt)=>opt&&o?.[k]==null?undefined:o[k](...a),assign:(o,k,v)=>(o[k]=v),update:(o,k,op,rhs)=>o[k]??(o[k]=rhs())};
         const fits=a=>(!a.pattern||a.pattern.test(location.href))&&(!a.selector||document.querySelector(a.selector));
-        let adapters=[...createSpeedyAdapters(inert),...nativeAdapters(inert)].filter(fits);
+        // A hand-written adapter replaces the extracted one with its id (SuccessFactors).
+        const natives=nativeAdapters(inert);
+        let adapters=[...createSpeedyAdapters(inert).filter(a=>!natives.some(n=>n.id===a.id)),...natives].filter(fits);
         if(!adapters.length)adapters=recipeAdapters(inert,message.recipes).filter(fits);
         adapters=adapters.map(a=>({id:a.id,name:a.name}));
         respond({adapters,account:internAccount.inspect(),document:message.document});return;

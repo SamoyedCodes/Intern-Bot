@@ -271,7 +271,7 @@ class ApplicationEngine:
                 confirmed = [FormField(**f) for f in (await bridge.command('scan'))['fields']]
                 # A change here restarts the section rather than re-reading it: a revealed conditional field or a re-render that
                 # cleared values needs filling, not just verifying.
-                if fields != confirmed or not check['settled'] or bridge.pending:
+                if fields != confirmed or not check['settled'] or bridge.pending or check.get('rebuilt'):
                     if verification_retries < 3:
                         verification_retries += 1
                         await bridge.stop()

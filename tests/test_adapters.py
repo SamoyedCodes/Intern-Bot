@@ -5,8 +5,11 @@ import json
 import pytest
 
 from core.automation.answers import resolve
+from core.automation.engine import ApplicationEngine
+from core.automation.extension_bridge import ExtensionBridge
 from core.automation.fields import FormField
-from tests.support import FIXTURES, URLS, open_fixture, prepare
+from core.automation.models import ApplicationRun, ApprovedAnswer
+from tests.support import FIXTURES, URLS, open_fixture, prepare, profile_for
 
 # The first visible text control, including inside open shadow roots.
 FIRST_VISIBLE_INPUT = '''(() => {const roots=[document];for(let i=0;i<roots.length;i++)for(const e of roots[i].querySelectorAll('*'))if(e.shadowRoot)roots.push(e.shadowRoot);return roots.flatMap(r=>[...r.querySelectorAll('input:not([type=hidden]),textarea')]).find(e=>e.getClientRects().length);})()'''
@@ -159,3 +162,43 @@ async def test_no_adapter_contacts_its_vendor_from_pages_or_the_extension_worker
     assert worker_requests == []
     assert not any('speedyapply' in url.lower() or 'supabase' in url.lower() for url in page_requests)
     assert set(page_requests) <= {url.split('#')[0] for url in URLS.values()}
+
+
+SUCCESSFACTORS_FORM = '''<a id="30:_expandAllSections" class="expandCollapseTxt" role="button" href="javascript:void(0)" onclick="open_=true;render()">Expand all sections</a>
+<div id="form"></div><span role="button" id="236:_submitBtn" onclick="window.submitted=true">Apply</span>
+<script>
+let open_=false, doc='', notice='';
+window.rebuilds=0;
+function render(){
+  document.getElementById('form').innerHTML=`<div id="1:sectionContent" style="display:${open_?'block':'none'}">
+  <div class="RCMFormField attachmentField"><label><span class="requiredField">*</span>&nbsp;Resume</label>
+    <div id="51:_attachDownloadLabel" style="display:${doc?'block':'none'}">${doc}<br>(14/11/2026)</div>
+    <span role="button" class="addAttachments" onclick="document.body.insertAdjacentHTML('beforeend','<div role=dialog id=popup><input type=file class=fileUpload onchange=received(this)></div>')">+</span></div>
+  <div class="RCMFormField"><label><span class="requiredField">*</span>&nbsp;City</label><input type="text"></div>
+  <div class="RCMFormField"><label><span class="requiredField">*</span>&nbsp;Notice Period</label>
+    <input class="rcmpaginatedselectinput" role="combobox" aria-controls="9:_listSelect" value="${notice}"
+      onclick="const l=document.getElementById('9:_listSelect');l.style.display=l.style.display==='none'?'block':'none'">
+    <ul id="9:_listSelect" role="listbox" style="display:none">
+      <li role="option" onclick="notice='1 Month';this.closest('.RCMFormField').querySelector('input').value=notice;this.parentElement.style.display='none'">1 Month</li>
+      <li role="option">Immediate</li></ul></div></div>`;
+}
+// Like SuccessFactors: the document arrives, the popup closes, and the whole form is rebuilt without what was typed.
+function received(input){doc=input.files[0].name;document.getElementById('popup').remove();setTimeout(()=>{window.rebuilds++;render();},300);}
+render();
+</script>'''
+
+
+async def test_successfactors_uploads_through_its_popup_and_fills_the_rebuilt_form(context, store, tmp_path):
+    resume = tmp_path / 'resume.pdf'
+    resume.write_bytes(b'%PDF fictional resume')
+    page = await open_fixture(context, 'sap-successfactors', SUCCESSFACTORS_FORM,
+                              url='https://career44.sapsf.com/portalcareer?company=fictional&career_ns=job_application')
+    profile = profile_for('sap-successfactors').model_copy(update={'resume_path': str(resume)})
+    run = ApplicationRun(job_url=page.url, auto_advance=False)
+    store.save_answer(ApprovedAnswer(question='Notice Period', value='1 Month', scope_key=run.id))
+    run = await ApplicationEngine(store).start(run, profile, ExtensionBridge(page, run.id))
+    assert run.status == 'ready_for_review', run.interventions
+    assert await page.evaluate('window.rebuilds') == 1  # Sent once; the rebuilt receipt is verified, not uploaded again.
+    assert await page.locator('.RCMFormField input[type=text]').input_value() == 'Example City'
+    assert await page.locator('input.rcmpaginatedselectinput').input_value() == '1 Month'
+    assert not await page.evaluate('Boolean(window.submitted)')
