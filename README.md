@@ -1,6 +1,6 @@
 <p align="center">
-  <a href="docs/design/workshop.png">
-    <img src="docs/design/workshop.png" alt="A miniature crew at four workstations. The selected fictional application needs an answer before it can proceed." width="100%">
+  <a href="docs/design/orbit.png">
+    <img src="docs/design/orbit.png" alt="Applications as planets on an orbit chart. The selected fictional application carries an amber ring because it needs an answer before it can proceed." width="100%">
   </a>
 </p>
 

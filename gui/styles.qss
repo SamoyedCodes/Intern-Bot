@@ -340,3 +340,15 @@ QFrame#inspector QProgressBar::chunk { background: $panel_text; }
 QListWidget#sectionNav { background: $surface2; border-radius: 8px; padding: 6px; }
 QListWidget#sectionNav::item:selected { background: $panel; color: $panel_text; }
 QTextBrowser { background: $surface; color: $text; border: 1px solid $border; border-radius: 8px; padding: 12px; }
+
+/* Scrollbars: thin, rounded and in the paper's own ink instead of the platform grey. */
+
+QScrollBar { background: transparent; border: none; }
+QScrollBar:vertical { margin: 2px; width: 10px; }
+QScrollBar:horizontal { height: 10px; margin: 2px; }
+QScrollBar::handle { background: $border; border-radius: 3px; }
+QScrollBar::handle:vertical { min-height: 28px; }
+QScrollBar::handle:horizontal { min-width: 28px; }
+QScrollBar::handle:hover, QScrollBar::handle:pressed { background: $text3; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }

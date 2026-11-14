@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "design-system-font",
+        "value": "helvetica neue",
+        "createdAt": "2026-11-14T09:17:57.255Z",
+        "reason": "Claude: only a fallback after -apple-system in the macOS system font stack; DESIGN.md body text uses the platform face"
+      }
+    ]
+  }
+}

@@ -71,14 +71,23 @@ function makeCrewScene(host, selectJob, inspectStation) {
   /* Orbit chart */
   const chalk = '#eef0fa',
     sky = group(scene);
+  const EASE = 'cubic-bezier(0.16, 1, 0.3, 1)';
   const STATIONS = ['Intake', 'Fill', 'Verify', 'Dispatch'],
+    ORBITS = [...STATIONS, 'Applied', 'Closed'],
     R = [7.8, 6.2, 4.6, 3.0],
     CORE = 1.9,
     RIM = 8.9;
+  const RADII = [...R, CORE, RIM],
+    TAU = Math.PI * 2;
   disc(sky, -0.04, RIM, clear('#1c2556', 0.6)).renderOrder = -1; // draw the chart's ground before the lines on it
-  const orbitLines = R.map((r) => ring(sky, r, 0.035, 0, clear(chalk, 0.38, 1).clone()));
-  const coreLine = ring(sky, CORE, 0.025, 0, clear(chalk, 0.3, 1).clone());
-  const rimLine = ring(sky, RIM, 0.025, 0, clear(chalk, 0.22, 1).clone());
+  // Lines start invisible and ease to their resting opacity, so the chart draws itself in on first show.
+  function line(r, w, rest) {
+    const o = ring(sky, r, w, 0, clear(chalk, 0.5, 1).clone());
+    o.material.opacity = 0;
+    o.userData.rest = rest;
+    return o;
+  }
+  const lines = [...R.map((r) => line(r, 0.035, 0.38)), line(CORE, 0.025, 0.3), line(RIM, 0.025, 0.22)];
   const spoke = clear(chalk, 0.1, 1);
   for (let a = 0; a < 24; a++) {
     const g = group(sky);
@@ -86,49 +95,114 @@ function makeCrewScene(host, selectJob, inspectStation) {
     box(g, 0, 0, 5.25, 0.014, 0.002, 7.3, spoke).castShadow = false;
   }
   const rnd = (i, s) => (((Math.sin(i * 127.1 + s * 311.7) * 43758.5453) % 1) + 1) % 1;
+  // Four star materials twinkle out of phase.
+  const starMats = [0, 1, 2, 3].map(() => new T.MeshStandardMaterial({ color: '#39437c', roughness: 1, emissive: chalk, emissiveIntensity: 1 }));
   for (let i = 0; i < 260; i++) {
     const sx = rnd(i, 1) * 80 - 40,
       sz = rnd(i, 2) * 80 - 40;
-    if (Math.hypot(sx, sz) > 9.8) ball(sky, sx, -1.2, sz, rnd(i, 3) > 0.85 ? 0.07 : 0.035, mat(chalk, 1)).castShadow = false;
+    if (Math.hypot(sx, sz) > 9.8) ball(sky, sx, -1.2, sz, 0.02 + rnd(i, 3) ** 3 * 0.06, starMats[i % 4]).castShadow = false;
   }
-  ball(sky, 0, 0.25, 0, 0.95, mat('#ffd596', 1));
-  ball(sky, 0, 0.25, 0, 1.35, clear('#ffd596', 0.13, 1)).castShadow = false;
+  const sunMat = mat('#ffd596', 1).clone();
+  ball(sky, 0, 0.25, 0, 0.95, sunMat);
+  // Thin nested shells add up to a soft glow; they breathe slowly and flare when an application reaches Applied.
+  const halos = Array.from({ length: 9 }, (_, i) => {
+    const shell = ball(sky, 0, 0.25, 0, 1.02 + (i / 8) ** 1.5 * 0.95, clear('#ffd596', 0.035, 1));
+    shell.castShadow = shell.receiveShadow = false;
+    return shell;
+  });
   // One spinning group per orbit; idle rotation moves bodies along their orbit, never between orbits.
   const lanes = [...R, CORE, RIM].map(() => group(sky));
   const CENTRE = [-1.6, 2.4, -0.5, 0.35, 2.6, -2.5],
     SPIN = [0.012, 0.03, 0.016, 0.022, 0.04, 0.004];
-  const reticle = ring(sky, 0.74, 0.04, 0, clear(chalk, 1, 1));
+  // Four turning brackets, so the selection never reads as the flat "Ready to approve" ring.
+  const reticle = group(sky);
+  for (let k = 0; k < 4; k++) ring(reticle, 0.92, 0.045, 0, clear(chalk, 1, 1), (k * Math.PI) / 2 + 0.22, Math.PI / 2 - 0.44);
+  reticle.visible = false;
+  const effects = group(sky);
   const hit = clear('#000000', 0);
   const stationTags = STATIONS.map((name, i) => {
     const l = label('station', () => inspectStation(i));
     l.pos.copy(at(1.62, R[i], 0.12)); // a ruler of labels on the right, clear of the busy centre
     l.el.title = `What ${name} does`;
+    l.below = i % 2 === 1; // neighbours alternate above and below the ruler so their pills never overlap
+    // Pointing at a station name lights its orbit.
+    for (const [type, n] of [['pointerenter', i], ['pointerleave', -1], ['focus', i], ['blur', -1]])
+      l.el.addEventListener(type, () => {
+        hoverLane = n;
+        redraw();
+      });
     return l;
   });
   const coreTag = label('station core'),
     rimTag = label('station rim'),
     moreTags = [...R, CORE, RIM].map(() => label('more')),
     focusTag = label('tag'),
+    hoverTag = label('tag hover'),
     emptyTag = label('empty');
-  coreTag.pos.set(0, 1.75, 0);
+  coreTag.pos.set(0, 2.8, 0); // above the far side of the Applied orbit, so it never covers a planet there
   rimTag.pos.copy(at(-2.05, RIM, 0.1));
   emptyTag.el.textContent = 'No applications in this view';
   let bodies = new Map(),
     spinning = [],
-    comet = null;
+    runner = null,
+    fx = [],
+    intro = true,
+    flare = 0,
+    pop = 0,
+    pingIn = 0,
+    hovered = null,
+    hoverLane = -1,
+    selLane = -1;
+  const outCubic = (t) => 1 - (1 - t) ** 3,
+    inOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+  // A timed effect: step(t) runs each frame with t from 0 to 1, then done() removes what it drew.
+  function play(life, step, done, delay = 0) {
+    if (ambient()) fx.push({ life, step, done, age: -delay });
+  }
+  function ripple(parent, color, r0, r1, life, w = 0.1, peak = 0.9, y = 0) {
+    if (!ambient()) return;
+    const m = clear(color, 0.5, 1).clone(), // any opacity below 1 makes the material transparent
+      o = ring(parent, 1, w, y, m);
+    o.visible = false;
+    play(
+      life,
+      (t) => {
+        const s = r0 + (r1 - r0) * outCubic(t);
+        o.visible = true;
+        o.scale.set(s, 1, s);
+        m.opacity = peak * (1 - t) ** 1.5;
+      },
+      () => {
+        o.removeFromParent();
+        m.dispose();
+      },
+    );
+  }
+  // A planet settles after a change: a ring in its tone, and the sun answers when it reaches Applied.
+  function arrive(b, hop) {
+    ripple(b.g, b.row.color, b.size * 1.2, b.size * 3.6, 0.9);
+    if (hop && b.lane === 4) {
+      flare = 1;
+      ripple(sky, '#ffd596', 1.1, RIM, 1.6, 0.014, 0.55, 0.03);
+    }
+  }
 
   function lane(row) {
     return row.group === 'Closed' ? 5 : row.group === 'Applied' ? 4 : row.station;
   }
   function buildOrbit(rows, selected) {
+    // Remember where every planet was so a checkpoint reads as travel, not a jump cut.
+    const live = ambient(),
+      old = new Map();
+    if (live) for (const [id, b] of bodies) old.set(id, { A: Math.atan2(b.pos.x, b.pos.z), R: Math.hypot(b.pos.x, b.pos.z), sig: b.sig, lane: b.lane, s: b.s, size: b.size, color: b.row.color });
     for (const g of lanes) g.clear();
     bodies = new Map();
     spinning = [];
-    comet = null;
+    runner = null;
     const buckets = lanes.map(() => []);
     for (const row of rows) buckets[lane(row)].push(row);
     buckets.forEach((list, i) => {
-      const r = [...R, CORE, RIM][i],
+      const r = RADII[i],
         cap = Math.floor((2 * Math.PI * r) / (i === 5 ? 0.45 : 0.95));
       // Keep the selected body on the chart even when its orbit is full.
       let shown = list.slice(0, cap);
@@ -137,21 +211,52 @@ function makeCrewScene(host, selectJob, inspectStation) {
       const step = Math.min((2 * Math.PI) / Math.max(1, shown.length), i === 5 ? 0.3 : 0.9);
       shown.forEach((row, k) => {
         const a = CENTRE[i] + (k - (shown.length - 1) / 2) * step;
-        bodies.set(row.id, planet(lanes[i], row, at(a, r, 0.25), a, r));
+        bodies.set(row.id, planet(i, row, a, r));
       });
       const more = moreTags[i];
       more.on = list.length > shown.length;
       more.el.textContent = `+${list.length - shown.length} more`;
       more.pos.copy(at(CENTRE[i] + (shown.length / 2 + 0.6) * step, r, 0.1));
     });
-    stationTags.forEach((l, i) => (l.el.innerHTML = `<b>${STATIONS[i]}</b><i>${buckets[i].length}</i>`));
-    coreTag.el.innerHTML = `<b>Applied</b><i>${buckets[4].length}</i>`;
-    rimTag.el.innerHTML = `<b>Closed</b><i>${buckets[5].length}</i>`;
+    [...stationTags, coreTag, rimTag].forEach((l, i) => {
+      const was = l.el.querySelector('i')?.textContent,
+        n = String(buckets[i].length);
+      l.el.innerHTML = `<b>${ORBITS[i]}</b><i>${n}</i>`;
+      // A count that changed blinks once.
+      if (live && was != null && was !== n) l.el.querySelector('i').animate([{ background: 'rgba(255,255,255,.55)', transform: 'scale(1.25)' }, {}], { duration: 500, easing: EASE });
+    });
     rimTag.on = buckets[5].length > 0;
     emptyTag.on = rows.length === 0;
+    if (!live) return;
+    const fresh = [...bodies.keys()].filter((id) => !old.has(id)),
+      crowd = intro || fresh.length > 2;
+    let n = 0;
+    for (const [id, b] of bodies) {
+      const was = old.get(id);
+      if (!was) {
+        // One new application announces itself; a filter change or first show sweeps in quietly.
+        b.s = 0.001;
+        b.wait = crowd ? Math.min(0.5, n++ * 0.035) : 0;
+        b.ping = !crowd;
+        continue;
+      }
+      const hop = was.lane !== b.lane;
+      b.s = was.s;
+      b.from = { A: was.A, R: was.R, t: 0, life: hop ? 1.1 : 0.5, lift: hop ? 0.7 : 0 };
+      if (hop || was.sig !== b.sig) b.land = () => arrive(b, hop);
+    }
+    for (const [id, was] of old) {
+      if (bodies.has(id)) continue;
+      const o = ball(effects, Math.sin(was.A) * was.R, 0.25, Math.cos(was.A) * was.R, was.size, mat(was.color, 0.3));
+      o.castShadow = false;
+      play(0.22, (t) => o.scale.setScalar(Math.max(0.001, was.s * (1 - t))), () => o.removeFromParent());
+    }
+    intro = false;
   }
-  function planet(parent, row, p, a, r) {
-    const g = group(parent, p.x, p.y, p.z),
+  function planet(i, row, a, r) {
+    const parent = lanes[i],
+      p = at(a, r, 0.25),
+      g = group(parent, p.x, p.y, p.z),
       closed = row.group === 'Closed';
     g.userData.job = row.id;
     const hollow = row.sent && !row.receipt && row.group !== 'Applied';
@@ -167,8 +272,15 @@ function makeCrewScene(host, selectJob, inspectStation) {
     } else if (row.ready) ring(g, size * 1.85, 0.045, 0, clear(color, 1, 1));
     // A moon is the employer's receipt: only a recognised confirmation draws it.
     if (row.receipt) ball(g, size + 0.16, 0.08, 0, 0.07, mat(chalk, 0.8));
-    if (row.moving) comet = ring(parent, r, 0.1, 0.25, clear(color, 0.75, 1), a - 0.62, 0.56);
-    return { g, core, row, size };
+    const b = { g, core, row, size, a, r, lane: i, s: 1, wait: 0, pos: p, sig: [i, row.ask, row.ready, hollow, row.receipt, row.moving, color].join() };
+    if (row.moving) {
+      // The comet: a tail that tapers and fades behind the one application being worked on.
+      b.tail = group(parent);
+      b.tail.rotation.y = a;
+      for (let k = 0; k < 8; k++) ring(b.tail, r, 0.12 - k * 0.012, 0.25, clear(color, +(0.85 * (1 - k / 8) ** 1.6).toFixed(2), 1), -0.07 - (k + 1) * 0.085, 0.085);
+      runner = b;
+    }
+    return b;
   }
 
   /* Bar field: three tracks form a window into the sorted, filtered native table. */
@@ -205,7 +317,7 @@ function makeCrewScene(host, selectJob, inspectStation) {
     });
     tracks.push({ row, name, bars, flags, title: null });
   }
-  function buildField(rows, selected) {
+  function buildField(rows, selected, grow) {
     tracks.forEach((track, i) => {
       const job = rows[i];
       track.row.visible = Boolean(job);
@@ -227,11 +339,11 @@ function makeCrewScene(host, selectJob, inspectStation) {
         if (!bin) return;
         const [checked, blocked, omitted] = bin,
           gap = 8.2 / Math.max(9, job.bars.length);
-        const height = 0.07 + checked * 1.1;
-        bar.scale.set(gap * 0.72, height, 1.08);
-        bar.position.set(-2.05 + gap / 2 + k * gap, height / 2 + 0.04, 0);
+        // The frame loop eases each bar to its height; entering the view grows them in a sweep.
+        const u = bar.userData;
+        Object.assign(u, { x: -2.05 + gap / 2 + k * gap, gap, goal: 0.07 + checked * 1.1 });
+        if (grow || u.h == null) Object.assign(u, { h: 0, wait: i * 0.06 + k * 0.018 });
         bar.material = blocked ? mat('#ffb347', 0.35) : mat(checked ? (job.id === selected ? '#ffffff' : '#c3cae6') : omitted ? '#7f89b3' : '#3a4580');
-        flag.position.set(bar.position.x, height + 0.04, 0);
       });
     });
   }
@@ -284,24 +396,33 @@ function makeCrewScene(host, selectJob, inspectStation) {
   for (const b of presetButtons) b.addEventListener('click', () => choose(b.textContent));
 
   function update(next) {
-    const modeChanged = !state || state.field !== next.field;
+    const modeChanged = !state || state.field !== next.field,
+      before = state;
     state = next;
+    host.classList.toggle('still', !ambient());
+    // Changing view dips the canvas so the chart and the Bar field do not cut into each other.
+    if (before && modeChanged && ambient()) canvas.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 320, easing: EASE });
     fieldMode = state.field;
     sky.visible = !fieldMode;
     field.visible = fieldMode;
     if (modeChanged) choose('3D');
     // Rebuild the chart only when the rows change; a new selection only moves the marker and the tag.
     const key = JSON.stringify(state.rows);
-    if (fieldMode) buildField(state.rows, state.selected);
+    if (fieldMode) buildField(state.rows, state.selected, modeChanged);
     else if (modeChanged || key !== built || (state.rows.some((r) => r.id === state.selected) && !bodies.has(state.selected)))
       buildOrbit(state.rows, state.selected);
     built = key;
     const row = state.rows.find((r) => r.id === state.selected);
     document.getElementById('place').hidden = fieldMode || !row;
-    if (row && !fieldMode) {
-      const n = lane(row);
-      document.querySelector('#place h1').textContent = n === 5 ? 'Closed' : n === 4 ? 'Applied' : STATIONS[n];
-      document.querySelector('#place p').textContent = n < 4 ? `Orbit ${n + 1} of 4 · ${row.status}` : row.status;
+    selLane = row && !fieldMode ? lane(row) : -1;
+    if (selLane >= 0) {
+      const title = document.querySelector('#place h1');
+      if (title.textContent !== ORBITS[selLane]) {
+        title.textContent = ORBITS[selLane];
+        if (ambient()) title.animate([{ opacity: 0, transform: 'translateY(8px)' }, {}], { duration: 420, easing: EASE });
+      }
+      // Past the stations the status often repeats the orbit's name; the employer says more.
+      document.querySelector('#place p').textContent = selLane < 4 ? `Orbit ${selLane + 1} of 4 · ${row.status}` : row.status === ORBITS[selLane] ? row.name : row.status;
     }
     focusTag.el.innerHTML = row ? `<b></b><span><i></i></span>` : '';
     if (row) {
@@ -309,11 +430,10 @@ function makeCrewScene(host, selectJob, inspectStation) {
       focusTag.el.querySelector('span').append(row.status);
       focusTag.el.querySelector('i').style.background = row.color;
     }
-    for (const b of bodies.values()) b.g.scale.setScalar(b.row.id === state.selected ? 1.3 : 1);
-    const sel = row && !fieldMode ? lane(row) : -1;
-    orbitLines.forEach((o, i) => (o.material.opacity = sel === i ? 1 : 0.38));
-    coreLine.material.opacity = sel === 4 ? 1 : 0.3;
-    rimLine.material.opacity = sel === 5 ? 0.9 : 0.22;
+    if (before && before.selected !== state.selected) {
+      pop = 1; // the reticle closes in on the new selection
+      if (ambient()) focusTag.el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260, easing: 'ease-out' });
+    }
     redraw();
   }
 
@@ -335,7 +455,15 @@ function makeCrewScene(host, selectJob, inspectStation) {
     canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener('pointermove', (e) => {
-    if (!drag) return void (canvas.style.cursor = state && jobAt(e) ? 'pointer' : 'grab');
+    if (!drag) {
+      const id = (state && jobAt(e)) || null;
+      canvas.style.cursor = id ? 'pointer' : 'grab';
+      if (id !== hovered) {
+        hovered = id;
+        redraw();
+      }
+      return;
+    }
     goal.yaw = clamp(drag.yaw - (e.clientX - drag.x) * 0.005, -1.3, 1.3);
     goal.pitch = clamp(drag.pitch + (e.clientY - drag.y) * 0.004, 0.1, 1.5);
     touched = performance.now();
@@ -347,6 +475,10 @@ function makeCrewScene(host, selectJob, inspectStation) {
     if (id) selectJob(id);
   });
   canvas.addEventListener('pointercancel', () => (drag = null));
+  canvas.addEventListener('pointerleave', () => {
+    hovered = null;
+    redraw();
+  });
   canvas.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     e.preventDefault();
@@ -369,7 +501,8 @@ function makeCrewScene(host, selectJob, inspectStation) {
       depth = fieldMode ? 8 : 2 * RIM + 0.6,
       height = fieldMode ? 2.2 : 2.6;
     const need = Math.max((span * h) / (2 * fw), ((depth * sp + height * cp) * h) / (2 * fh));
-    half = half ? half + (need - half) * 0.2 : need;
+    // The first frame starts slightly wide and settles in.
+    half = half ? half + (need - half) * 0.2 : need * (ambient() ? 1.12 : 1);
     const sy = (1 - ((top + fh / 2) / h) * 2) * half;
     Object.assign(camera, { left: -half * aspect, right: half * aspect, top: half - sy, bottom: -half - sy });
     const turn = yaw + sway;
@@ -390,17 +523,98 @@ function makeCrewScene(host, selectJob, inspectStation) {
     // A slow sway around the chosen angle, held for four seconds after the user turns the chart.
     const sway = move && !drag && now - touched > 4000 ? Math.sin(spin * 0.25) * 0.05 : 0;
     pose(sway);
+    // Everything below eases toward its target; with motion off, k is 1 and each value lands at once.
+    const k = (rate) => (move ? 1 - Math.exp(-rate * dt) : 1);
     lanes.forEach((g, i) => (g.rotation.y = spin * SPIN[i]));
-    for (const o of spinning) o.rotation.y = spin * 1.2;
-    const chosen = state && bodies.get(state.selected);
-    reticle.visible = Boolean(chosen) && !fieldMode;
-    if (chosen) {
-      chosen.g.getWorldPosition(reticle.position);
-      reticle.scale.setScalar(chosen.size / 0.36);
+    for (const o of spinning) {
+      o.rotation.y = spin * 1.2;
+      o.scale.setScalar(1 + Math.sin(spin * 2.4) * 0.05);
+    }
+    for (const [id, b] of bodies) {
+      const th = lanes[b.lane].rotation.y;
+      let A = b.a + th,
+        rr = b.r,
+        lift = 0;
+      if (b.from) {
+        // Travel in polar coordinates, so a checkpoint spirals the planet onto its new orbit.
+        const f = b.from;
+        f.t = move ? Math.min(1, f.t + dt / f.life) : 1;
+        const e = inOut(f.t),
+          d = ((((A - f.A + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
+        A = f.A + d * e;
+        rr = f.R + (b.r - f.R) * e;
+        lift = Math.sin(Math.PI * e) * f.lift;
+        if (f.t >= 1) {
+          b.from = null;
+          if (b.land) b.land();
+          b.land = null;
+        }
+      }
+      b.pos.set(Math.sin(A) * rr, 0.25 + lift, Math.cos(A) * rr);
+      b.g.position.set(Math.sin(A - th) * rr, 0.25 + lift, Math.cos(A - th) * rr);
+      if (b.wait > 0 && move) b.wait -= dt;
+      else {
+        if (b.ping) arrive(b, false);
+        b.ping = false;
+        b.s += ((id === state.selected ? 1.3 : 1) * (id === hovered ? 1.12 : 1) - b.s) * k(14);
+      }
+      b.g.scale.setScalar(b.s);
+      if (b.tail) b.tail.visible = !b.from;
+    }
+    // The application being worked on sends out a slow ping.
+    if (move && runner && !runner.from && (pingIn -= dt) <= 0) {
+      pingIn = 1.8;
+      ripple(runner.g, runner.row.color, runner.size * 1.1, runner.size * 3.2, 1.4, 0.1, 0.7);
+    }
+    fx = fx.filter((f) => {
+      f.age += move ? dt : f.life;
+      if (f.age < 0) return true;
+      const t = Math.min(1, f.age / f.life);
+      f.step(t);
+      if (t >= 1) f.done();
+      return t < 1;
+    });
+    flare += -flare * k(2.2);
+    pop += -pop * k(9);
+    sunMat.emissiveIntensity = 1 + flare * 0.9;
+    halos.forEach((shell, i) => shell.scale.setScalar(1 + (Math.sin(spin * 0.9) * 0.012 + flare * 0.06) * (i + 1)));
+    starMats.forEach((m, i) => (m.emissiveIntensity = 0.65 + 0.35 * Math.sin(spin * (0.7 + i * 0.23) + i * 1.7)));
+    lines.forEach((o, i) => {
+      const goal = fieldMode ? 0 : i === selLane ? (i === 5 ? 0.9 : 1) : o.userData.rest + (i === hoverLane ? 0.34 : 0);
+      o.material.opacity += (goal - o.material.opacity) * k(i === selLane || i === hoverLane ? 12 : 5);
+    });
+    if (fieldMode)
+      for (const track of tracks)
+        track.bars.forEach((bar, n) => {
+          const u = bar.userData;
+          if (!bar.visible) return;
+          if (u.wait > 0 && move) u.wait -= dt;
+          else u.h += (u.goal - u.h) * k(10);
+          const hgt = Math.max(0.001, u.h),
+            flag = track.flags[n];
+          bar.scale.set(u.gap * 0.72, hgt, 1.08);
+          bar.position.set(u.x, hgt / 2 + 0.04, 0);
+          flag.position.set(u.x, hgt + 0.04, 0);
+          flag.scale.setScalar(clamp((u.h / u.goal - 0.6) / 0.4, 0.001, 1));
+        });
+    const chosen = bodies.get(state.selected);
+    if (chosen && !fieldMode) {
+      // The reticle glides from the last selection instead of jumping.
+      if (reticle.visible) reticle.position.lerp(chosen.pos, k(16));
+      else reticle.position.copy(chosen.pos);
+      reticle.scale.setScalar((chosen.size / 0.36) * (1 + pop * 0.7));
+      reticle.rotation.y = spin * 0.35;
       focusTag.pos.copy(reticle.position).setY(reticle.position.y + chosen.size * 1.3 + 0.5);
     }
+    reticle.visible = Boolean(chosen) && !fieldMode;
+    const near = hovered !== state.selected && bodies.get(hovered);
+    hoverTag.on = Boolean(near);
+    if (near) {
+      hoverTag.el.textContent = near.row.name;
+      hoverTag.pos.copy(near.pos).setY(near.pos.y + near.size * 1.3 + 0.3);
+    }
     renderer.render(scene, camera);
-    const labels = [...stationTags, coreTag, rimTag, ...moreTags, emptyTag, focusTag];
+    const labels = [...stationTags, coreTag, rimTag, ...moreTags, emptyTag, hoverTag, focusTag];
     for (const l of labels) {
       const show = !fieldMode && l.on && (l !== focusTag || Boolean(chosen));
       l.el.hidden = !show;
@@ -412,7 +626,7 @@ function makeCrewScene(host, selectJob, inspectStation) {
       v.copy(l.pos);
       if (l.el.classList.contains('more')) lanes[moreTags.indexOf(l)].localToWorld(v);
       v.project(camera);
-      l.el.style.transform = `translate(${(((v.x + 1) / 2) * w).toFixed(1)}px,${(((1 - v.y) / 2) * h).toFixed(1)}px) translate(-50%,-100%)`;
+      l.el.style.transform = `translate(${(((v.x + 1) / 2) * w).toFixed(1)}px,${(((1 - v.y) / 2) * h).toFixed(1)}px) translate(-50%,${l.below ? '6px' : '-100%'})`;
     }
     if (move || Math.abs(goal.yaw - yaw) + Math.abs(goal.pitch - pitch) > 0.001) redraw();
   }

@@ -249,7 +249,8 @@ class Workshop(QWidget):
             caption = (f"Tracks {offset+1}–{offset+len(rows)} of {len(runs)} · Height shows verified share · Flag needs attention"
                        if rows else "Bar field · No matching applications")
         elif viewed:
-            caption = f"{ORBITS[orbit_of(viewed)]}  ·  {viewed['name']}  ·  {viewed['status']}"
+            # "Applied · Kestrel Bio · Applied" says the same thing twice.
+            caption = "  ·  ".join(dict.fromkeys((ORBITS[orbit_of(viewed)], viewed["name"], viewed["status"])))
         else:
             caption = "No applications in this view" if not rows else "Intake  /  Fill  /  Verify  /  Dispatch  /  Applied"
         self.caption.setText(caption)

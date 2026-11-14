@@ -3,9 +3,9 @@ from functools import lru_cache
 from pathlib import Path
 from string import Template
 
-from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QEasingCurve, QPointF, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QPen, QPixmap, QShortcut
-from PySide6.QtWidgets import QFormLayout, QFrame, QHBoxLayout, QLabel, QPushButton, QStyledItemDelegate, QToolButton, QTreeWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFormLayout, QGraphicsOpacityEffect, QFrame, QHBoxLayout, QLabel, QPushButton, QStyledItemDelegate, QToolButton, QTreeWidget, QVBoxLayout, QWidget
 
 LIGHT = {
     "bg": "#eef0f6", "surface": "#fbfcff", "surface2": "#e2e6f1", "border": "#b3bad2",
@@ -219,11 +219,16 @@ class MessageBar(QLabel):
         self.setWordWrap(True)
         self.hide()
         self._timer = QTimer(self, singleShot=True, interval=6000, timeout=self.hide)
+        # A new message fades in so it is noticed without a jump.
+        self.setGraphicsEffect(QGraphicsOpacityEffect(self))
+        self._fade = QPropertyAnimation(self.graphicsEffect(), b"opacity", self, duration=220, startValue=0.0, endValue=1.0,
+                                        easingCurve=QEasingCurve.OutCubic)
 
     def notify(self, text, tone="info"):
         self.setText(text)
         restyle(self, tone=tone)
         self.setVisible(bool(text))
+        self._fade.start()
         self._timer.stop()
         if tone in {"info", "success"}:
             self._timer.start()
