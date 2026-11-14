@@ -72,3 +72,20 @@ def test_engine_migration_runs_once_and_resets_only_unsubmitted_checks(store):
     assert restored.submission_attempted and restored.browser == 'firefox'
     assert store.get_run(submitted.id).fields == {'old': field}
     assert [e['kind'] for e in store.events(pending.id)] == ['old_event', 'engine_migration']
+
+
+def test_stop_report_groups_reasons_by_site_and_counts_runs_not_events(store):
+    from tools.stops import stops
+    stuck, done = ApplicationRun(job_url=URL), ApplicationRun(job_url=URL)
+    other = ApplicationRun(job_url='https://careers.example.test/apply/1')
+    for run in (stuck, done, other):
+        store.save_run(run)
+    for _ in range(2):  # the same stop after a resume is still one run
+        store.record_event(stuck.id, 'answer', 'Workday:0cbd052d2e', 'No value will be guessed. [Visa status]')
+    store.record_event(stuck.id, 'browser', 'Workday:0cbd052d2e', 'Paused by you. Resume when ready.')
+    store.record_event(done.id, 'ready_for_review', 'Workday:ffe52ed68d')
+    store.record_event(other.id, 'failed', 'start', 'TimeoutError')
+    report = stops(store.path)
+    assert (report['Workday']['runs'], report['Workday']['reviewed']) == (2, 1)
+    assert report['Workday']['reasons'] == {('answer', 'Workday', 'No value will be guessed. [Visa status]'): 1}
+    assert report['careers.example.test']['reasons'] == {('failed', 'start', 'TimeoutError'): 1}

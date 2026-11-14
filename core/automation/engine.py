@@ -75,7 +75,8 @@ class ApplicationEngine:
             request.field_key, request.question = field.key, question_for(field, run.profile_snapshot or ApplicantProfile())
             request.required, request.options, request.field_kind = field.required, field.options, field.kind
         run.interventions.append(request)
-        self.store.record_event(run.id, kind, run.stage, message)
+        # The question (never its value) goes in the log, so tools/stops.py can say which field stopped the run.
+        self.store.record_event(run.id, kind, run.stage, f'{message} [{request.question}]' if request.question else message)
         self.checkpoint(run)
 
     async def start(self, run, profile, bridge, credential=None):

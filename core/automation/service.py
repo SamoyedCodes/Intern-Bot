@@ -129,6 +129,7 @@ class AutomationService(QObject):
         except Exception as exc:
             run.status = "failed"
             run.interventions = [InterventionRequest(kind="browser", message=f"Could not open the application ({type(exc).__name__}). Check the URL, browser and profile lock, then retry.")]
+            self.store.record_event(run.id, "failed", run.stage, type(exc).__name__)
             self.store.save_run(run)
         finally:
             self.busy = False

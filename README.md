@@ -166,6 +166,7 @@ Tests:
 .venv/bin/python -m pytest -q                   # everything
 .venv/bin/python -m pytest -q -m "not browser"  # unit tier without Chromium, about a second
 PYTHONPATH=. .venv/bin/python tools/benchmark_adapters.py --output /tmp/intern-bot-benchmark.json
+PYTHONPATH=. .venv/bin/python tools/stops.py    # per site: how many runs reached review, and where the rest stopped
 ```
 
 Tests run the real adapter functions against fictional forms with intercepted network requests.
