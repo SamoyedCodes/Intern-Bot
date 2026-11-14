@@ -145,7 +145,8 @@ def stable_application_url(url: str) -> str:
         stable = {k: query[k] for k in ("company", "career_job_req_id") if k in query}
         if 'career_job_req_id' in stable:
             stable['career_ns'] = 'job_listing'
-        return p._replace(query=urlencode(stable), fragment="").geturl()
+        # /portalcareer needs the session's _s.crb token once signed in (Synapxe answers "not authorized"); /career adds it.
+        return p._replace(path='/career' if p.path == '/portalcareer' else p.path, query=urlencode(stable), fragment="").geturl()
     return url
 
 

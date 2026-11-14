@@ -1,6 +1,6 @@
 import pytest
 
-from core.automation.models import ApplicantProfile, ats_name, canonical_url, employer_key, job_identity
+from core.automation.models import ApplicantProfile, ats_name, canonical_url, employer_key, job_identity, stable_application_url
 
 
 @pytest.mark.parametrize('legacy', [True, False, None])
@@ -25,6 +25,12 @@ def test_eligibility_and_citizenship_survive_json_export_and_import(choice):
 ])
 def test_canonical_url_preserves_application_query_and_fragment(url):
     assert canonical_url(url) == url
+
+
+@pytest.mark.parametrize('path', ['/portalcareer', '/career'])
+def test_successfactors_resume_url_reenters_through_career_without_session_tokens(path):
+    url = f'https://career44.sapsf.com{path}?company=fictional&career_job_req_id=42&career_ns=job_application&_s.crb=secret#apply'
+    assert stable_application_url(url) == 'https://career44.sapsf.com/career?company=fictional&career_job_req_id=42&career_ns=job_listing'
 
 
 @pytest.mark.parametrize('url', [
