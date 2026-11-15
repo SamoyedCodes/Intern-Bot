@@ -3,9 +3,9 @@ from functools import lru_cache
 from pathlib import Path
 from string import Template
 
-from PySide6.QtCore import QEasingCurve, QPointF, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPalette, QPen, QPixmap, QShortcut
-from PySide6.QtWidgets import QFormLayout, QGraphicsOpacityEffect, QFrame, QHBoxLayout, QLabel, QPushButton, QStyledItemDelegate, QToolButton, QTreeWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFormLayout, QGraphicsOpacityEffect, QFrame, QHBoxLayout, QLabel, QLayout, QPushButton, QStyledItemDelegate, QToolButton, QTreeWidget, QVBoxLayout, QWidget
 
 LIGHT = {
     "bg": "#eef0f6", "surface": "#fbfcff", "surface2": "#e2e6f1", "border": "#b3bad2",
@@ -79,6 +79,60 @@ def restyle(widget, **properties):
         widget.setProperty(name, value)
     widget.style().unpolish(widget)
     widget.style().polish(widget)
+
+
+class FlowLayout(QLayout):
+    """Lay widgets out left to right and wrap onto further rows, so a narrow column never squeezes them."""
+
+    def __init__(self, parent=None, spacing=6):
+        super().__init__(parent)
+        self._items = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(spacing)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._place(QRect(0, 0, width, 0), False)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._place(rect, True)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        return size
+
+    def _place(self, rect, apply):
+        items = [item for item in self._items if not item.isEmpty()]
+        height = max((item.sizeHint().height() for item in items), default=0)
+        x, y = rect.x(), rect.y()
+        for item in items:
+            width = min(item.sizeHint().width(), rect.width())
+            if x > rect.x() and x + width > rect.x() + rect.width():
+                x, y = rect.x(), y + height + self.spacing()
+            if apply:
+                item.setGeometry(QRect(QPoint(x, y), QSize(width, height)))
+            x += width + self.spacing()
+        return y + height - rect.y()
 
 
 def button(text, slot=None, variant="secondary", tip=""):

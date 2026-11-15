@@ -839,6 +839,10 @@ def test_bulk_selection_tracks_ids_and_only_acts_on_eligible_tasks(window, monke
     assert [b.text() for b in view.bulk_buttons.values()] == [
         'Retry failed (2)', 'Restart from beginning (3)…', 'Cancel tasks (1)', 'Delete tasks (4)…']
     assert window.width() == 1040
+    # The narrow side column wraps the actions onto more rows instead of clipping their labels.
+    bar_buttons = view.bulk_bar.findChildren(QPushButton)
+    assert all(b.width() >= b.sizeHint().width() and b.geometry().right() <= view.bulk_bar.width() for b in bar_buttons)
+    assert len({b.y() for b in bar_buttons}) > 1
     view.table.sortByColumn(1, Qt.AscendingOrder)
     view.render()
     view.table.setCurrentCell(0, 0)

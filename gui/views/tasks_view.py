@@ -19,7 +19,7 @@ from core.automation.review import review_values
 from core.automation.service import AutomationService
 from core.storage.local_store import LocalStore
 from core.tracker import PIPELINE, activity, export_csv, import_csv
-from gui.theme import DARK, TOKENS, form_layout, MessageBar, button, card, dot_icon, label, more_button, restyle, shortcut, station_heading
+from gui.theme import DARK, TOKENS, form_layout, FlowLayout, MessageBar, button, card, dot_icon, label, more_button, restyle, shortcut, station_heading
 from gui.workshop import Workshop
 from gui.views.application_dialogs import ProfileDialog, RecipeReviewDialog, ReviewDialog, RunDetailsDialog
 
@@ -451,9 +451,7 @@ class TasksView(QWidget):
     def _build_bulk_bar(self):
         self.bulk_bar = QWidget()
         self.bulk_bar.setObjectName("bulkBar")
-        row = QHBoxLayout(self.bulk_bar)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(6)
+        row = FlowLayout(self.bulk_bar)  # the side column is far narrower than the four actions in one row
         self.selection_count = QLabel()
         row.addWidget(self.selection_count)
         self.bulk_buttons = {}
@@ -462,7 +460,6 @@ class TasksView(QWidget):
                          "danger" if action == "delete" else "secondary")
             self.bulk_buttons[action] = btn
             row.addWidget(btn)
-        row.addStretch()
         row.addWidget(button("Clear selection", lambda: self.check_visible(False), "ghost"))
         return self.bulk_bar
 
