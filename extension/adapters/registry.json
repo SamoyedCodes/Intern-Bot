@@ -11,6 +11,7 @@
     "name": "InternSG",
     "pattern": [
       "^https://www\\.internsg\\.com/(job|job-apply)/"
-    ]
+    ],
+    "receipt": "Application submitted successfully!"
   }
 ]

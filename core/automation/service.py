@@ -8,9 +8,9 @@ from urllib.parse import parse_qs, urlsplit
 
 from PySide6.QtCore import QObject, Signal
 
-from core.automation.engine import ApplicationEngine
+from core.automation.engine import ApplicationEngine, receipt_shown
 from core.automation.extension_bridge import ExtensionBridge
-from core.automation.models import InterventionRequest, ats_name, canonical_url, application_scope, job_identity, site_key, stable_application_url
+from core.automation.models import InterventionRequest, now, ats_name, canonical_url, application_scope, job_identity, site_key, stable_application_url
 from core.automation.journey import ApplicationJourney
 from core.automation.recipes import OBSERVE, TEACH, recipe_for, save_recipe
 from core.automation.request_engine import RequestEngine
@@ -141,6 +141,9 @@ class AutomationService(QObject):
             self.finished.emit(run.model_copy(deep=True))
             if run.status == 'needs_input' and any(i.kind == 'activation' or i.field_key == 'account-challenge' for i in run.interventions) and run.id in self.sessions:
                 self.verification_watchers[run.id] = asyncio.create_task(self.watch_verification(run.id))
+            key = run.id + ':receipt'
+            if run.id in self.sessions and not run.is_submitted and (key not in self.verification_watchers or self.verification_watchers[key].done()):
+                self.verification_watchers[key] = asyncio.create_task(self.watch_submission(run.id))
 
     async def watch_verification(self, run_id):
         """Only observe: all writes and vault access resume through the normal single-run scheduler."""
@@ -164,6 +167,29 @@ class AutomationService(QObject):
                     return
         except (asyncio.CancelledError, Exception):
             return  # A closed browser or changed document leaves the explicit Continue action available.
+
+    async def watch_submission(self, run_id):
+        """Only observe: once you submit the form yourself in Chromium (a CAPTCHA only you can pass), the site's own
+        confirmation page marks the application as submitted by you. Ends with the run's browser session."""
+        while run_id in self.sessions:
+            await asyncio.sleep(2)
+            if self.active_id == run_id:
+                continue  # The engine confirms its own send.
+            bridge = self.sessions.get(run_id, (None, None))[1]
+            page = getattr(bridge, 'journey', None) and bridge.journey.page or bridge.page
+            run = self.store.get_run(run_id)
+            if not run or run.is_submitted or run.status == 'cancelled' or page.is_closed():
+                return
+            try:
+                shown = await receipt_shown(page, page.url, recipe_for(self.store, run.job_url))
+            except Exception:
+                continue  # The page is navigating (your Submit just posted the form); look again.
+            if shown:
+                run.submitted_by_user, run.submitted_at, run.pipeline, run.interventions = True, run.submitted_at or now(), 'applied', []
+                self.store.record_event(run.id, 'submitted_by_user', run.stage, "The site showed its confirmation after you submitted in Chromium.")
+                self.store.save_run(run)
+                self.progress.emit(run)
+                return
 
     async def open_job(self, run, page):
         """Open the run's link. A careers-page listing is followed to one clear Apply destination on a supported

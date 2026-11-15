@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import asyncio
 import pytest
 
 from core.automation.engine import ApplicationEngine
@@ -81,7 +82,7 @@ async def test_a_retry_follows_the_apply_link_a_failed_opening_never_reached(fre
     run.status = 'failed'
     signal = SimpleNamespace(emit=lambda *_: None)
     service.__dict__.update(sessions={run.id: (None, bridge)}, engines={}, verification_watchers={}, progress=signal, finished=signal,
-                            _stop_request=False, open_job=lambda run, page: AutomationService.open_job(service, run, page))
+                            _stop_request=False, watch_submission=lambda run_id: asyncio.sleep(0), open_job=lambda run, page: AutomationService.open_job(service, run, page))
     await AutomationService._run(service, run, profile_for('sap-successfactors'), None)
     assert 'career44.sapsf.com' in run.job_url and run.listing_url == LISTING
 

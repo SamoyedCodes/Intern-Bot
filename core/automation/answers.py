@@ -53,6 +53,7 @@ ALIASES = {
     "portfolio": "portfolio_url", "personal website": "portfolio_url",
     "mobile phone": "phone", "mobile number": "phone", "phone number (with country code)": "phone", "preferred pronouns": "pronouns",
     "resume / cv": "resume_path",
+    "executive summary of your resume": "summary", "summary": "summary",
     "gender": "gender", "race/ethnicity": "race_ethnicity",
     "veteran status": "veteran_status", "disability status": "disability_status",
 }

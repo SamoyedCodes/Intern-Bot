@@ -277,14 +277,39 @@ async def test_auto_advance_submits_only_when_the_review_matches(context, store,
 
 
 async def test_an_unticked_captcha_is_asked_for_before_anything_is_sent(context, store):
+    from core.automation.engine import CAPTCHA_SEND
     captcha = '<div class="g-recaptcha">I\'m not a robot<textarea name="g-recaptcha-response" hidden></textarea></div>'
     page = await open_fixture(context, 'greenhouse', greenhouse(extra=captcha))
-    run = await apply_and_send(store, page, ApplicationRun(job_url=page.url))
+    run = await apply(store, page, ApplicationRun(job_url=page.url))
+    # Ready to approve, with a note that says how a CAPTCHA form gets sent.
+    assert run.status == 'ready_for_review' and [i.message for i in run.interventions] == [CAPTCHA_SEND]
+    run.approved_review = review_values(run)  # Approve & send without ticking it.
+    run = await apply(store, page, run)
     assert run.status == 'needs_input' and not run.submission_attempted and 'CAPTCHA' in run.interventions[0].message
     assert not await page.evaluate('window.submissions')
     await page.locator('[name=g-recaptcha-response]').evaluate("e => e.value = 'solved-fixture-token'")
     run = await apply_and_send(store, page, run)  # An approval is good for one attempt, so the resumed run is approved again.
     assert run.submission_confirmed and await page.evaluate('window.submissions') == 1
+
+
+async def test_a_form_you_submit_yourself_is_recorded_from_the_sites_confirmation(context, store):
+    from types import SimpleNamespace
+    from core.automation.engine import receipt_shown
+    from core.automation.service import AutomationService
+    form = (FIXTURES / 'internsg.html').read_text()
+    page = await open_fixture(context, 'internsg', form)
+    assert not await receipt_shown(page, page.url)
+    run = ApplicationRun(job_url=page.url, status='ready_for_review')
+    store.save_run(run)
+    seen = []
+    service = SimpleNamespace(sessions={run.id: (None, SimpleNamespace(page=page))}, active_id=None, store=store, progress=SimpleNamespace(emit=seen.append))
+    # You tick the CAPTCHA and press Submit: the site answers with its confirmation page.
+    await page.unroute('**/*')
+    await page.route('**/*', lambda route: route.fulfill(body='<h1>Apply For Job</h1><div>Application submitted successfully!</div><div>An email will be send to you for your record.</div>', content_type='text/html'))
+    await page.reload()
+    await AutomationService.watch_submission(service, run.id)
+    saved = store.get_run(run.id)
+    assert saved.submitted_by_user and saved.pipeline == 'applied' and saved.submitted_at and seen
 
 
 async def test_immediate_preclick_recheck_blocks_a_changed_form(context, store):

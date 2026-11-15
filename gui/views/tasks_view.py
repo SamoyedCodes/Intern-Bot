@@ -1165,6 +1165,9 @@ class TasksView(QWidget):
         for index, previous in enumerate(self.tasks):
             if previous.id == run.id:
                 self.tasks[index] = run
+                # Seen submitted in Chromium: the stage box must show Applied, or saving a note would put it back to Saved.
+                if run.id == self._shown_id and run.pipeline != previous.pipeline:
+                    self.load_tracking(run)
                 break
         self.render()
 

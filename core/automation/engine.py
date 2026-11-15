@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 from core.automation.answers import UNANSWERED, applicable, asks, canonical, field_value, linked, names_row, profile_rows, question_for, resolve
 from core.automation.assistant import ai_config, askable, autofill, matchable, pointer_only
-from core.automation.models import CHECKING_LOGIN, CREATING_ACCOUNT, SAVING_LOGIN, SIGNING_IN, CHOICE_KINDS, ApplicantProfile, ApprovedAnswer, FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url, account_context, application_scope, same_choice, same_choices
+from core.automation.models import ADAPTER_REGISTRY, CHECKING_LOGIN, CREATING_ACCOUNT, SAVING_LOGIN, SIGNING_IN, CHOICE_KINDS, ApplicantProfile, ApprovedAnswer, FieldAssessment, InterventionRequest, normalized, now, employer_key, canonical_url, account_context, application_scope, same_choice, same_choices
 from core.automation.accounts import login_address
 from core.automation.journey import ApplicationJourney
 from pathlib import Path
@@ -26,6 +26,27 @@ ACTIVATION_HANDOFF = "Check {} for the employer's verification email and open it
 # A checkbox challenge inside the form (InternSG's reCAPTCHA) that only a person can tick; invisible ones need nothing.
 UNSOLVED_CAPTCHA = """() => [...document.querySelectorAll('.g-recaptcha,.h-captcha,.cf-turnstile')].some(c =>
   c.getClientRects().length && c.dataset.size !== 'invisible' && !c.querySelector('textarea,input')?.value)"""
+RECEIPTS = {'application submitted', 'your application has been submitted', 'thank you for applying', 'your application has been received'}
+
+
+async def receipt_shown(page, url, recipe=None):
+    """Whether the application site's own page shows its confirmation. Read-only: the engine uses it after a send, and the
+    desktop while you submit a form yourself in Chromium (a CAPTCHA only you can pass)."""
+    from urllib.parse import urlsplit
+    host = urlsplit(url).hostname
+    frames = [frame for frame in page.frames if urlsplit(frame.url).scheme == 'https' and urlsplit(frame.url).hostname == host]
+    if len(frames) != 1:
+        return False
+    known = RECEIPTS | ({normalized(recipe.receipt)} if recipe and recipe.receipt else set())
+    for receipt in await frames[0].locator('[data-automation-id="applicationSubmitted"],#application_confirmation,.application-confirmation,.ashby-application-form-success-message,.thanks,h1,h2,[role=status]').all():
+        if await receipt.is_visible() and normalized(await receipt.inner_text()) in known:
+            return True
+    # A hand-written adapter names its confirmation line (registry.json "receipt"), whatever element the site renders it in.
+    line = next((a['receipt'] for a in ADAPTER_REGISTRY if a.get('receipt') and re.search(a['pattern'][0], frames[0].url)), '')
+    return bool(line) and normalized(line) in normalized(await frames[0].inner_text('body'))
+
+
+CAPTCHA_SEND = "This form ends in a CAPTCHA only you can tick. Tick it and press Submit in Chromium: Intern-Bot marks the application sent when the site confirms it."
 TYPED_KINDS = {'text', 'textarea', 'spinbutton', 'tel', 'email', 'url', 'number', 'date'}
 REJECTED_ACCOUNT = "The employer didn't accept the new account. It may already exist: sign in or reset the password in Chromium, save that login under Profile → Employer accounts, then resume."
 
@@ -348,6 +369,9 @@ class ApplicationEngine:
                         message = f'Changed since you approved it: {", ".join(changed[:5])}{" and more" if len(changed) > 5 else ""}. Review the application again before sending.'
                         run.interventions = [InterventionRequest(kind='validation', message=message)]
                         self.store.record_event(run.id, 'approval_invalidated', run.stage, message)
+                    if not run.approved_review and not changed and await bridge.page.evaluate(UNSOLVED_CAPTCHA):
+                        # Still ready to approve; this only says how a CAPTCHA form gets sent.
+                        run.interventions = [InterventionRequest(kind='validation', message=CAPTCHA_SEND)]
                     self.checkpoint(run)
                     if run.approved_review and not self._pause and not self._cancel:
                         unconfirmed = self.unconfirmed(run)
@@ -995,16 +1019,7 @@ class ApplicationEngine:
     async def confirm_submission(self, run):
         # Confirmation is read-only and deliberately separate from vendor saved-application events.
         for _ in range(self.RECEIPT_POLLS):
-            from urllib.parse import urlsplit
-            expected = urlsplit(self.bridge.binding['url'] if self.bridge.binding else run.job_url)
-            frames = [frame for frame in self.bridge.page.frames if urlsplit(frame.url).scheme == 'https' and urlsplit(frame.url).hostname == expected.hostname]
-            received = False
-            if len(frames) == 1:
-                receipts = frames[0].locator('[data-automation-id="applicationSubmitted"],#application_confirmation,.application-confirmation,.ashby-application-form-success-message,.thanks,h1,h2,[role=status]')
-                for receipt in await receipts.all():
-                    if await receipt.is_visible() and normalized(await receipt.inner_text()) in {'application submitted','your application has been submitted','thank you for applying','your application has been received', *([normalized(self.recipe.receipt)] if self.recipe and self.recipe.receipt else [])}:
-                        received = True
-                        break
+            received = await receipt_shown(self.bridge.page, self.bridge.binding['url'] if self.bridge.binding else run.job_url, self.recipe)
             if received:
                 run.submission_confirmed = True
                 run.submitted_at = run.submitted_at or now()
