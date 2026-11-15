@@ -50,6 +50,8 @@ class AsyncPlaywrightManager:
                 **({"viewport": {"width": 1280, "height": 800}} if self.headless else {"no_viewport": True}),
             )
             self.context.set_default_timeout(5000)
+            # Page loads get longer: a careers site's first load in a new profile can pass 5 s (KPMG's did), failing the run.
+            self.context.set_default_navigation_timeout(30000)
             saved = directory / "session-cookies.json"
             if saved.exists():
                 await self.context.add_cookies(json.loads(saved.read_text()))

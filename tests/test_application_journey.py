@@ -75,6 +75,17 @@ async def test_initial_listing_redirect_is_discovered_without_a_hostname_error(f
     assert run.listing_url == LISTING and 'requestParams' not in run.job_url
 
 
+async def test_a_retry_follows_the_apply_link_a_failed_opening_never_reached(fresh_context, store):
+    run, journey, bridge, service = await journey_fixture(fresh_context, store, f'<a href="{SAP}">Apply now</a>')
+    await bridge.page.goto(LISTING)  # The first opening timed out with the tab on the listing.
+    run.status = 'failed'
+    signal = SimpleNamespace(emit=lambda *_: None)
+    service.__dict__.update(sessions={run.id: (None, bridge)}, engines={}, verification_watchers={}, progress=signal, finished=signal,
+                            _stop_request=False, open_job=lambda run, page: AutomationService.open_job(service, run, page))
+    await AutomationService._run(service, run, profile_for('sap-successfactors'), None)
+    assert 'career44.sapsf.com' in run.job_url and run.listing_url == LISTING
+
+
 @pytest.mark.parametrize('destination', ['https://unrelated.example.test/signup', SAP.replace('company=fictional', 'company=other')])
 async def test_unrelated_navigation_is_readable_but_never_receives_credentials(fresh_context, store, vault, destination):
     run, journey, bridge, service = await journey_fixture(fresh_context, store, f'<a href="{SAP}">Apply now</a>')

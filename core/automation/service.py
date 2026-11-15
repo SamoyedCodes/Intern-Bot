@@ -104,7 +104,9 @@ class AutomationService(QObject):
                 # Starting over must leave the old draft even on the same employer site.
                 fresh = run.status == "queued" and run.stage == "start"
                 replaced = not run.fields and not adapter.journey.permits(adapter.page.url)
-                if (fresh or replaced) and not run.submission_attempted and not inspect_only:
+                # A listing whose Apply link was never followed (its first opening failed) is followed again, not scanned for a form.
+                unfollowed = run.stage == "start" and not run.fields and not ats_name(run.job_url) and job_identity(adapter.page.url) == job_identity(run.job_url)
+                if (fresh or replaced or unfollowed) and not run.submission_attempted and not inspect_only:
                     adapter.journey.scopes = {application_scope(run.job_url)}
                     if run.listing_url:
                         adapter.journey.scopes.add(application_scope(run.listing_url))
