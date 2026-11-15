@@ -23,6 +23,9 @@ ENGINE_VERSION = 'speedyapply-local-2.28.0-v2'
 SIGN_IN_HANDOFF = 'Complete employer sign-in or activation in Chromium, then resume. Saved credentials remain in 1Password; an existing authentication attempt will not be repeated.'
 ACTIVATION_HANDOFF = "Check {} for the employer's verification email and open its link, then choose Continue after verification."
 # Controls the desktop may retype with real keystrokes when the form shows the approved value but rejected it.
+# A checkbox challenge inside the form (InternSG's reCAPTCHA) that only a person can tick; invisible ones need nothing.
+UNSOLVED_CAPTCHA = """() => [...document.querySelectorAll('.g-recaptcha,.h-captcha,.cf-turnstile')].some(c =>
+  c.getClientRects().length && c.dataset.size !== 'invisible' && !c.querySelector('textarea,input')?.value)"""
 TYPED_KINDS = {'text', 'textarea', 'spinbutton', 'tel', 'email', 'url', 'number', 'date'}
 REJECTED_ACCOUNT = "The employer didn't accept the new account. It may already exist: sign in or reset the password in Chromium, save that login under Profile → Employer accounts, then resume."
 
@@ -354,6 +357,10 @@ class ApplicationEngine:
                         if config['recipe'] and not self.recipe.receipt:
                             # Without a known confirmation page a send could never be confirmed, so it isn't attempted.
                             self.intervene(run, "This site's recipe doesn't know its confirmation page yet. Submit it yourself in Chromium, then press I submitted it.", 'validation')
+                            return run
+                        if await bridge.page.evaluate(UNSOLVED_CAPTCHA):
+                            # A send the site refuses would be recorded as attempted, and it is never repeated.
+                            self.intervene(run, "Tick the CAPTCHA beside Submit in Chromium, then resume and approve the review again. Ticking it just before you approve skips this stop.", 'verification')
                             return run
                         run.submission_attempted = True
                         self.checkpoint(run)

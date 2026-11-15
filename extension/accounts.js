@@ -29,13 +29,14 @@
     const signed_in=[...document.querySelectorAll('a,button,[role=button]')].some(e=>visible(e)&&/^(sign out|log out|logout)$/i.test(caption(e)));
     const captchaSolved=[...document.querySelectorAll('[name=g-recaptcha-response],[name=h-captcha-response],[name=cf-turnstile-response]')].some(e=>!!e.value.trim());
     const captcha=!captchaSolved&&[...document.querySelectorAll('iframe[src*="recaptcha"],iframe[src*="hcaptcha"],iframe[src*="challenges.cloudflare.com"]')].some(e=>visible(e)&&!/[?&]size=invisible/.test(e.src));
-    const challenge=captcha||[...document.querySelectorAll('input[autocomplete=one-time-code],input[name*=otp i]')].some(visible);
+    const fillable=[...document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]),select,textarea,[role=combobox],[role=radio],[role=checkbox],button[aria-pressed]')].filter(visible).length;
+    // A CAPTCHA beside the Submit of an application form with no password (InternSG) is not a sign-in step; the desktop asks for it before sending.
+    const challenge=captcha&&(passwords.length>0||fillable<3)||[...document.querySelectorAll('input[autocomplete=one-time-code],input[name*=otp i]')].some(visible);
     if(challenge)return {page:'challenge',signed_in:false,form_error:error};
     if(!passwords.length){
       if([...document.querySelectorAll('button,a')].filter(e=>visible(e)&&/^sign in with email$/i.test(caption(e))).length===1)return {page:'email_choice',signed_in:false,form_error:error};
       // An application form can say "Background checks may include verification" (seen on Ashby); a check-your-email page has next to nothing to fill.
       // ponytail: "at most a search box and a language picker" stands in for "not a form"; a verification page with a form on it would need its own signal.
-      const fillable=[...document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]),select,textarea,[role=combobox],[role=radio],[role=checkbox],button[aria-pressed]')].filter(visible).length;
       if(fillable<3&&/(?:check|sent|send|verify|confirm|activate)[\s\S]{0,100}(?:verification|activation|verify your|confirm your|email address)|(?:verification|activation) (?:email|code)|verify your (?:email|account)/i.test(body))
         return {page:'verification',signed_in:false,form_error:error};
       if(/account (?:has been |was |is )?(?:successfully )?created|registration (?:is )?(?:successful|complete)/i.test(body))

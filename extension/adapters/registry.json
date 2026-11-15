@@ -5,5 +5,12 @@
     "pattern": [
       "^https://careers\\.monee\\.com/(job-detail|apply)\\?"
     ]
+  },
+  {
+    "id": "internsg",
+    "name": "InternSG",
+    "pattern": [
+      "^https://www\\.internsg\\.com/(job|job-apply)/"
+    ]
   }
 ]

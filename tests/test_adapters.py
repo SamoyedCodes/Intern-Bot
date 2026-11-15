@@ -46,6 +46,7 @@ CONTROLS = {
     'phenom': '<button type="button" class="btn-submit">Submit Application</button>',
     'dayforce': '<button type="button" test-id="application-next-step">Next</button>',
     'monee': None,
+    'internsg': None,
 }
 # These vendor branches hand continuation to the user instead of offering an action.
 HANDOFF_SITES = {'sap-successfactors', 'jazzhr', 'freshteam', 'pinpoint'}

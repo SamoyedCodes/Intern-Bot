@@ -276,6 +276,17 @@ async def test_auto_advance_submits_only_when_the_review_matches(context, store,
     assert await page.evaluate('window.submissions') == int(submitted)
 
 
+async def test_an_unticked_captcha_is_asked_for_before_anything_is_sent(context, store):
+    captcha = '<div class="g-recaptcha">I\'m not a robot<textarea name="g-recaptcha-response" hidden></textarea></div>'
+    page = await open_fixture(context, 'greenhouse', greenhouse(extra=captcha))
+    run = await apply_and_send(store, page, ApplicationRun(job_url=page.url))
+    assert run.status == 'needs_input' and not run.submission_attempted and 'CAPTCHA' in run.interventions[0].message
+    assert not await page.evaluate('window.submissions')
+    await page.locator('[name=g-recaptcha-response]').evaluate("e => e.value = 'solved-fixture-token'")
+    run = await apply_and_send(store, page, run)  # An approval is good for one attempt, so the resumed run is approved again.
+    assert run.submission_confirmed and await page.evaluate('window.submissions') == 1
+
+
 async def test_immediate_preclick_recheck_blocks_a_changed_form(context, store):
     page = await open_fixture(context, 'greenhouse', greenhouse())
     run = ApplicationRun(job_url=page.url)
