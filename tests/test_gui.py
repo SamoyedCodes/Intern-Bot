@@ -1004,3 +1004,12 @@ def test_organising_groups_answers_and_applies_only_the_ticked_changes(window, m
     assert not bank.remove_btn.isEnabled()  # A heading is not an answer.
     bank.tree.setCurrentItem(headings[0].child(0))
     assert bank.remove_btn.isEnabled() and headings[0].child(0).childCount() == 1
+
+
+@pytest.mark.parametrize('url, expected', [
+    ('https://careers.cpf.gov.sg/job/2027-H1-Term-time-Internship-Data-Science-Intern/1711-en_GB/', 'looks like SAP SuccessFactors'),
+    ('https://career44.sapsf.com/career?company=CPFBoard&career_job_req_id=1711', 'SAP SuccessFactors · supported'),
+    ('https://example.test/careers/job/123', 'Unrecognized site'),
+])
+def test_the_new_application_dialog_names_the_platform_behind_an_employer_careers_page(window, url, expected):
+    assert expected in TaskDialog(window.tasks_view, url).detected.text()

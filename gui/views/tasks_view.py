@@ -1,4 +1,5 @@
 """Applications workspace: one list, one detail panel, one sequential queue."""
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -221,7 +222,11 @@ class TaskDialog(QDialog):
             try:
                 canonical_url(text, supported_only=False)
                 name = ats_name(text)
+                # SuccessFactors career sites live on the employer's own domain (careers.cpf.gov.sg/job/<title>/<id>-en_GB/);
+                # their Apply button leads to sapsf.com, which is where the platform is confirmed.
                 tone, message = ("success", f"{name} · supported") if name else (
+                    "success", "Employer careers page · looks like SAP SuccessFactors, confirmed when Apply opens"
+                ) if re.search(r"/job/[^/?#]+/\d+(-[a-z]{2}_[A-Z]{2})?/?(\?|#|$)", text) else (
                     "warning", "Unrecognized site · it opens for detection, and you may need to finish it manually")
             except ValueError as exc:
                 tone, message = "danger", str(exc)
