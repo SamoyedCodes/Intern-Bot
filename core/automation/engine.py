@@ -864,6 +864,8 @@ class ApplicationEngine:
             return held == wanted or len(wanted) >= 6 and held.endswith(wanted) and len(held) - len(wanted) <= 3
         if isinstance(value, bool):
             return field.value == value
+        if field.kind == 'date' and re.fullmatch(r'\d{4}-\d{2}', str(value)):
+            return str(field.value).startswith(str(value))  # A date the profile knows to its month: any day in it.
         # Location typeaheads add the region to the place you picked ("Singapore" becomes "Singapore, SGP" on Lever).
         return normalized(str(field.value)) == normalized(str(value)) or bool(re.search(r'location|city', field.label, re.I)) and same_choice(field.value, value)
 

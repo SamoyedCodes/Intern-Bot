@@ -72,7 +72,11 @@ def ats_name(url: str) -> str:
 
 def employer_key(url: str) -> str:
     # FormSG hosts every agency's forms: each form is its own employer.
-    if ats_name(url) in {"ADP", "Paylocity", "SEEK", "SAP SuccessFactors", "UltiPro", "Dayforce", "FormSG"}:
+    if ats_name(url) == "SAP SuccessFactors":
+        # Every job of one employer carries its company id; an address without one stands alone.
+        companies = [value for key, value in parse_qsl(urlsplit(url if "://" in url else "https://" + url).query) if key == "company" and value]
+        return site_key(url) + "/" + companies[0] if len(companies) == 1 else job_identity(url)
+    if ats_name(url) in {"ADP", "Paylocity", "SEEK", "UltiPro", "Dayforce", "FormSG"}:
         return job_identity(url)
     if ats_name(url) in {"Greenhouse", "Lever", "Ashby", "Workable", "Rippling", "Dover", "Comeet", "Gusto", "Polymer", "Jobvite", "SmartRecruiters"}:
         if ats_name(url) in {"Rippling", "Dover", "Comeet", "Gusto", "SmartRecruiters"}:

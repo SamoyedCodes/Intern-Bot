@@ -467,7 +467,14 @@
       const fields=roots.flatMap((root,index)=>scanInternFields(root).map(f=>{
         const element=root.querySelector(f.selector), selector=`control:${handles.size}`;
         handles.set(selector,element);f.selector=selector;
-        if(index)f.key=(root.host?`shadow:${root.host.id||index}`:'dialog')+':'+f.key;
+        // A control inside a web component (SuccessFactors' date picker) belongs to the row its outermost host sits in;
+        // there its key is the row's, since the component's own id changes with every render.
+        let host=root.host;while(host?.getRootNode().host)host=host.getRootNode().host;
+        const group=host?.closest('[data-intern-group]');
+        if(group){
+          f.group=group.getAttribute('data-intern-group');f.row=Math.max(0,[...group.querySelectorAll('[data-intern-row]')].findIndex(r=>r.contains(host)));
+          f.key=f.key.replace(/^:0:/,`${f.group}:${f.row}:`);
+        }else if(index)f.key=(root.host?`shadow:${root.host.id||index}`:'dialog')+':'+f.key;
         keys.set(element,f.key);
         f.file_digest='';
         return f;

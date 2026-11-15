@@ -194,6 +194,10 @@ class AutomationService(QObject):
     async def open_job(self, run, page):
         """Open the run's link. A careers-page listing is followed to one clear Apply destination on a supported
         hiring platform before any profile data or login is used. Returns (what stops it or '', links to choose from)."""
+        # CPF's Apply lands on /careers?company=CPFBoard, which names no job: opened again later it shows SuccessFactors' job
+        # search, so the application is reached through the listing each time.
+        if run.listing_url and ats_name(run.job_url) == "SAP SuccessFactors" and "career_job_req_id=" not in run.job_url:
+            run.job_url = run.listing_url
         self.hosts[run.id] = site_key(canonical_url(run.job_url))
         journey = getattr(self, 'journeys', {}).get(run.id)
         response = await page.goto(run.job_url, wait_until="domcontentloaded")

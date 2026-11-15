@@ -248,3 +248,29 @@ def test_organising_changes_only_what_the_answers_themselves_support(store):
     start = kept['When can you start?']
     assert (start.value, start.scope, start.scope_key, start.variants) == ('Jan 2027', 'global', '', ['Earliest start date', 'Start?'])
     assert tidy(store, proposals[0]) and len(store.answers()) == 10  # Applying again changes nothing more.
+
+
+def test_a_successfactors_row_takes_its_own_profile_row_not_a_link_saved_for_another(run):
+    profile = PROFILE.model_copy(update={
+        'experience': [Experience(employer='First Co', start_date='June 2026', end_date='Present', current=True), Experience(employer='Second Co', start_date='2022-08-15', end_date='March 2023')],
+        'education': [Education(school='Example University', start_date='August 2025')]})
+    field = lambda label, row, kind='text', group='experience': FormField('k', label, '', kind, group=group, row=row)
+    # Saved by the AI while the form's rows were unknown: "From" as the first school's start date.
+    stale = ApprovedAnswer(question='From', scope='global', origin='ai', fact='education.0.start_date')
+    assert resolve(field('Organisation', 1), profile, run, []).value == 'Second Co'
+    assert resolve(field('Institution', 0, group='education'), profile, run, []).value == 'Example University'
+    assert resolve(field('Is this your current employer?', 0, 'combobox'), profile, run, []).value == 'Yes'
+    assert resolve(field('From', 0, 'date'), profile, run, [stale]).value == '2026-06'
+    assert resolve(field('From', 1, 'date'), profile, run, [stale]).value == '2022-08-15'
+    assert resolve(field('To', 1, 'date'), profile, run, []).value == '2023-03'
+    assert resolve(field('To', 0, 'date'), profile, run, []).value is None  # A current job has no end date to give.
+
+
+def test_successfactors_employer_answers_cover_every_job_of_the_company_and_keep_older_ones(run):
+    run.job_url = 'https://career44.sapsf.com/career?company=CPFBoard&career_job_req_id=1711&career_ns=job_listing'
+    assert employer_key(run.job_url) == employer_key('https://career44.sapsf.com/careers?company=CPFBoard') == 'career44.sapsf.com/CPFBoard'
+    # Saved when the key was one job's address.
+    older = ApprovedAnswer(question=QUESTION.label, scope='employer', scope_key='career44.sapsf.com:/careers?company=CPFBoard', value='Yes')
+    assert resolve(QUESTION, PROFILE, run, [older]).value == 'Yes'
+    run.job_url = 'https://career44.sapsf.com/career?company=another&career_job_req_id=1711'
+    assert resolve(QUESTION, PROFILE, run, [older]).value is None

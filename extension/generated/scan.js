@@ -64,6 +64,8 @@ globalThis.scanInternFields = (rootSelector) => {
     if (radio) label = (fieldset && (text(fieldset.querySelector('legend,[data-question]')) || fieldset.getAttribute('aria-label') || text(document.getElementById(fieldset.getAttribute('aria-labelledby'))) || labelText(fieldset.querySelector(':scope > label:not(:has(input))') || document.createElement('i')))) || groupQuestion || label;
     if (type === 'checkbox' && !e.closest('[data-automation-id$="-CheckboxGroup"]') && groupQuestion && choiceGroup.querySelectorAll('input[type=checkbox]').length > 1 && label !== groupQuestion)
       label = groupQuestion + ' — ' + label;
+    // SuccessFactors puts the required star before a question ("* Are you able to commit…"); read it as a trailing one.
+    if (/^\*\s/.test(label)) label = label.replace(/^\*\s+/, '') + ' *';
     const base = `${group}:${row}:${label.toLowerCase()}:${radio ? e.name : ''}`;
     const ordinal = counts.get(base) || 0;
     counts.set(base, ordinal + 1);
@@ -71,7 +73,7 @@ globalThis.scanInternFields = (rootSelector) => {
     // The selector is an ephemeral handle; durable identity uses section, row and label.
     e.setAttribute('data-intern-control', String(index));
     // Each radio is its own control; its options are every choice of its question, so an answer can be picked rather than typed.
-    const choiceText = r => [...(r.labels || [])].map(labelText).join(' ') || r.getAttribute('aria-label') || r.value || text(r);
+    const choiceText = r => [...(r.labels || [])].map(labelText).join(' ') || r.getAttribute('aria-label') || r.value || text(r) || text(document.getElementById(r.getAttribute('aria-labelledby')));
     const choices = !radio ? [] : pressed ? [...(choiceGroup?.querySelectorAll('button[aria-pressed]') || [e])]
       : e.name ? [...root.querySelectorAll('input[type=radio]')].filter(r => r.name === e.name) : [...(fieldset?.querySelectorAll('[role=radio],input[type=radio]') || [e])];
     const options = e.tagName === 'SELECT' ? [...e.options].map(o => o.text.trim()) : radio ? choices.map(choiceText) : selected;

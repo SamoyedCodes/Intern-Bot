@@ -79,11 +79,12 @@ ROW_ALIASES = {
     # into that scale once per employer.
     "language_proficiency": {"language": "language", "proficiency": "proficiency", "fluent": "fluent", "native language": "fluent", "i am fluent in this language": "fluent", "i am fluent in this language.": "fluent",
                              "speaking": "proficiency", "writing": "proficiency", "reading": "proficiency", "comprehension": "proficiency", "overall": "proficiency"},
-    "education": {"school": "school", "school or university": "school", "degree": "degree",
+    "education": {"school": "school", "school or university": "school", "institution": "school", "degree": "degree",
                   "field of study": "major", "major": "major", "gpa": "gpa", "currently attending": "current", "from": "start_date", "to": "end_date",
                   "start date": "start_date", "end date": "end_date"},
     "websites": {"url": "url"},
-    "experience": {"company": "employer", "employer": "employer", "job title": "job_title",
+    "experience": {"company": "employer", "employer": "employer", "organisation": "employer", "organization": "employer",
+                   "is this your current employer?": "current", "job title": "job_title",
                    "location": "location", "from": "start_date", "to": "end_date",
                    "start date": "start_date", "end date": "end_date", "role description": "description",
                    "description": "description", "i currently work here": "current"},
@@ -185,9 +186,13 @@ def applicable(answers, profile: ApplicantProfile, run: ApplicationRun):
         if answer.country and normalized(answer.country) != normalized(profile.country):
             continue
         key = run.id if answer.scope == "application" else employer_key(run.job_url) if answer.scope == "employer" else ""
-        if answer.scope_key == key:
+        if answer.scope_key == key or answer.scope == "employer" and LEGACY_SAP.sub(r"\1/\2", answer.scope_key) == key:
             usable.append(answer)
     return usable
+
+
+# SuccessFactors employer answers were once saved under one job's address ("career44.sapsf.com:/career?…company=CPFBoard…").
+LEGACY_SAP = re.compile(r"^([^:/]+\.(?:sapsf|successfactors)\.(?:com|eu)):/.*[?&]company=([^&]+).*$")
 
 
 ROW_NAMES = {"language_proficiency": "language", "education": "school", "experience": "employer"}
@@ -246,6 +251,9 @@ def resolve(field, profile: ApplicantProfile, run: ApplicationRun, answers) -> R
     # An answer to a bare row label ("Speaking") was given for the first row, where the question used to be asked;
     # other rows have their own named answer ("Speaking — Chinese (Mandarin)") or their own profile facts.
     named = question_for(field, profile)
+    # A link to another row's fact ("From" linked to your first school's start date, saved before the form's rows were known)
+    # does not answer this row.
+    usable = [a for a in usable if not (m := FACT.fullmatch(a.fact or "")) or not m[1] or (m[1], int(m[2])) == (field.group, field.row)]
     for question in dict.fromkeys(q for q in (named, field.label if field.row == 0 else None) if q):
         found = approved(field, [a for a in usable if asks(a, question)], profile)
         if found:
@@ -324,6 +332,16 @@ def profile_fact(field, profile: ApplicantProfile) -> Resolution:
                     continue
             else:
                 return Resolution(reason="Enter this date in the profile as YYYY-MM or YYYY-MM-DD.")
+        if field.kind == "date" and attr in {"start_date", "end_date"} and value:
+            # A date box reads ISO; a date known only to its month goes as YYYY-MM, which a full date in that month matches.
+            for fmt, out in (("%Y-%m-%d", "%Y-%m-%d"), ("%Y-%m", "%Y-%m"), ("%b %Y", "%Y-%m"), ("%B %Y", "%Y-%m")):
+                try:
+                    value = datetime.strptime(value, fmt).strftime(out)
+                    break
+                except ValueError:
+                    continue
+            else:
+                return Resolution(reason=UNANSWERED if getattr(source, "current", False) else "Enter this date in the profile as YYYY-MM or YYYY-MM-DD.")
         if value is not None and value != "":
             prefix = f"{field.group}.{field.row}." if field.group else ""
             return Resolution(field_value(field, value), "profile:" + prefix + attr)

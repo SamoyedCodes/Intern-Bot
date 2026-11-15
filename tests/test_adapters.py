@@ -8,7 +8,7 @@ from core.automation.answers import resolve
 from core.automation.engine import ApplicationEngine
 from core.automation.extension_bridge import ExtensionBridge
 from core.automation.fields import FormField
-from core.automation.models import ApplicationRun, ApprovedAnswer
+from core.automation.models import ApplicationRun, ApprovedAnswer, Experience
 from tests.support import FIXTURES, URLS, open_fixture, prepare, profile_for
 
 # The first visible text control, including inside open shadow roots.
@@ -194,6 +194,59 @@ async def test_successfactors_uploads_through_its_popup_and_fills_the_rebuilt_fo
     assert await page.locator('.RCMFormField input[type=text]').input_value() == 'Example City'
     assert await page.locator('input.rcmpaginatedselectinput').input_value() == '1 Month'
     assert not await page.evaluate('Boolean(window.submitted)')
+
+
+# CPF Board's form: a repeating section whose rows line up with the profile's jobs, a date picker two shadow roots down that
+# reads DD/MM/YYYY, a question answered with ARIA radios under a star-first label, and picklists of 100 options a page that
+# filter as you type (institutions, and calling codes listed as bare numbers).
+CPF_FORM = '''<h2 id="115:headerLabel"><button>My Work Experience</button></h2>
+<div id="115:sectionContent" class="sectionContent" role="group" aria-labelledby="115:headerLabel">
+  <div class="rcmSectionComponent">
+    <div class="RCMFormField"><label><span class="requiredField">*</span>&nbsp;Organisation</label><input type="text"></div>
+    <div class="RCMFormField"><label><span class="requiredField">*</span>&nbsp;From</label><div class="datePicker"><div><ui5-date-picker-test title="From"></ui5-date-picker-test></div></div></div>
+    <div role="button" title="Delete Row">Remove</div></div>
+  <div role="button" id="115:_addRowBtn">Add</div></div>
+<div id="64:sectionContent" class="sectionContent">
+  <div class="RCMFormField"><label><span class="requiredField">*</span>&nbsp;Mobile Phone Country Code</label>__CODE__</div>
+  <div class="RCMFormField"><label><span class="requiredField">*</span>&nbsp;Institution</label>__SCHOOL__</div>
+  <div class="RCMFormField"><label id="124:" class="rcmFormQuestionLabel"><span class="requiredField">*</span>&nbsp;Are you able to commit to a full-time 5 day internship?</label>
+    <div class="radioGroup" role="radiogroup" aria-labelledby="124:">
+      <span role="radio" aria-checked="false" aria-labelledby="y" onclick="tick(this)"></span><label id="y">Yes</label>
+      <span role="radio" aria-checked="false" aria-labelledby="n" onclick="tick(this)"></span><label id="n">No</label></div></div></div>
+<span role="button" id="194:_submitBtn" onclick="window.submitted=true">Apply</span>
+<script>
+function tick(r){r.parentElement.querySelectorAll('[role=radio]').forEach(o=>o.setAttribute('aria-checked',String(o===r)));}
+const lists={code:[...Array(300)].map((_,i)=>String(i+1)),school:[...Array(150)].map((_,i)=>'Academy '+i).concat('Example University (EU)')};
+function show(id,q){const all=lists[id].filter(o=>o.toLowerCase().includes(q.toLowerCase()));
+  document.getElementById(id+'_list').innerHTML=all.slice(0,100).map(o=>`<li role="option" onclick="choose('${id}','${o}')">${o}</li>`).join('');}
+function choose(id,o){document.getElementById(id).value=o;document.getElementById(id+'_list').innerHTML='';}
+class Inner extends HTMLElement{connectedCallback(){this.attachShadow({mode:'open'}).innerHTML='<input type="text" placeholder="DD/MM/YYYY">';
+  this.shadowRoot.firstChild.value=this.getRootNode().host.value;this.shadowRoot.firstChild.onchange=e=>{this.getRootNode().host.value=e.target.value;};}}
+class Picker extends HTMLElement{value='01/06/2026';connectedCallback(){this.attachShadow({mode:'open'}).innerHTML='<ui5-inner-test class="ui5-date-picker-input"></ui5-inner-test>';}}
+customElements.define('ui5-inner-test',Inner);customElements.define('ui5-date-picker-test',Picker);
+</script>'''.replace('__CODE__', '''<input class="rcmpaginatedselectinput" role="combobox" id="code" aria-controls="code_list"
+    onclick="const l=document.getElementById('code_list');l.innerHTML?l.innerHTML='':show('code','')" onkeyup="show('code',this.value)"><ul id="code_list" role="listbox"></ul>''').replace(
+    '__SCHOOL__', '''<input class="rcmpaginatedselectinput" id="school" aria-controls="school_list"
+    onclick="const l=document.getElementById('school_list');l.innerHTML?l.innerHTML='':show('school','')" onkeyup="show('school',this.value)"><ul id="school_list" role="listbox"></ul>''')
+
+
+async def test_successfactors_fills_a_cpf_style_form_from_the_profiles_rows(context, store):
+    page = await open_fixture(context, 'sap-successfactors', CPF_FORM, url='https://career44.sapsf.com/portalcareer?company=fictional&career_ns=job_application')
+    profile = profile_for('sap-successfactors').model_copy(update={'phone_country_code': '+65', 'phone_number': '55512345', 'country': 'Singapore',
+        'experience': [Experience(employer='Fictional Co', start_date='June 2026')]})
+    run = ApplicationRun(job_url=page.url, auto_advance=False)
+    store.save_answer(ApprovedAnswer(question='Mobile Phone Country Code', fact='phone_country_code', scope='global'))
+    store.save_answer(ApprovedAnswer(question='Institution', value='Example University', scope_key=run.id))
+    store.save_answer(ApprovedAnswer(question='Are you able to commit to a full-time 5 day internship?', value='Yes', scope_key=run.id))
+    run = await ApplicationEngine(store).start(run, profile, ExtensionBridge(page, run.id))
+    assert run.status == 'ready_for_review', [(i.question, i.message) for i in run.interventions]
+    assert await page.locator('.rcmSectionComponent > .RCMFormField > input').input_value() == 'Fictional Co'
+    assert await page.locator('#code').input_value() == '65'
+    assert await page.locator('#school').input_value() == 'Example University (EU)'
+    assert await page.evaluate('[...document.querySelectorAll("[role=radio]")].map(r => r.getAttribute("aria-checked"))') == ['true', 'false']
+    # The date SuccessFactors already held falls in the profile's month, so it is kept as it is.
+    assert next(f for f in run.fields.values() if f.label == 'From').disposition == 'verified'
+    assert await page.evaluate('document.querySelector("ui5-date-picker-test").value') == '01/06/2026'
 
 
 # FormSG as it renders: a downshift dropdown whose pick shows beside its emptied input, and an attachment whose file input is
