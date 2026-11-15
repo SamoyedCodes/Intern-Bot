@@ -200,11 +200,16 @@ class AutomationService(QObject):
         # Only "not found" and "gone" are final: bot checks answer 403 or 503 and then let the page through.
         if response and response.status in {404, 410}:
             return f"The link returned HTTP {response.status}, so the posting can't be opened. Replace the link with the current posting.", []
-        if not ats_name(run.job_url) and not recipe_for(self.store, run.job_url):
+        if not ats_name(run.job_url):
             await self.describe(run, page)
             if ats_name(page.url) and site_key(page.url) != site_key(run.job_url):
                 targets = [page.url]  # The listing redirected straight to its application.
             else:
+                # A client-rendered posting (Eightfold's) shows its Apply link a moment after the page loads.
+                try:
+                    await page.locator('a[href]').filter(has_text=re.compile(r'\bapply\b', re.I)).first.wait_for(timeout=3000)
+                except Exception:
+                    pass  # No Apply link: the closed-posting check and the Apply button below decide.
                 links = await page.evaluate("""() => [...document.querySelectorAll('a[href]')]
                     .filter(a => /\\bapply\\b/i.test((a.innerText || '') + ' ' + (a.getAttribute('aria-label') || '')))
                     .map(a => a.href)""")
@@ -221,6 +226,8 @@ class AutomationService(QObject):
                     response = await page.goto(targets[0], wait_until="domcontentloaded")
                     if response and response.status in {404, 410}:
                         return f"The listing's Apply link returned HTTP {response.status}. The application may be closed; replace the link if you have another.", []
+            elif recipe_for(self.store, run.job_url):
+                pass  # A taught site opens its own form; only a link to a supported platform (Micron's Eightfold form) is followed.
             elif re.search(r"no longer (available|accepting|open)|position has been filled|job (is |has been )?closed|posting (has )?expired|not accepting applications", await page.inner_text("body"), re.I):
                 return "This posting says it's closed. Replace the link if you have an open one.", []
             else:

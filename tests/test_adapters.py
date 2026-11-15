@@ -47,6 +47,8 @@ CONTROLS = {
     'dayforce': '<button type="button" test-id="application-next-step">Next</button>',
     'monee': None,
     'internsg': None,
+    'formsg': None,
+    'eightfold-pcs': None,
 }
 # These vendor branches hand continuation to the user instead of offering an action.
 HANDOFF_SITES = {'sap-successfactors', 'jazzhr', 'freshteam', 'pinpoint'}
@@ -192,3 +194,180 @@ async def test_successfactors_uploads_through_its_popup_and_fills_the_rebuilt_fo
     assert await page.locator('.RCMFormField input[type=text]').input_value() == 'Example City'
     assert await page.locator('input.rcmpaginatedselectinput').input_value() == '1 Month'
     assert not await page.evaluate('Boolean(window.submitted)')
+
+
+# FormSG as it renders: a downshift dropdown whose pick shows beside its emptied input, and an attachment whose file input is
+# replaced by a "File attached" receipt.
+FORMSG_FORM = '''<form>
+<div role="group"><label id="q4-label" for="q4"><div><span>4.</span>Identity Type</div></label>
+  <div data-group="true"><div aria-hidden="true"><p><span id="shown"></span></p></div>
+  <input role="combobox" id="q4" aria-controls="downshift-0-menu" aria-labelledby="q4-label" required aria-required="true" value=""
+    placeholder="Select an option" onclick="menu()" oninput="menu(this.value)"></div></div>
+<div role="group"><label id="q5-label" for="q5"><div><span>5.</span>Upload your resume</div><p>Documents must be uploaded as .PDF.</p></label>
+  <div id="drop"><input type="file" id="q5" required accept=".pdf" onchange="attached(this)"></div></div>
+<button type="button" onclick="window.submitted=true"><span><span>End of form.</span>Submit now</span></button>
+</form><ul role="listbox" id="downshift-0-menu"></ul>
+<script>
+const choices=['Singapore Citizen','Singapore Permanent Resident','Foreigner'];
+function menu(q=''){document.getElementById('downshift-0-menu').innerHTML=choices.filter(c=>c.toLowerCase().includes(q.toLowerCase())).map(c=>`<li role="option" onclick="pick('${c}')">${c}</li>`).join('');}
+function pick(c){document.getElementById('shown').textContent=c;document.getElementById('q4').value='';document.getElementById('downshift-0-menu').innerHTML='';}
+function attached(input){const f=input.files[0];document.getElementById('drop').outerHTML=`<div tabindex="0" aria-required="true"><div><span>File attached: ${f.name} with file size of ${f.size} B</span><button type="button" aria-label="Click to remove file">x</button></div></div>`;}
+</script>'''
+
+
+async def test_formsg_picks_dropdown_options_and_verifies_the_attachment_receipt(context, store, tmp_path):
+    resume = tmp_path / 'resume.pdf'
+    resume.write_bytes(b'%PDF fictional resume')
+    page = await open_fixture(context, 'formsg', FORMSG_FORM)
+    profile = profile_for('formsg').model_copy(update={'resume_path': str(resume)})
+    run = ApplicationRun(job_url=page.url, auto_advance=False)
+    store.save_answer(ApprovedAnswer(question='Identity Type', value='Foreigner', scope_key=run.id))
+    run = await ApplicationEngine(store).start(run, profile, ExtensionBridge(page, run.id))
+    assert run.status == 'ready_for_review', run.interventions
+    assert await page.locator('#shown').inner_text() == 'Foreigner'
+    assert await page.get_by_text('File attached: resume.pdf').count() == 1
+    assert not await page.evaluate('Boolean(window.submitted)')
+
+
+# What live FormSG forms showed (LSC, MAS): a mobile field that spaces its digits beside a country picker, a date field declaring
+# pattern="\d*", one question repeated under each period's statement, and an attachment renumbered by a question revealed above it.
+FORMSG_QUIRKS = r'''<form>
+<div role="group"><label id="m-label" for="m"><div><span>1.</span>Mobile Number</div></label>
+  <div><select aria-label="Country selector"><option>Afghanistan</option><option selected>Singapore</option></select>
+  <input id="m" autocomplete="tel" placeholder="8123 4567" aria-labelledby="m-label" oninput="this.value=this.value.replace(/\D/g,'').replace(/(\d{4})(?=\d)/g,'$1 ')"></div></div>
+<div role="group"><label id="d-label" for="d"><div><span>2.</span>Date of Consent</div></label>
+  <span aria-live="assertive">No date selected</span><input id="d" inputmode="numeric" pattern="\d*" placeholder="dd/mm/yyyy" aria-labelledby="d-label"></div>
+<div><p>January 2027 - June 2027</p></div>
+<div role="group"><label id="c1-label" for="c1"><div><span>3.</span>First Choice</div></label><input id="c1" aria-labelledby="c1-label"></div>
+<div><p>May 2027 - July 2027</p></div>
+<div role="group"><label id="c2-label" for="c2"><div><span>4.</span>First Choice</div></label><input id="c2" aria-labelledby="c2-label"></div>
+<div role="group"><label id="t-label" for="t"><div><span id="tn">5.</span>Attachment (Transcripts)</div></label>
+  <div id="drop"><input type="file" id="t" accept=".pdf" onchange="attached(this)"></div></div>
+<button type="button" onclick="window.submitted=true"><span><span>End of form.</span>Submit now</span></button>
+</form>
+<script>
+function attached(input){const f=input.files[0];document.getElementById('tn').textContent='6.';
+  document.getElementById('drop').outerHTML=`<div tabindex="0"><div><span>File attached: ${f.name} with file size of ${f.size} B</span><button type="button" aria-label="Click to remove file">x</button></div></div>`;}
+</script>'''
+
+
+async def test_formsg_reads_spaced_mobiles_dates_repeated_questions_and_renumbered_attachments(context, store, tmp_path):
+    transcript = tmp_path / 'transcript.pdf'
+    transcript.write_bytes(b'%PDF fictional transcript')
+    page = await open_fixture(context, 'formsg', FORMSG_QUIRKS)
+    profile = profile_for('formsg').model_copy(update={'country': 'Singapore'})
+    run = ApplicationRun(job_url=page.url, auto_advance=False)
+    for question, value in [('Date of Consent (dd/mm/yyyy)', '15/11/2026'), ('January 2027 - June 2027 — First Choice', 'Project A'),
+                            ('May 2027 - July 2027 — First Choice', 'Project B'), ('Attachment (Transcripts)', str(transcript))]:
+        store.save_answer(ApprovedAnswer(question=question, value=value, scope_key=run.id))
+    run = await ApplicationEngine(store).start(run, profile, ExtensionBridge(page, run.id))
+    assert run.status == 'ready_for_review', run.interventions
+    assert await page.locator('#m').input_value() == '5551 2345 67'
+    assert [await page.locator(s).input_value() for s in ('#d', '#c1', '#c2')] == ['15/11/2026', 'Project A', 'Project B']
+    assert await page.get_by_text('File attached: transcript.pdf').count() == 1
+    assert not await page.evaluate('Boolean(window.submitted)')
+
+
+# Eightfold as Micron's careers site renders it: calling codes as "🇸🇬 (+65) Singapore", and radios whose group names no label.
+# Eightfold as Micron's and PayPal's careers sites render it: calling codes as "🇸🇬 (+65) Singapore", radios whose group names no label,
+# and a résumé that waits behind a consent dialog (kept hidden in the page until a file is picked), then is read and rewrites the form.
+EIGHTFOLD_FORM = '''<meta charset="utf-8"><code id="pcsx-data" hidden>{}</code><form>
+<div><div><label id="Resume_resume_label" for="Resume_resume">Upload your resume</label></div>
+  <div><div role="status"></div><span><input type="file" id="resume" accept=".pdf" style="display: none;" onchange="picked(this)"><div id="files"></div></span></div></div>
+<div id="contact"><label for="Contact_Information_firstname">First Name</label><input id="Contact_Information_firstname">
+  <label for="Contact_Information_email">Email</label><input id="Contact_Information_email"></div>
+<input role="combobox" aria-label="Country code" aria-controls="list-5" id="input-7" value="" onclick="showCodes()" oninput="showCodes(this.value)">
+<span>Have you previously been employed by any Micron Company?</span>
+<div role="radiogroup" aria-labelledby="missing_legend">
+  <div><input type="radio" name="prev" id="prev-true" value="true" readonly aria-label="Yes, Have you previously been employed by any Micron Company?"><label for="prev-true" aria-hidden="true"><span>Yes</span></label></div>
+  <div><input type="radio" name="prev" id="prev-false" value="false" readonly aria-label="No, Have you previously been employed by any Micron Company?"><label for="prev-false" aria-hidden="true"><span>No</span></label></div>
+</div>
+<div role="radiogroup" aria-labelledby="missing_visibility">
+  <div><input type="radio" name="vis" id="vis-all" readonly aria-label="Any company recruiter worldwide, Make My Profile Visible to"><label for="vis-all" aria-hidden="true"><span>Any company recruiter worldwide</span></label></div>
+  <div><input type="radio" name="vis" id="vis-local" readonly aria-label="Any company recruiter in my country/region, Make My Profile Visible to"><label for="vis-local" aria-hidden="true"><span>Any company recruiter in my country / region</span></label></div>
+</div>
+<button type="button" data-test-id="submitApplicationButton" onclick="window.submitted=true">Submit application</button>
+</form><div id="list-5" role="listbox"></div>
+<div role="dialog" aria-modal="true" aria-labelledby="consent-title" id="consent" style="visibility: hidden"><h2 id="consent-title">Data Privacy Agreement</h2>
+  <button type="button" onclick="this.parentElement.style.visibility='hidden'">Cancel</button><button type="button" onclick="agreed()">I Agree</button></div>
+<script>
+const codes=['🇦🇩 (+376) Andorra','🇸🇬 (+65) Singapore','🇺🇸 (+1) United States'];
+function showCodes(q=''){document.getElementById('list-5').innerHTML=codes.filter(c=>c.toLowerCase().includes(q.toLowerCase())).map(c=>`<button type="button" role="option" onclick="choose('${c}')">${c}</button>`).join('');}
+function choose(c){document.getElementById('input-7').value=c;document.getElementById('list-5').innerHTML='';}
+let pending='';
+function picked(input){pending=input.files[0].name;input.value='';document.getElementById('consent').style.visibility='visible';}
+function agreed(){
+  document.getElementById('consent').style.visibility='hidden';window.uploads=(window.uploads||0)+1;
+  const files=document.getElementById('files');files.innerHTML=`<ul><li><span title="${pending}">${pending}</span><span>Matching…</span></li></ul>`;
+  setTimeout(()=>{
+    files.innerHTML=`<ul><li><span title="${pending}">${pending}</span><button type="button" aria-label="Delete file ${pending}">x</button></li></ul>`;
+    document.querySelector('[role=status]').textContent='File upload completed successfully';
+    // The résumé is read and the contact fields are rendered again with its values.
+    document.getElementById('contact').innerHTML='<label for="Contact_Information_firstname">First Name</label><input id="Contact_Information_firstname" value="Jonathan"><label for="Contact_Information_email">Email</label><input id="Contact_Information_email" value="parsed@example.com">';
+  },400);}
+</script>'''
+
+
+async def test_eightfold_fills_after_its_resume_consent_upload_and_rewrite(context, store, tmp_path):
+    resume = tmp_path / 'resume.pdf'
+    resume.write_bytes(b'%PDF fictional resume')
+    page = await open_fixture(context, 'eightfold-pcs', EIGHTFOLD_FORM)
+    profile = profile_for('eightfold-pcs').model_copy(update={'phone_country_code': '+65', 'phone_number': '91234567', 'country': 'Singapore', 'resume_path': str(resume)})
+    run = ApplicationRun(job_url=page.url, auto_advance=False)
+    store.save_answer(ApprovedAnswer(question='Have you previously been employed by any Micron Company?', value='No', scope_key=run.id))
+    # Vodafone's option text differs from its aria-label ("country / region" against "country/region").
+    store.save_answer(ApprovedAnswer(question='Make My Profile Visible to', value='Any company recruiter in my country / region', scope_key=run.id))
+    run = await ApplicationEngine(store).start(run, profile, ExtensionBridge(page, run.id))
+    # The picked résumé waits behind the consent dialog, which is asked; nothing is uploaded until it is approved.
+    assert 'Data Privacy Agreement' in [i.question for i in run.interventions], run.interventions
+    assert not await page.evaluate('window.uploads')
+    store.save_answer(ApprovedAnswer(question='Data Privacy Agreement', value=True, scope_key=run.id))
+    run = await ApplicationEngine(store).start(run, profile, ExtensionBridge(page, run.id))
+    assert run.status == 'ready_for_review', run.interventions
+    assert await page.evaluate('window.uploads') == 1
+    # The résumé's rewrite is replaced by the profile's values.
+    assert [await page.locator(s).input_value() for s in ('#Contact_Information_firstname', '#Contact_Information_email')] == ['Ada', 'ada@example.test']
+    assert await page.locator('#vis-local').is_checked() and await page.locator('#prev-false').is_checked()
+    assert await page.locator('#input-7').input_value() == '🇸🇬 (+65) Singapore'
+    assert not await page.evaluate('Boolean(window.submitted)')
+
+
+# Qualcomm's and Microsoft's Eightfold sites ask you to sign in first, in a dialog shown a moment after the page loads.
+EIGHTFOLD_SIGN_IN = '''<code id="pcsx-data" hidden>{}</code><script>setTimeout(() => document.body.insertAdjacentHTML('beforeend',
+  '<div role="dialog" aria-modal="true"><h1>Sign in</h1><label for="em">Email</label><input type="email" id="em"><button type="button">Continue</button></div>'), DELAY);</script>'''
+
+
+@pytest.mark.parametrize('delay', [0, 800])
+async def test_eightfold_hands_a_sign_in_dialog_to_you_without_typing_into_it(context, store, delay):
+    page = await open_fixture(context, 'eightfold-pcs', EIGHTFOLD_SIGN_IN.replace('DELAY', str(delay)))
+    run = ApplicationRun(job_url=page.url, auto_advance=False)
+    run = await ApplicationEngine(store).start(run, profile_for('eightfold-pcs'), ExtensionBridge(page, run.id))
+    assert [i.kind for i in run.interventions] == ['verification'], run.interventions
+    assert await page.locator('#em').input_value() == ''
+
+
+@pytest.mark.parametrize('site, page_text', [
+    ('formsg', '<h2>Thank you for filling out the form.</h2><button>Submit another response</button>'),
+    ('eightfold-pcs', '<h1>Thank you for your application, Ada!</h1><p>We will review it shortly.</p>'),
+])
+async def test_platform_confirmation_pages_are_recognized(context, site, page_text):
+    from core.automation.engine import receipt_shown
+    page = await open_fixture(context, site, page_text)
+    assert await receipt_shown(page, page.url)
+    form = await open_fixture(context, site)
+    assert not await receipt_shown(form, form.url)
+
+
+async def test_a_saved_recipe_does_not_compete_with_an_adapter_in_another_frame(context):
+    # Micron's form adds a profile view in an iframe after its résumé upload, on a host the user had taught a recipe for.
+    from core.automation.recipes import Recipe
+    page = await context.new_page()
+    async def serve(route):
+        body = '<form><label>Notes<input></label></form>' if '/profile/' in route.request.url else (FIXTURES / 'eightfold-pcs.html').read_text() + '<iframe src="/profile/1"></iframe>'
+        await route.fulfill(body=body, content_type='text/html')
+    await page.route('**/*', serve)
+    await page.goto(URLS['eightfold-pcs'])
+    await page.wait_for_function("document.querySelector('iframe').contentDocument?.querySelector('form')")
+    recipe = Recipe(host='careers.example.test', origin='taught', approved=True)
+    found = await ExtensionBridge(page, 'run').discover([recipe.model_dump()])
+    assert [m['adapter']['id'] for m in found['matches']] == ['eightfold-pcs']

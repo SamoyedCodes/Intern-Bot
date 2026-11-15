@@ -17,7 +17,7 @@ The [UI and UX style guide](DESIGN.md) explains the four stations, application s
 ## What it does
 
 - **Profiles.** Named profiles with contact details, education, experience, languages, work eligibility, a résumé and an optional cover letter. Unknown yes/no answers stay unknown; nothing is guessed.
-- **Autofill.** Supported sites (Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Workable and 22 more, plus DOM-detected Phenom) are filled by their adapter, and every field is read back and verified.
+- **Autofill.** Supported sites (Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Workable and 22 more, plus DOM-detected Phenom) are filled by their adapter, and every field is read back and verified. Hand-written adapters in `extension/adapters/` add Monee, InternSG, FormSG (form.gov.sg, used for many Singapore government internships) and Eightfold careers sites on an employer's own domain (careers.micron.com, say), and replace the extracted SAP SuccessFactors one.
 - **Workday Request mode.** Signs in with your saved employer login, answers application questions through Workday's API, then finishes the remaining pages in the browser with the same checks as Classic mode.
 - **Approved answers.** Each answer you approve is reused for the same question and any rewording you link to it, within its profile, scope and country.
 - **AI autofill (optional).** Unknown or reworded factual questions (graduation year, degree level, LinkedIn URL) are linked to your profile or answered from your career facts. AI answers fill the form, show as *AI · unconfirmed* under **Answers**, and block automatic submission until you confirm them.

@@ -31,10 +31,18 @@
     const captcha=!captchaSolved&&[...document.querySelectorAll('iframe[src*="recaptcha"],iframe[src*="hcaptcha"],iframe[src*="challenges.cloudflare.com"]')].some(e=>visible(e)&&!/[?&]size=invisible/.test(e.src));
     const fillable=[...document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]),select,textarea,[role=combobox],[role=radio],[role=checkbox],button[aria-pressed]')].filter(visible).length;
     // A CAPTCHA beside the Submit of an application form with no password (InternSG) is not a sign-in step; the desktop asks for it before sending.
-    const challenge=captcha&&(passwords.length>0||fillable<3)||[...document.querySelectorAll('input[autocomplete=one-time-code],input[name*=otp i]')].some(visible);
+    // autocomplete=one-time-code also switches off browser autofill on ordinary fields (Eightfold's Phone and City), so such a box is a
+    // code only when it is code-sized or says so.
+    const code=e=>e.matches('[name*=otp i]')||e.maxLength>0&&e.maxLength<=8||/\botp\b|one[- ]time|verification code|security code|passcode/i.test(text(e));
+    const challenge=captcha&&(passwords.length>0||fillable<3)||[...document.querySelectorAll('input[autocomplete=one-time-code],input[name*=otp i]')].some(e=>visible(e)&&code(e));
     if(challenge)return {page:'challenge',signed_in:false,form_error:error};
     if(!passwords.length){
       if([...document.querySelectorAll('button,a')].filter(e=>visible(e)&&/^sign in with email$/i.test(caption(e))).length===1)return {page:'email_choice',signed_in:false,form_error:error};
+      // A sign-in dialog without a password box is a sign-in you complete yourself: email first (Eightfold's on Qualcomm), or only
+      // "Sign in using Microsoft/Google/…" buttons (Microsoft's).
+      if([...document.querySelectorAll('[role=dialog],[aria-modal=true]')].some(d=>visible(d)&&[...d.querySelectorAll('h1,h2,h3')].some(h=>/^(sign in|log in)$/i.test(h.innerText.trim()))&&
+        ([...d.querySelectorAll('input')].some(e=>visible(e)&&/e-?mail/i.test(text(e)+' '+e.type))||[...d.querySelectorAll('button,a')].some(e=>visible(e)&&/^(sign in|log in|continue) (using|with) /i.test(caption(e))))))
+        return {page:'ambiguous',signed_in:false,form_error:error};
       // An application form can say "Background checks may include verification" (seen on Ashby); a check-your-email page has next to nothing to fill.
       // ponytail: "at most a search box and a language picker" stands in for "not a form"; a verification page with a form on it would need its own signal.
       if(fillable<3&&/(?:check|sent|send|verify|confirm|activate)[\s\S]{0,100}(?:verification|activation|verify your|confirm your|email address)|(?:verification|activation) (?:email|code)|verify your (?:email|account)/i.test(body))

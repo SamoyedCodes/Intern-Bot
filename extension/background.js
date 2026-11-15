@@ -28,6 +28,9 @@ globalThis.internBot = {
           if(result.account?.page || result.account?.signed_in)accounts.push({tab:tabs[0].id,frame:frame.frameId,document:frame.documentId,url:frame.url,adapter:{id:'account',name:'Employer account'},account:result.account});
         } catch { /* A loading or inaccessible frame cannot receive personal data. */ }
       }
+      // A recipe is the fallback where no adapter matches: in another frame of a page an adapter covers (Micron's profile view, added
+      // after its résumé upload, under a recipe taught before the Eightfold adapter existed) it doesn't compete.
+      if(matches.some(m=>!m.adapter.id.startsWith('recipe:')))return {matches:matches.filter(m=>!m.adapter.id.startsWith('recipe:')),accounts};
       return {matches,accounts};
     }
     if (command === 'prepare') {

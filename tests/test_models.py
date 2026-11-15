@@ -61,6 +61,10 @@ def test_job_identity_keeps_the_job_selecting_query(first, second):
     ('https://careers.monee.com.evil.test/apply?id=J1', ''),
     ('https://www.internsg.com/job/example-pte-ltd-intern/', 'InternSG'),
     ('https://www.internsg.com.evil.test/job-apply/1', ''),
+    ('https://form.gov.sg/69a67aa7025e945921ba2b88', 'FormSG'),
+    ('https://form.gov.sg.evil.test/69a67aa7025e945921ba2b88', ''),
+    ('https://careers.micron.com/careers/apply?pid=45489125', 'Eightfold'),
+    ('https://careers.micron.com/careers/job/45489125', ''),  # The posting: its Apply Now link leads to the form.
     ('https://careers.example.test/job/1', ''),
     ('https://boards.greenhouse.io.evil.test/example/jobs/1', ''),
     ('https://jobs.lever.co.evil.test/example/1', ''),
@@ -75,6 +79,7 @@ def test_ats_name_matches_exact_hosts_only(url, name):
     ('https://apply.workable.com/first/j/1', 'https://apply.workable.com/second/j/1'),
     ('https://recruiting.paylocity.com/Recruiting/Jobs/Details/1', 'https://recruiting.paylocity.com/Recruiting/Jobs/Details/2'),
     ('https://jobs.lever.co/example/1', 'https://jobs.lever.co/another-company/2'),
+    ('https://form.gov.sg/69a67aa7025e945921ba2b88', 'https://form.gov.sg/000000000000000000000001'),
 ])
 def test_shared_hosts_never_share_an_employer_key_across_tenants(first, second):
     assert employer_key(first) != employer_key(second)

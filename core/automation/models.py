@@ -71,7 +71,8 @@ def ats_name(url: str) -> str:
 
 
 def employer_key(url: str) -> str:
-    if ats_name(url) in {"ADP", "Paylocity", "SEEK", "SAP SuccessFactors", "UltiPro", "Dayforce"}:
+    # FormSG hosts every agency's forms: each form is its own employer.
+    if ats_name(url) in {"ADP", "Paylocity", "SEEK", "SAP SuccessFactors", "UltiPro", "Dayforce", "FormSG"}:
         return job_identity(url)
     if ats_name(url) in {"Greenhouse", "Lever", "Ashby", "Workable", "Rippling", "Dover", "Comeet", "Gusto", "Polymer", "Jobvite", "SmartRecruiters"}:
         if ats_name(url) in {"Rippling", "Dover", "Comeet", "Gusto", "SmartRecruiters"}:

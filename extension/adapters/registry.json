@@ -13,5 +13,21 @@
       "^https://www\\.internsg\\.com/(job|job-apply)/"
     ],
     "receipt": "Application submitted successfully!"
+  },
+  {
+    "id": "formsg",
+    "name": "FormSG",
+    "pattern": [
+      "^https://form\\.gov\\.sg/(?:#!/)?[0-9a-f]{24}(?:[/?#]|$)"
+    ],
+    "receipt": "Thank you for filling out the form."
+  },
+  {
+    "id": "eightfold-pcs",
+    "name": "Eightfold",
+    "pattern": [
+      "^https://[^/]+/careers/apply\\?(?:[^#]*&)?pid=\\d+"
+    ],
+    "receipt": "Thank you for your application"
   }
 ]

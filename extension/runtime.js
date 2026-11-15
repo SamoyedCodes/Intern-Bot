@@ -461,11 +461,13 @@
       if(formRoots.length>1&&config.adapter!=='account'){stop();return [];}
       await site?.annotate?.(root);  // May open what the scan must see (SuccessFactors' collapsed sections).
       const roots=[root];
+      // A control a native adapter marked in a dialog over the form (Eightfold's consent before it reads your résumé) is scanned too.
+      if(root!==document)for(const d of document.querySelectorAll('[role=dialog],[aria-modal=true]'))if(!d.contains(root)&&!root.contains(d)&&visible(d)&&d.querySelector('[data-intern-kind]'))roots.push(d);
       for(let i=0;i<roots.length;i++)for(const element of roots[i].querySelectorAll('*'))if(element.shadowRoot)roots.push(element.shadowRoot);
       const fields=roots.flatMap((root,index)=>scanInternFields(root).map(f=>{
         const element=root.querySelector(f.selector), selector=`control:${handles.size}`;
         handles.set(selector,element);f.selector=selector;
-        if(index)f.key=`shadow:${root.host.id||index}:`+f.key;
+        if(index)f.key=(root.host?`shadow:${root.host.id||index}`:'dialog')+':'+f.key;
         keys.set(element,f.key);
         f.file_digest='';
         return f;
@@ -530,7 +532,7 @@
     window.addEventListener('unhandledrejection',fail,{signal:abort.signal});
     const authControls=()=>internAccount.controls();
     return {
-      token,document:documentId,R,
+      token,document:documentId,R,site,
       scan,
       authorize(policiesBySelector) {
         if(!live())return;
@@ -748,7 +750,8 @@
       if(message.command==='scan'||message.command==='prepare'){
         result.fields=await active.scan();
         // Workday keeps one URL and job-title heading across steps; only its active progress step tells them apart.
-        result.section=[...document.querySelectorAll('h1,h2,[aria-current=step],[data-automation-id=pageHeader],[data-automation-id=progressBarActiveStep]')].filter(e=>e.getClientRects().length).map(e=>e.textContent.trim()).join('|');
+        // A one-page form whose headings come and go with its conditional questions (Eightfold's) names its own section.
+        result.section=active.site?.section?.()||[...document.querySelectorAll('h1,h2,[aria-current=step],[data-automation-id=pageHeader],[data-automation-id=progressBarActiveStep]')].filter(e=>e.getClientRects().length).map(e=>e.textContent.trim()).join('|');
         // The site's own step list (Workday's progress bar, or any aria-current=step list) for the progress stepper.
         const step=document.querySelector('[data-automation-id=progressBarActiveStep],[aria-current=step]'),items=step?[...(step.closest('ol,ul')?.children||[step])]:[];
         result.steps=items.map(e=>e.textContent.replace(/^.*?step\s+\d+\s+of\s+\d+/i,'').trim());

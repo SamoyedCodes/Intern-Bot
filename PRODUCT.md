@@ -12,7 +12,7 @@ One student running their own internship search on their Mac today; the product 
 
 ## Product Purpose
 
-Intern-Bot is a local application desk. It keeps named profiles and approved answers, fills application forms in a visible Chromium window using 28 site-specific adapters, verifies every field it writes, and tracks each application from saved to offer. Scout finds and verifies open internships for a profile. Success: more applications sent with less retyping, and the user always knows what is waiting on them.
+Intern-Bot is a local application desk. It keeps named profiles and approved answers, fills application forms in a visible Chromium window using site-specific adapters (28 extracted, plus hand-written ones for InternSG, FormSG, Eightfold and others), verifies every field it writes, and tracks each application from saved to offer. Scout finds and verifies open internships for a profile. Success: more applications sent with less retyping, and the user always knows what is waiting on them.
 
 ## Positioning
 
