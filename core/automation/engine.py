@@ -497,6 +497,7 @@ class ApplicationEngine:
                 self.intervene(run, 'The account form has an unsupported destination. No credentials were entered.', 'verification')
                 return False
         context.return_url = run.listing_url or run.job_url
+        context.employer = run.company
         if run.account and run.account.key == context.key:
             context.item_id = run.account.item_id
         elif run.account:

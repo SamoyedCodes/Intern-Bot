@@ -1,14 +1,18 @@
 """Employer logins kept in 1Password through the op CLI, authenticated with a service account token."""
 import json
 import os
+import re
 import shutil
 import subprocess
+from urllib.parse import urlsplit
 
 from core.automation.models import AccountContext, account_context
 
 VAULT = "Job Sites"
 TAG = "intern-bot"
 STATE = "intern_bot_state"
+# Words in a login's title or username that say nothing about which employer it belongs to.
+GENERIC = {"intern", "interns", "internship", "career", "careers", "job", "jobs", "login", "account", "sap", "successfactors", "workday"}
 NO_TOKEN = "Paste your 1Password service account token in Profile → Employer accounts."
 
 
@@ -52,7 +56,7 @@ class OnePasswordLogins:
         if account is None:
             raise ValueError("Identify the employer tenant before accessing its login.")
         items = [i for i in json.loads(self.op("item", "list", "--vault", VAULT, "--categories", "Login", "--format", "json") or "[]")
-                 if any(self._matches(account, u.get("href", "")) for u in i.get("urls") or [])]
+                 if any(self._matches(account, u.get("href", ""), i) for u in i.get("urls") or [])]
         if account.item_id:
             items = [i for i in items if i["id"] == account.item_id]
             if not items:
@@ -62,12 +66,22 @@ class OnePasswordLogins:
         return items[0]["id"] if items else ""
 
     @staticmethod
-    def _matches(account, url):
+    def _matches(account, url, item):
         try:
             candidate = account_context(url)
-            return candidate is not None and candidate.key == account.key
         except ValueError:
             return False
+        if candidate is not None:
+            return candidate.key == account.key
+        # A login saved by hand on a shared host (career44.sapsf.com serves every SAP employer) has no tenant
+        # in its address, so its title or username has to name the employer: "CPF Intern" for company CPFBoard.
+        if urlsplit(url if "://" in url else "https://" + url).hostname != urlsplit(account.login_url).hostname:
+            return False
+        squash = lambda text: re.sub(r"[^a-z0-9]", "", text.casefold())
+        employers = [e for e in (squash(account.tenant.split("/")[-1]), squash(account.employer)) if len(e) >= 3]
+        names = ["".join(w for w in re.split(r"[^a-z0-9]+", name.casefold()) if w not in GENERIC)
+                 for name in (item.get("title") or "", (item.get("additional_information") or "").split("@")[0])]
+        return any(len(n) >= 3 and (e.startswith(n) or n.startswith(e)) for n in names for e in employers)
 
     def credential(self, site: str) -> dict:
         item_id = self._find(site)

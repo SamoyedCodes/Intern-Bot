@@ -102,6 +102,7 @@ class AccountContext(BaseModel):
     login_url: str
     return_url: str = ""
     item_id: str = ""
+    employer: str = ""  # the company's name, to recognise a hand-made login on a shared host by its title
 
     @property
     def key(self):

@@ -19,7 +19,7 @@ class FakeOp:
         # Service accounts must name the vault on every command.
         assert args[:2] == ['vault', 'get'] or args[args.index('--vault') + 1] == VAULT
         if args[:2] == ['item', 'list']:
-            return json.dumps([{k: i[k] for k in ('id', 'urls', 'tags')} for i in self.items])
+            return json.dumps([{k: i[k] for k in ('id', 'urls', 'tags', 'title', 'additional_information') if k in i} for i in self.items])
         if args[:2] == ['item', 'get']:
             return json.dumps(next(i for i in self.items if i['id'] == args[2]))
         if args[:2] == ['item', 'create']:
@@ -77,6 +77,45 @@ def test_shared_sap_hosts_match_the_company_and_reuse_the_account_across_jobs():
     assert logins(fake).credential(second)['username'] == 'second-user'
     with pytest.raises(ValueError, match='tenant'):
         logins(fake).credential('https://career44.sapsf.com')
+
+
+def test_a_hand_made_login_on_a_shared_host_is_found_by_its_name():
+    from core.automation.models import account_context
+    bare = 'https://career44.sapsf.com'
+    fake = FakeOp([{**hand_made('cpf', bare, 'cpf_intern@example.test', 'p1'), 'title': 'CPF Intern'},
+                   {**hand_made('syn', bare, 'me@example.test', 'p2'), 'title': 'Synapxe Intern'},
+                   {**hand_made('other', bare, 'me@example.test', 'p3'), 'title': 'Intern'},
+                   {**hand_made('elsewhere', 'https://career2.sapsf.com', 'me@example.test', 'p4'), 'title': 'CPF Intern'}])
+    assert logins(fake).credential('https://career44.sapsf.com/career?company=CPFBoard&career_job_req_id=1711')['password'] == 'p1'
+    synapxe = account_context('https://career44.sapsf.com/career?company=integrat02P3')
+    assert logins(fake).credential(synapxe) == {}
+    synapxe.employer = 'Synapxe Pte Ltd'
+    assert logins(fake).credential(synapxe)['password'] == 'p2' and synapxe.item_id == 'syn'
+    assert logins(fake).credential('https://career44.sapsf.com/career?company=unrelated') == {}
+
+
+@pytest.mark.parametrize('first, second, bare', [
+    ('https://career44.sapsf.com/career?company=CPFBoard&career_job_req_id=1', 'https://career44.sapsf.com/career?company=integrat02P3&career_job_req_id=1', 'https://career44.sapsf.com'),
+    ('https://wd5.myworkdaysite.com/recruiting/first/Careers/job/Intern_R1', 'https://wd5.myworkdaysite.com/en-US/recruiting/second/Careers/job/Intern_R1', 'https://wd5.myworkdaysite.com'),
+    ('https://first.wd1.myworkdayjobs.com/en-US/Careers/job/R1', 'https://second.wd1.myworkdayjobs.com/Careers/job/R1', 'https://third.wd1.myworkdayjobs.com'),
+])
+def test_logins_the_bot_creates_on_a_shared_domain_come_back_for_their_own_employer_only(first, second, bare):
+    from core.automation.models import account_context
+    # A hand-made login for some other employer on the same host, named like neither.
+    fake = FakeOp([{**hand_made('hand', bare, 'me@example.test', 'p0'), 'title': 'Keppel Intern'}])
+    vault = logins(fake)
+    vault.save_credential(first, 'first_intern@example.test', 'p1')
+    vault.save_credential(second, 'second_intern@example.test', 'p2')
+    for item in fake.items[1:]:
+        item['additional_information'] = item['fields'][0]['value']
+    assert vault.credential(first)['username'] == 'first_intern@example.test'
+    context = account_context(second)
+    context.employer = 'First Second Holdings'
+    assert vault.credential(context)['password'] == 'p2' and context.item_id == fake.items[2]['id']
+    with pytest.raises(ValueError, match='already in 1Password'):
+        vault.save_credential(first, 'again@example.test')
+    vault.set_account_state(second, 'created')
+    assert vault.credential(second)['state'] == 'created' and vault.credential(first)['state'] == 'verified'
 
 
 def test_generated_sap_logins_keep_a_stable_tenant_url_and_password_recipe():
