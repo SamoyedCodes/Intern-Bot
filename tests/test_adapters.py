@@ -57,10 +57,14 @@ async def scan(bridge):
 
 
 @pytest.mark.parametrize('site', URLS)
-async def test_every_adapter_fills_its_fields_and_stops(context, store, site):
-    page = await open_fixture(context, site)
+async def test_every_adapter_fills_its_fields_and_continues_only_on_command(context, store, site):
+    body = (FIXTURES / f'{site}.html').read_text()
+    if control := CONTROLS[site]:
+        body = body.replace('</form>', control + '</form>', 1) if '</form>' in body else body + control
+    page = await open_fixture(context, site, body)
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
+    await page.evaluate(COUNT_NAVIGATION_CLICKS)
     bridge, engine, run, profile, _ = await prepare(page, store, site)
     await bridge.command('start')
     snapshot = await engine.wait_for_section(run, profile)
@@ -71,10 +75,15 @@ async def test_every_adapter_fills_its_fields_and_stops(context, store, site):
     for field in fields:
         assert field.value == resolve(field, profile, run, []).value, (site, field)
     # No continuation or submission path executes without a desktop action command.
-    assert not await page.evaluate('Boolean(window.submitted || window.advanced)')
+    assert bool(snapshot['actions']) == (site not in HANDOFF_SITES), (site, snapshot)
+    assert not await page.evaluate('Boolean(window.submitted || window.advanced || window.navigationClicks)')
     await bridge.stop()
     await asyncio.sleep(.4)  # Deliberate: a stopped adapter must not write afterwards.
     assert [(f.key, f.value) for f in await scan(bridge)] == [(f.key, f.value) for f in fields]
+    if snapshot['actions']:
+        with pytest.raises(Exception, match='(?i)failed'):
+            await bridge.command('action', {'id': snapshot['actions'][0]['id']})
+    assert await page.evaluate('window.navigationClicks') == 0
 
 
 @pytest.mark.parametrize('site', URLS)
@@ -101,26 +110,6 @@ async def test_every_adapter_reports_validation_unknowns_and_keeps_user_values(c
     await engine.wait_for_section(run, profile)
     assert any(f.value == 'USER VALUE' for f in await scan(bridge)), site
     await bridge.stop()
-
-
-@pytest.mark.parametrize('site', URLS)
-async def test_every_adapter_continuation_is_intercepted_or_handed_off(context, store, site):
-    body = (FIXTURES / f'{site}.html').read_text()
-    if control := CONTROLS[site]:
-        body = body.replace('</form>', control + '</form>', 1) if '</form>' in body else body + control
-    page = await open_fixture(context, site, body)
-    await page.evaluate(COUNT_NAVIGATION_CLICKS)
-    bridge, engine, run, profile, _ = await prepare(page, store, site)
-    await bridge.command('start')
-    snapshot = await engine.wait_for_section(run, profile)
-    assert snapshot and not snapshot['problems'], (site, snapshot)
-    assert bool(snapshot['actions']) == (site not in HANDOFF_SITES), (site, snapshot)
-    assert await page.evaluate('window.navigationClicks') == 0
-    await bridge.stop()
-    if snapshot['actions']:
-        with pytest.raises(Exception, match='(?i)failed'):
-            await bridge.command('action', {'id': snapshot['actions'][0]['id']})
-    assert await page.evaluate('window.navigationClicks') == 0
 
 
 async def test_no_adapter_contacts_its_vendor_from_pages_or_the_extension_worker(fresh_context, store):

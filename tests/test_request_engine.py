@@ -283,10 +283,10 @@ APPLICATION = '''<div id="application"><h2>My Information</h2><div data-automati
 }</script>'''
 
 
-@pytest.mark.parametrize('approve', [False, True])
 @pytest.mark.parametrize('modern_review', [False, True])
-async def test_request_mode_continues_from_api_to_browser_review_and_authorized_receipt(context, store, approve, modern_review):
+async def test_request_mode_continues_from_api_to_browser_review_and_authorized_receipt(context, store, modern_review):
     from core.automation.extension_bridge import ExtensionBridge
+    from core.automation.review import review_values
     await context.clear_cookies()
     tenant = Tenant(signed_in=False)
     tenant.application_html = APPLICATION
@@ -301,19 +301,16 @@ async def test_request_mode_continues_from_api_to_browser_review_and_authorized_
     engine = RequestEngine(store)
     await engine.start(run, profile_for('workday'), ExtensionBridge(page, run.id),
                        {'username': 'ada@example.test', 'password': 'secret', 'state': 'verified'})
-    if approve:
-        from core.automation.review import review_values
-        assert run.status == 'ready_for_review' and not await page.evaluate('window.submissions || 0'), run.interventions
-        run.approved_review = review_values(run)
-        await engine.resume(run, profile_for('workday'), engine.bridge)
-    assert len(tenant.posts) == 1
+    # Nothing is sent until the review is approved.
+    assert run.status == 'ready_for_review' and len(tenant.posts) == 1, run.interventions
+    assert not run.submission_attempted and not await page.evaluate('window.submissions || 0')
+    run.approved_review = review_values(run)
+    await engine.resume(run, profile_for('workday'), engine.bridge)
     assert run.status == 'ready_for_review', run.interventions
-    assert run.submission_attempted == approve and run.submission_confirmed == approve
-    assert await page.evaluate('window.submissions || 0') == int(approve)
-    if approve:
-        await engine.resume(run, profile_for('workday'), engine.bridge)
-        assert await page.evaluate('window.submissions') == 1
-        assert len(tenant.posts) == 1
+    assert run.submission_attempted and run.submission_confirmed
+    await engine.resume(run, profile_for('workday'), engine.bridge)
+    assert await page.evaluate('window.submissions') == 1
+    assert len(tenant.posts) == 1
 
 
 async def test_resume_after_continuing_in_the_browser_verifies_the_page_reached(context, store):

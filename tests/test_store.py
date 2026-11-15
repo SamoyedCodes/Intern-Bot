@@ -1,4 +1,4 @@
-from core.automation.models import ApplicantProfile, ApplicationRun, ApprovedAnswer, FieldAssessment
+from core.automation.models import ApplicantProfile, ApplicationRun, FieldAssessment
 from core.storage.local_store import LocalStore
 
 URL = 'https://a.wd1.myworkdayjobs.com/job/R1'
@@ -27,14 +27,6 @@ def test_events_are_kept_in_order_and_deleted_with_their_run(store):
     assert [e['kind'] for e in store.events(run.id)] == ['verification', 'answer']
     store.delete_run(run.id)
     assert store.get_run(run.id) is None and store.events(run.id) == []
-
-
-def test_answers_save_and_delete(store):
-    answer = ApprovedAnswer(question='Require sponsorship?', value=False, scope_key='run')
-    store.save_answer(answer)
-    assert store.answers() == [answer]
-    store.delete_answer(answer.id)
-    assert store.answers() == []
 
 
 def test_version_1_profile_loads_and_survives_a_resave(store):

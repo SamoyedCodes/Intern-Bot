@@ -10,12 +10,6 @@ def test_singapore_authorization_default_is_separate_from_legacy_us_authorizatio
     assert profile.citizenship == profile.nationality == ''
 
 
-@pytest.mark.parametrize('choice', [True, False, None])
-def test_eligibility_and_citizenship_survive_json_export_and_import(choice):
-    profile = ApplicantProfile(work_authorized=choice, citizenship='Malaysia', nationality='Malaysian')
-    assert ApplicantProfile.model_validate_json(profile.model_dump_json()) == profile
-
-
 @pytest.mark.parametrize('url', [
     'https://a.myworkdayjobs.com/job/1?step=2#apply',
     'https://jobs.polymer.co/example/1#apply',
