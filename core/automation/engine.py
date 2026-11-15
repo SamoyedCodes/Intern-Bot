@@ -15,7 +15,7 @@ from core.automation.journey import ApplicationJourney
 from pathlib import Path
 from core.automation.speedy_profile import translate
 from core.automation.privacy import configure_privacy
-from core.automation.fields import FormField
+from core.automation.fields import FormField, form_snapshot
 from core.automation.recipes import recipe_for, save_recipe
 from core.storage.onepassword import AmbiguousLogins
 
@@ -109,8 +109,13 @@ class ApplicationEngine:
             request.required, request.options, request.field_kind = field.required, field.options, field.kind
         run.interventions.append(request)
         # The question (never its value) goes in the log, so tools/stops.py can say which field stopped the run.
-        self.store.record_event(run.id, kind, run.stage, f'{message} [{request.question}]' if request.question else message)
+        self.store.record_event(run.id, kind, run.stage, f'{message} [{request.question}]' if request.question else message, self.form_snapshot())
         self.checkpoint(run)
+
+    def form_snapshot(self):
+        # Test bridges and a stop before the browser opens have no scan to show.
+        form = getattr(self.bridge, 'last_form', None)
+        return form_snapshot(*form) if form else ''
 
     async def start(self, run, profile, bridge, credential=None):
         self.bridge = bridge
@@ -269,7 +274,7 @@ class ApplicationEngine:
                     answers = self.store.answers()
                     stuck = next((f.label for f in left if f.value in ('', False) and f.kind != 'file' and not (f.readonly or f.disabled) and resolve(f, profile, run, answers).value is not None), '')
                     self.store.record_event(run.id, 'adapter_stalled', run.stage, "The site's adapter stopped partway" + (f' near “{stuck}”' if stuck else '') +
-                                            '; the rest was filled directly from your profile and answers.')
+                                            '; the rest was filled directly from your profile and answers.', self.form_snapshot())
                     await self.authorize(run, profile, left)
                     settled = await self.wait_for_section(run, profile)
                 # Each choose stays inside the bridge's command limit; repeat while it still selects approved options or has controls left.
@@ -318,7 +323,7 @@ class ApplicationEngine:
                 if not verified and config['recipe']:
                     self.recipe.failures += 1
                     save_recipe(self.store, self.recipe)
-                    self.store.record_event(run.id, 'recipe_stale', run.stage, 'Some fields on this recipe site could not be filled. If the site changed, teach it again or repair it with AI.')
+                    self.store.record_event(run.id, 'recipe_stale', run.stage, 'Some fields on this recipe site could not be filled. If the site changed, teach it again or repair it with AI.', self.form_snapshot())
                 # A field's blocked choice (a typeahead suggestion that isn't the approved answer) is asked with the other questions,
                 # even though its typed text reads back as the answer.
                 asked = {i.field_key for i in run.interventions if i.field_key}

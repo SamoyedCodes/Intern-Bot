@@ -1,6 +1,7 @@
 """Where runs stop and why, per site, from the events the engine already records.
 
     PYTHONPATH=. .venv/bin/python tools/stops.py [path/to/intern-bot.sqlite3]
+    PYTHONPATH=. .venv/bin/python tools/stops.py --detail [path]    the latest stops with where the error was raised and the form as scanned
 """
 import sqlite3
 import sys
@@ -42,8 +43,23 @@ def stops(path):
     return dict(report)
 
 
+def details(path, limit=5):
+    """The latest events that kept a traceback or form snapshot, newest first."""
+    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        return db.execute("SELECT at,run_id,kind,stage,note,detail FROM events WHERE detail!='' ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    finally:
+        db.close()
+
+
 if __name__ == "__main__":
-    report = stops(sys.argv[1] if len(sys.argv) > 1 else "data/intern-bot.sqlite3")
+    args = [arg for arg in sys.argv[1:] if arg != "--detail"]
+    path = args[0] if args else "data/intern-bot.sqlite3"
+    if "--detail" in sys.argv:
+        for at, run_id, kind, stage, note, detail in details(path):
+            print(f"\n{at}  run {run_id}  {kind} at {stage or '-'}: {note}\n{detail}")
+        sys.exit()
+    report = stops(path)
     for site, entry in sorted(report.items(), key=lambda item: -item[1]["runs"]):
         print(f"\n{site}: {entry['reviewed']} of {entry['runs']} runs reached review")
         for (kind, section, note), count in entry["reasons"].most_common(15):

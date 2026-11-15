@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import sys
+import traceback
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -25,6 +27,8 @@ class LocalStore:
                 CREATE TABLE IF NOT EXISTS scout_scans (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, at TEXT NOT NULL, kind TEXT NOT NULL, stage TEXT NOT NULL, note TEXT NOT NULL);
             """)
+            if 'detail' not in [column[1] for column in db.execute("PRAGMA table_info(events)")]:
+                db.execute("ALTER TABLE events ADD COLUMN detail TEXT NOT NULL DEFAULT ''")
         os.chmod(self.path, 0o600)
 
     @contextmanager
@@ -154,14 +158,21 @@ class LocalStore:
             db.execute("DELETE FROM answers WHERE id=?", (answer_id,))
 
 
-    def record_event(self, run_id, kind, stage, note=""):
+    def record_event(self, run_id, kind, stage, note="", detail=""):
+        """`detail` is for diagnosis (tools/stops.py --detail), never shown in the app. An event recorded while an error is being
+        handled also keeps where it was raised."""
+        exc = sys.exc_info()[1]
+        if isinstance(exc, Exception):  # not a cancellation passing through a finally
+            # Frames and the error's type only: its message can quote what was typed into the form (Playwright call logs).
+            # ponytail: the handled error's own frames; walk __cause__/__context__ if a wrapped error ever hides the real one.
+            detail = "".join(traceback.format_tb(exc.__traceback__)) + type(exc).__name__ + ("\n" + detail if detail else "")
         with self.connect() as db:
-            db.execute("INSERT INTO events(run_id,at,kind,stage,note) VALUES (?,?,?,?,?)", (run_id, now(), kind, stage, note))
+            db.execute("INSERT INTO events(run_id,at,kind,stage,note,detail) VALUES (?,?,?,?,?,?)", (run_id, now(), kind, stage, note, detail))
 
     def events(self, run_id):
         with self.connect() as db:
-            rows = db.execute("SELECT at,kind,stage,note FROM events WHERE run_id=? ORDER BY id", (run_id,)).fetchall()
-        return [dict(zip(("at", "kind", "stage", "note"), row)) for row in rows]
+            rows = db.execute("SELECT at,kind,stage,note,detail FROM events WHERE run_id=? ORDER BY id", (run_id,)).fetchall()
+        return [dict(zip(("at", "kind", "stage", "note", "detail"), row)) for row in rows]
 
 
     def recent_events(self, run_id, limit):

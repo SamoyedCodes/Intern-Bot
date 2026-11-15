@@ -81,3 +81,35 @@ def test_stop_report_groups_reasons_by_site_and_counts_runs_not_events(store):
     assert (report['Workday']['runs'], report['Workday']['reviewed']) == (2, 1)
     assert report['Workday']['reasons'] == {('answer', 'Workday', 'No value will be guessed. [Visa status]'): 1}
     assert report['careers.example.test']['reasons'] == {('failed', 'start', 'TimeoutError'): 1}
+
+
+def test_event_detail_keeps_where_an_error_was_raised_and_the_form_without_what_was_entered(store):
+    from core.automation.fields import form_snapshot
+    from tools.stops import details
+    run = ApplicationRun(job_url=URL)
+    scanned = [{'key': 'k1', 'label': 'Visa status', 'kind': 'select', 'selector': '#visa', 'value': 'Student Pass',
+                'options': ['Citizen', 'Student Pass'], 'option': 'Student Pass', 'required': True, 'file_digest': 'abc123'}]
+    message = 'fill("Unique' + 'Secret123") timed out'  # split so the quoted source line cannot satisfy the check below
+    try:
+        raise TimeoutError(message)
+    except TimeoutError:
+        store.record_event(run.id, 'browser', 'Workday:0cbd052d2e', 'Inspect the draft.', form_snapshot(URL + '?token=t0k3n', scanned))
+    store.record_event(run.id, 'ready_for_review', 'Workday:ffe52ed68d')
+    stop, quiet = store.events(run.id)
+    assert quiet['detail'] == ''
+    assert 'test_store.py' in stop['detail'] and 'TimeoutError' in stop['detail'] and '"label": "Visa status"' in stop['detail']
+    assert '"filled": true' in stop['detail'] and '"options": ["Citizen", "Student Pass"]' in stop['detail']
+    for private in ('UniqueSecret123', 't0k3n', 'abc123', '"value"', '"option"'):
+        assert private not in stop['detail']
+    assert [row[5] for row in details(store.path)] == [stop['detail']]
+
+
+def test_a_database_from_before_event_detail_gains_the_column(tmp_path, vault):
+    import sqlite3
+    path = tmp_path / 'old.sqlite3'
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, at TEXT NOT NULL, kind TEXT NOT NULL, stage TEXT NOT NULL, note TEXT NOT NULL)")
+    db.execute("INSERT INTO events(run_id,at,kind,stage,note) VALUES ('r','2026-01-01','old','start','')")
+    db.commit()
+    db.close()
+    assert LocalStore(path, vault).events('r')[0]['detail'] == ''

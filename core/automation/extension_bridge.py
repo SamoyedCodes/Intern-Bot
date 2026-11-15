@@ -13,6 +13,7 @@ class ExtensionBridge:
         self.worker_url = next((worker.url for worker in page.context.service_workers if worker.url.startswith('chrome-extension://')), '')
         self.pending = set()
         self.journey = None
+        self.last_form = None  # (url, scanned fields) of the latest scan, for the event log
         self._listen(page)
 
     def _listen(self, page):
@@ -69,6 +70,8 @@ class ExtensionBridge:
         }), 8)
         if response.get('binding'):
             self.binding = response['binding']
+        if 'fields' in response:
+            self.last_form = (self.page.url, response['fields'])
         return response
 
     async def discover(self, recipes=()):
