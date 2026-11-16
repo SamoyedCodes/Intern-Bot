@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -11,7 +12,7 @@ from core.scout import (
     SG, Assessment, Evidence, Scout, ScoutSettings, consent_key, daily_due, deadline_expired,
     json_reply, search_context, sort_key, verified_opportunity, write_log,
 )
-from core.scout_sources import EXCLUDED, PostingHTML, PublicReader, PublicRedirect, discover, employment_link, public_url
+from core.scout_sources import EXCLUDED, PostingHTML, PublicReader, discover, employment_link, public_url
 from core.storage.local_store import LocalStore
 
 AT = datetime(2026, 11, 9, 8, tzinfo=SG)
@@ -233,8 +234,12 @@ def test_public_fetch_rejects_private_hosts_and_redirects(monkeypatch):
     for url in ['http://employer.test', 'https://localhost/x', 'https://employer.test/']:
         with pytest.raises(ValueError):
             public_url(url)
-    with pytest.raises(ValueError):
-        PublicRedirect().redirect_request(None, None, 302, '', {}, 'https://employer.test/')
+    route = MagicMock()
+    route.request.url = 'https://employer.test/'
+    route.request.method = 'GET'
+    PublicReader.route(route)
+    route.abort.assert_called_once()
+    route.continue_.assert_not_called()
 
 
 def test_native_search_uses_only_tool_urls_and_brave_key_is_a_header(monkeypatch):
@@ -391,21 +396,32 @@ def test_html_extraction_preserves_posting_schema_but_ignores_executable_script(
     assert parser.links == ['https://employer.test/jobs/1']
 
 
-def test_json_feed_is_not_truncated_before_parsing(monkeypatch):
-    import core.scout_sources as module
+@pytest.fixture
+def scout_browser(monkeypatch):
+    playwright = MagicMock()
+    browser = playwright.chromium.launch.return_value
+    context = browser.new_context.return_value
+    page = context.new_page.return_value
+    page.url = ROOT
+    page.content.return_value = '<h1>Data internship</h1><p>' + TEXT + '</p><a href="/jobs/1">Apply now</a>'
+    response = page.goto.return_value
+    response.status = 200
+    response.headers = {'content-type': 'text/html'}
+    monkeypatch.setattr('playwright.sync_api.sync_playwright', lambda: SimpleNamespace(start=lambda: playwright))
+    monkeypatch.setattr('core.scout_sources.public_url', lambda url: url)
+    return playwright, browser, context, page, response
+
+
+def test_json_feed_is_not_truncated_before_parsing(scout_browser):
+    _, _, _, page, response = scout_browser
     payload = json.dumps([{'hostedUrl': 'https://jobs.lever.co/example/id', 'description': 'x' * 35000}]).encode()
-    response = SimpleNamespace(url='https://api.lever.co/v0/postings/example?mode=json',
-        headers=SimpleNamespace(get_content_type=lambda: 'application/json', get_content_charset=lambda: 'utf-8'),
-        read=lambda n: payload)
-    class Response:
-        def __enter__(self):
-            return response
-        def __exit__(self, *args):
-            pass
-    monkeypatch.setattr(module, 'public_url', lambda url: url)
-    monkeypatch.setattr(module, 'build_opener', lambda *a: SimpleNamespace(open=lambda *a, **k: Response()))
-    _, text, links = PublicReader().read(response.url)
+    page.url = 'https://api.lever.co/v0/postings/example?mode=json'
+    response.headers = {'content-type': 'application/json; charset=utf-8'}
+    response.body.return_value = payload
+    _, text, links = PublicReader().read(page.url)
     assert json.loads(text)[0]['hostedUrl'] == links[0] and len(text) > 28000
+    page.close.assert_called_once()
+    page.wait_for_timeout.assert_not_called()
 
 
 @pytest.mark.browser
@@ -515,20 +531,90 @@ def test_non_employer_hosts_and_client_rendered_boards(store, monkeypatch):
     assert PublicReader().read('https://jobs.careers.gov.sg/?q=intern')[0] == 'rendered'
 
 
-def test_bot_blocked_fetch_retries_in_browser_but_other_errors_do_not(monkeypatch):
+def test_scout_reads_in_one_isolated_visible_browser_and_cleans_up(scout_browser):
+    playwright, browser, context, page, _ = scout_browser
+    reader = PublicReader()
+    try:
+        for _ in range(2):
+            final, text, links = reader.read(ROOT, listing=True)
+            assert final == ROOT and TEXT in text and links == ['https://employer.test/jobs/1']
+        playwright.chromium.launch.assert_called_once_with(
+            headless=False, args=['--disable-blink-features=AutomationControlled'],
+            ignore_default_args=['--enable-automation'])
+        browser.new_context.assert_called_once_with(accept_downloads=False, no_viewport=True, service_workers='block')
+        context.route.assert_called_once_with('**/*', reader.route)
+        assert page.close.call_count == 2
+    finally:
+        reader.close()
+    reader.close()
+    browser.close.assert_called_once()
+    playwright.stop.assert_called_once()
+    assert reader.context is reader.browser is reader.playwright is None
+
+
+@pytest.mark.parametrize('status', [403, 404, 429])
+def test_scout_does_not_retry_refused_browser_requests(scout_browser, status):
+    _, _, _, page, response = scout_browser
+    response.status = status
+    with pytest.raises(ValueError, match='could not be opened'):
+        PublicReader().read(ROOT)
+    page.goto.assert_called_once()
+    page.close.assert_called_once()
+
+
+@pytest.mark.parametrize('kind,body', [('application/pdf', b'PDF'), ('application/json', b'x' * 2_000_001)])
+def test_scout_rejects_unsupported_documents_and_oversized_feeds(scout_browser, kind, body):
+    _, _, _, page, response = scout_browser
+    response.headers = {'content-type': kind}
+    response.body.return_value = body
+    with pytest.raises(ValueError, match='too large or uses an unsupported'):
+        PublicReader().read(ROOT)
+    page.close.assert_called_once()
+
+
+def test_scout_cleans_up_failed_browser_start(scout_browser):
+    playwright, browser, _, _, _ = scout_browser
+    browser.new_context.side_effect = RuntimeError('startup failed')
+    reader = PublicReader()
+    with pytest.raises(RuntimeError, match='startup failed'):
+        reader.read(ROOT)
+    browser.close.assert_called_once()
+    playwright.stop.assert_called_once()
+    assert reader.context is reader.browser is reader.playwright is None
+
+
+@pytest.mark.parametrize('method', ['GET', 'POST'])
+def test_scout_only_allows_public_get_requests(monkeypatch, method):
+    monkeypatch.setattr('core.scout_sources.public_url', lambda url: url)
+    route = MagicMock()
+    route.request.url, route.request.method = ROOT, method
+    PublicReader.route(route)
+    assert route.continue_.call_count == (method == 'GET')
+    assert route.abort.call_count == (method != 'GET')
+
+
+@pytest.mark.browser
+def test_scout_browser_reports_native_identity_and_reads_rendered_jobs(monkeypatch):
     import core.scout_sources as module
-    from urllib.error import HTTPError
-    def opener(code):
-        def open_(*a, **k):
-            raise HTTPError('https://www.edbi.com/careers/', code, 'x', {}, None)
-        return SimpleNamespace(open=open_)
+    html = '''<h1>Data internship</h1><p>Current undergraduates welcome. Apply now.</p>
+        <script>
+        document.body.insertAdjacentHTML('beforeend', '<p>webdriver=' + navigator.webdriver +
+            ' userAgent=' + navigator.userAgent + '</p><a href="/jobs/1">Apply now</a>');
+        </script>'''
     monkeypatch.setattr(module, 'public_url', lambda url: url)
-    monkeypatch.setattr(PublicReader, 'render', lambda self, url: ('rendered', url, []))
-    monkeypatch.setattr(module, 'build_opener', lambda *a: opener(403))
-    assert PublicReader().read('https://www.edbi.com/careers/')[0] == 'rendered'
-    monkeypatch.setattr(module, 'build_opener', lambda *a: opener(404))
-    with pytest.raises(HTTPError):
-        PublicReader().read('https://www.edbi.com/careers/')
+    monkeypatch.setattr(PublicReader, 'route', staticmethod(
+        lambda route: route.fulfill(status=200, content_type='text/html', body=html)))
+    reader = PublicReader()
+    try:
+        _, text, links = reader.read(ROOT, listing=True)
+        assert 'webdriver=false' in text
+        assert 'Chrome/' in text and 'HeadlessChrome' not in text and 'Intern-Bot' not in text
+        assert links == ['https://employer.test/jobs/1']
+        page = reader.context.new_page()
+        assert page.viewport_size is None
+        assert reader.context.cookies() == []
+    finally:
+        reader.close()
 
 
 def test_in_page_anchors_do_not_requeue_a_checked_page(store):

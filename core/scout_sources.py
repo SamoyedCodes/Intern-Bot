@@ -3,10 +3,10 @@ import ipaddress
 import json
 import re
 import socket
+from email.message import Message
 from html.parser import HTMLParser
 from urllib.parse import urlencode, urljoin, urlsplit, unquote
-from urllib.error import HTTPError
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import Request, build_opener
 
 from core.automation.assistant import NoRedirect
 from core.automation.models import canonical_url
@@ -18,8 +18,6 @@ EXCLUDED = re.compile(r"scholarship|bursary|privacy|cookie|sign.?in|log.?in|/for
 # Social, news, search-aggregator and form hosts never hold a verifiable employer posting (a third of a live run's budget).
 NOT_EMPLOYER = re.compile(r"^https://(?:[^/]*\.)?(?:linkedin|instagram|facebook|twitter|youtube|tiktok|reddit|wikipedia|glassdoor|indeed|"
                           r"straitstimes|channelnewsasia|yahoo|tracxn|crunchbase|pitchbook|medium)\.|^https://(?:www\.)?(?:lever\.co|form\.gov\.sg)/", re.I)
-# Client-rendered boards: their HTML shell is useless (and can exceed MAX_BYTES), so they go straight to the browser.
-SPA_HOSTS = {"jobs.careers.gov.sg", "www.mycareersfuture.gov.sg", "careers.sggc.sg"}
 
 
 def employment_link(url):
@@ -59,11 +57,6 @@ def public_url(url):
     if not addresses or any(not ipaddress.ip_address(a[4][0]).is_global for a in addresses):
         raise ValueError("Scout reads public HTTPS pages only.")
     return url
-
-
-class PublicRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return super().redirect_request(req, fp, code, msg, headers, public_url(newurl))
 
 
 class PostingHTML(HTMLParser):
@@ -169,50 +162,49 @@ class PublicReader:
             if self.browser:
                 self.browser.close()
         finally:
-            if self.playwright:
-                self.playwright.stop()
+            try:
+                if self.playwright:
+                    self.playwright.stop()
+            finally:
+                self.playwright = self.browser = self.context = None
 
     def read(self, url, listing=False):
-        url = public_url(url)
-        if urlsplit(url).hostname in SPA_HOSTS:
-            return self.render(url)
-        try:
-            with build_opener(PublicRedirect()).open(Request(url, headers={"User-Agent": "Intern-Bot Opportunity Scout/1.0"}), timeout=20) as response:
-                raw = response.read(MAX_BYTES + 1)
-                final = public_url(response.url)
-                content_type = response.headers.get_content_type()
-                encoding = response.headers.get_content_charset() or "utf-8"
-        except HTTPError as exc:
-            # Bot shields (EDBI, Enterprise Singapore) refuse any non-browser client; a real browser usually passes.
-            if exc.code in {403, 429}:
-                return self.render(url)
-            raise
-        if len(raw) > MAX_BYTES or content_type not in {"text/html", "application/json", "text/plain"}:
-            raise ValueError("Page is too large or uses an unsupported document format.")
-        html = raw.decode(encoding, errors="replace")
-        if content_type == "application/json":
-            return final, html, re.findall(r'https://[^\s"<>]+', html)
-        parser = PostingHTML(final)
-        parser.feed(html)
-        links = list(dict.fromkeys(parser.links))
-        if urlsplit(final).hostname in SPA_HOSTS or len(parser.text) < 300 or re.search(r"enable javascript|javascript is (?:required|disabled)", parser.text, re.I) or (listing and not any(JOB_LINK.search(u) for u in links)):
-            return self.render(final)
-        return final, parser.text[:28000], links
+        return self.render(url)
 
     def render(self, url):
         from playwright.sync_api import sync_playwright
+        url = public_url(url)
         if not self.context:
-            self.playwright = sync_playwright().start()
-            self.browser = self.playwright.chromium.launch(headless=False)
-            self.context = self.browser.new_context(accept_downloads=False)
-            self.context.route("**/*", self.route)
+            try:
+                self.playwright = sync_playwright().start()
+                self.browser = self.playwright.chromium.launch(
+                    headless=False, args=["--disable-blink-features=AutomationControlled"],
+                    ignore_default_args=["--enable-automation"],
+                )
+                self.context = self.browser.new_context(accept_downloads=False, no_viewport=True, service_workers="block")
+                self.context.route("**/*", self.route)
+            except BaseException:
+                self.close()
+                raise
         page = self.context.new_page()
         try:
             response = page.goto(url, wait_until="domcontentloaded", timeout=25000)
-            # Give client-rendered public boards a bounded chance to populate.
-            page.wait_for_timeout(2000)
             if response and response.status >= 400:
                 raise ValueError("The public page could not be opened.")
+            if response:
+                headers = Message()
+                headers['content-type'] = response.headers.get('content-type', 'text/html')
+                content_type = headers.get_content_type()
+                if content_type not in {"text/html", "application/json", "text/plain"}:
+                    raise ValueError("Page is too large or uses an unsupported document format.")
+                if content_type in {"application/json", "text/plain"}:
+                    raw = response.body()
+                    if len(raw) > MAX_BYTES:
+                        raise ValueError("Page is too large or uses an unsupported document format.")
+                    text = raw.decode(headers.get_content_charset() or 'utf-8', errors='replace')
+                    return public_url(page.url), text, re.findall(r'https://[^\s"<>]+', text)
+            # Give client-rendered public boards a bounded chance to populate.
+            page.wait_for_timeout(2000)
             final = public_url(page.url)
             parser = PostingHTML(final)
             parser.feed(page.content())
